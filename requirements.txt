@@ -1,0 +1,40 @@
+# SIP Stack (Optional - Windows에서 빌드 실패 시 mock으로 동작)
+# pjsua2==2.12  # PJSIP Python 바인딩 (선택사항)
+# 설치가 필요한 경우: pip install pjsua2
+# Windows에서는 pre-built wheel이 필요하거나 PJSIP 소스 빌드 필요
+
+# Async & Web Framework
+aiohttp==3.9.1
+aiodns==3.1.0
+
+# Configuration & Validation
+pydantic==2.5.2
+pydantic-settings==2.1.0
+PyYAML==6.0.1
+
+# Audio Processing
+opuslib==3.0.1  # Opus codec decoder
+
+# Monitoring & Logging
+prometheus-client==0.19.0
+structlog==24.1.0
+python-json-logger==2.0.7
+
+# Utilities
+python-dotenv==1.0.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+httpx==0.25.2  # For testing HTTP endpoints
+
+# Development Tools (optional, comment out for production)
+# black==23.11.0
+# isort==5.12.0
+# flake8==6.1.0
+# mypy==1.7.1
+# types-PyYAML==6.0.12.12
+# pip-audit==2.6.1
+

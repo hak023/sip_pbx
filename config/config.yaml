@@ -1,0 +1,111 @@
+# SIP PBX with Real-time Voice Analysis - Configuration File
+
+# SIP 서버 설정
+sip:
+  listen_ip: "0.0.0.0"
+  listen_port: 5060
+  transport: "udp"  # udp, tcp, tls
+  max_concurrent_calls: 100
+
+# 미디어 처리 설정
+media:
+  mode: "bypass"  # bypass | reflecting
+  port_pool:
+    start: 10000
+    end: 20000
+  rtp_timeout: 60  # seconds without RTP → auto-terminate
+  codec_priority:
+    - "opus"
+    - "pcmu"  # G.711 μ-law
+    - "pcma"  # G.711 A-law
+
+# AI 분석 설정
+ai:
+  enabled: true
+  
+  stt:
+    model: "faster-whisper-large-v3"
+    device: "cuda"  # cuda | cpu
+    language: "auto"  # auto, ko, en
+    beam_size: 5
+    vad_filter: true
+    
+  emotion:
+    model: "speechbrain/emotion-recognition"
+    device: "cuda"
+    threshold: 0.7  # 0.0 - 1.0
+    sample_rate: 16000
+    
+  text_classifier:
+    model_korean: "beomi/KcELECTRA-base"
+    model_english: "distilbert-base-uncased"
+    device: "cuda"
+    threshold: 0.8  # 0.0 - 1.0
+    
+  profanity_dict:
+    path: "config/profanity_dict.yaml"
+    enabled: true
+
+# 이벤트 및 알림 설정
+events:
+  webhook_urls:
+    - "http://localhost:5000/webhook"
+  webhook_timeout: 10  # seconds
+  webhook_retries: 3
+  
+  thresholds:
+    profanity: 0.8
+    anger: 0.7
+    threatening: 0.75
+    combined_alert: true  # profanity + anger 동시 발생 시 높은 우선순위
+  
+  severity_levels:
+    low: 0.5
+    medium: 0.7
+    high: 0.85
+    critical: 0.95
+
+# CDR (Call Detail Record) 설정
+cdr:
+  enabled: true
+  output_dir: "/var/log/sip-pbx/cdr"
+  filename_pattern: "cdr-%Y-%m-%d.jsonl"
+  rotation: "daily"  # daily, hourly
+  retention_days: 90
+
+# 로깅 설정
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "json"  # json, text
+  output: "file"  # stdout, file
+  file_path: "/var/log/sip-pbx/app.log"
+  max_bytes: 104857600  # 100MB
+  backup_count: 10
+
+# 모니터링 설정
+monitoring:
+  prometheus_port: 9090
+  prometheus_path: "/metrics"
+  health_check_port: 8080
+  health_check_interval: 10  # seconds
+
+# GPU 리소스 관리
+gpu:
+  device_id: 0  # CUDA device ID
+  memory_fraction: 0.9  # Max GPU memory to use (0.0 - 1.0)
+  batch_size:
+    stt: 4
+    emotion: 8
+    text_classifier: 16
+
+# 보안 설정
+security:
+  admin_api_key: "change-me-in-production"
+  webhook_secret: "change-me-in-production"
+  ip_whitelist:
+    enabled: false
+    allowed_ips:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+
