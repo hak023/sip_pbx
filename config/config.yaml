@@ -19,7 +19,7 @@ media:
     - "pcmu"  # G.711 μ-law
     - "pcma"  # G.711 A-law
 
-# AI 분석 설정
+# AI 분석 설정 (기존 - 통화 중 분석)
 ai:
   enabled: true
   
@@ -45,6 +45,127 @@ ai:
   profanity_dict:
     path: "config/profanity_dict.yaml"
     enabled: true
+
+# =============================================================================
+# AI 보이스봇 설정 (신규 - 부재중 자동 응답)
+# =============================================================================
+ai_voicebot:
+  enabled: true  # AI 보이스봇 활성화 여부
+  
+  # 부재중 설정
+  no_answer_timeout: 10  # 초 (착신자가 이 시간 동안 응답 없으면 AI 활성화)
+  
+  # 고정 인사말
+  greeting_message: "안녕하세요, AI 비서입니다. 무엇을 도와드릤까요?"
+  
+  # ⭐ Google Cloud 설정 - 여기에 API 정보 입력! ⭐
+  google_cloud:
+    project_id: "your-gcp-project-id"  # ← Google Cloud 프로젝트 ID
+    credentials_path: "credentials/gcp-key.json"  # ← Service Account 키 파일 경로
+    
+    # Quota 관리
+    quota_management:
+      daily_request_limit: 1000  # 일일 요청 제한
+      cost_alert_threshold_usd: 50  # 비용 알람 임계값 (달러)
+      auto_throttle_enabled: true
+    
+    # STT (Speech-to-Text) 설정
+    stt:
+      model: "telephony"  # telephony | latest_long
+      language_code: "ko-KR"  # ko-KR | en-US
+      sample_rate: 16000
+      enable_enhanced: true
+      enable_automatic_punctuation: true
+    
+    # TTS (Text-to-Speech) 설정
+    tts:
+      voice_name: "ko-KR-Neural2-A"  # 여성 목소리 (A, B, C 중 선택)
+      speaking_rate: 1.0  # 0.25 - 4.0 (1.0 = 보통 속도)
+      pitch: 0.0  # -20.0 - 20.0 (0 = 보통 음높이)
+    
+    # Gemini LLM 설정
+    gemini:
+      model: "gemini-pro"  # gemini-pro | gemini-pro-vision
+      temperature: 0.7  # 0.0 - 1.0 (높을수록 창의적)
+      max_output_tokens: 200  # 최대 출력 토큰 (짧은 답변 권장)
+  
+  # Resilience (재시도 및 Circuit Breaker)
+  resilience:
+    retry:
+      max_attempts: 3  # 최대 재시도 횟수
+      backoff_multiplier: 2  # 백오프 배율
+      min_wait_seconds: 2  # 최소 대기 시간
+      max_wait_seconds: 10  # 최대 대기 시간
+    
+    circuit_breaker:
+      failure_threshold: 5  # 실패 임계값 (5회 실패 시 open)
+      timeout_seconds: 60  # Open 상태 유지 시간
+      half_open_max_calls: 3  # Half-open 상태 테스트 호출 수
+  
+  # Vector DB 설정
+  vector_db:
+    provider: "chromadb"  # chromadb | pinecone
+    
+    # ChromaDB (개발/로컬)
+    chromadb:
+      persist_directory: "./data/chromadb"
+    
+    # Pinecone (프로덕션) - 사용 시 주석 해제
+    # pinecone:
+    #   api_key: "${PINECONE_API_KEY}"  # 환경 변수에서 로드
+    #   environment: "us-west1-gcp"
+    #   index_name: "knowledge-base"
+    #   dimension: 768  # Sentence Transformers 차원
+  
+  # Embedding 설정
+  embedding:
+    model: "paraphrase-multilingual-mpnet-base-v2"  # Sentence Transformers 모델
+    dimension: 768
+    batch_size: 32
+  
+  # RAG 설정
+  rag:
+    top_k: 3  # 검색할 문서 수
+    similarity_threshold: 0.7  # 유사도 임계값 (0.0 - 1.0)
+    reranking_enabled: false  # 재순위화 활성화
+  
+  # 녹음 설정
+  recording:
+    enabled: true
+    output_dir: "./recordings"
+    format: "wav"
+    sample_rate: 16000
+    
+    # 지식 추출
+    knowledge_extraction:
+      enabled: true
+      min_confidence: 0.7  # LLM 판단 최소 신뢰도
+      chunk_size: 500  # 문자
+      chunk_overlap: 50  # 문자
+  
+  # VAD (Voice Activity Detection)
+  vad:
+    enabled: true
+    mode: 3  # 0-3 (3이 가장 민감)
+    frame_duration_ms: 30  # 10 | 20 | 30
+  
+  # Barge-in 설정
+  barge_in:
+    enabled: true
+    vad_threshold: 0.5  # 음성 감지 임계값
+    speech_frame_count: 3  # 연속 음성 프레임 수
+  
+  # 오디오 버퍼
+  audio_buffer:
+    jitter_buffer_ms: 60  # Jitter 버퍼 크기
+    max_buffer_size: 100  # 최대 패킷 수
+    target_sample_rate: 16000  # 목표 샘플레이트
+  
+  # 로깅
+  logging:
+    log_conversations: true  # 대화 내용 로깅
+    log_audio: true  # 오디오 데이터 로깅 (디버그용)
+    log_level: "INFO"  # DEBUG | INFO | WARNING | ERROR
 
 # 이벤트 및 알림 설정
 events:
