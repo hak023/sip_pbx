@@ -1,0 +1,139 @@
+# =============================================================================
+# AI Voice Assistant Extension - Python Dependencies
+# =============================================================================
+# Python 3.11+
+# 
+# Installation:
+#   pip install -r requirements-ai.txt
+#
+# Note: This extends the base requirements.txt for AI functionality
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Google Cloud AI Services
+# -----------------------------------------------------------------------------
+google-cloud-speech==2.24.0          # STT (Speech-to-Text) with streaming
+google-cloud-texttospeech==2.16.3    # TTS (Text-to-Speech) with streaming
+google-generativeai==0.3.2           # Gemini LLM for conversation
+google-api-core==2.15.0              # Core library for Google APIs
+google-auth==2.26.2                  # Authentication for Google Cloud
+grpcio==1.60.1                       # gRPC for streaming APIs
+grpcio-status==1.60.1                # gRPC status codes
+protobuf==4.25.1                     # Protocol buffers
+
+# -----------------------------------------------------------------------------
+# Vector Database & Embeddings
+# -----------------------------------------------------------------------------
+chromadb==0.4.22                     # Vector DB for development
+# pinecone-client==3.0.0             # Vector DB for production (uncomment when ready)
+sentence-transformers==2.2.2         # Text embeddings (multilingual support)
+torch==2.1.2                         # PyTorch for sentence-transformers
+torchvision==0.16.2                  # Vision utilities (required by torch)
+torchaudio==2.1.2                    # Audio utilities (required by torch)
+numpy==1.26.3                        # Numerical computing
+scikit-learn==1.4.0                  # ML utilities for embeddings
+
+# -----------------------------------------------------------------------------
+# Audio Processing
+# -----------------------------------------------------------------------------
+pydub==0.25.1                        # Audio manipulation
+ffmpeg-python==0.2.0                 # FFmpeg wrapper for audio conversion
+webrtcvad==2.0.10                    # Voice Activity Detection
+pyaudio==0.2.14                      # Audio I/O (optional, may need system deps)
+audioop-lts==0.2.1                   # Audio operations (Python 3.11+ compat)
+wave==0.0.2                          # WAV file handling
+
+# -----------------------------------------------------------------------------
+# Resilience & Reliability
+# -----------------------------------------------------------------------------
+tenacity==8.2.3                      # Retry mechanism with exponential backoff
+circuit-breaker==1.4.0               # Circuit breaker pattern
+backoff==2.2.1                       # Alternative backoff implementation
+
+# -----------------------------------------------------------------------------
+# Async & Networking (extends base requirements.txt)
+# -----------------------------------------------------------------------------
+aiohttp==3.9.1                       # Async HTTP (already in base)
+aiodns==3.1.1                        # Async DNS resolution
+aiofiles==23.2.1                     # Async file operations
+
+# -----------------------------------------------------------------------------
+# Configuration & Validation (extends base requirements.txt)
+# -----------------------------------------------------------------------------
+pydantic==2.5.3                      # Data validation (already in base)
+pydantic-settings==2.1.0             # Settings management (already in base)
+PyYAML==6.0.1                        # YAML configuration (already in base)
+python-dotenv==1.0.0                 # Environment variables
+
+# -----------------------------------------------------------------------------
+# Monitoring & Logging (extends base requirements.txt)
+# -----------------------------------------------------------------------------
+prometheus-client==0.19.0            # Metrics collection (already in base)
+structlog==24.1.0                    # Structured logging (already in base)
+python-json-logger==2.0.7            # JSON log formatting
+
+# -----------------------------------------------------------------------------
+# Testing & Development
+# -----------------------------------------------------------------------------
+pytest==7.4.3                        # Testing framework
+pytest-asyncio==0.21.1               # Async test support
+pytest-cov==4.1.0                    # Coverage reporting
+pytest-mock==3.12.0                  # Mocking utilities
+pytest-vcr==1.0.2                    # Record/replay HTTP interactions
+pytest-timeout==2.2.0                # Test timeout handling
+httpx==0.25.2                        # Modern HTTP client for testing
+faker==22.0.0                        # Fake data generation
+freezegun==1.4.0                     # Time mocking for tests
+
+# -----------------------------------------------------------------------------
+# Code Quality & Linting (development only)
+# -----------------------------------------------------------------------------
+# Uncomment for development
+# black==23.12.1                     # Code formatting
+# isort==5.13.2                      # Import sorting
+# flake8==7.0.0                      # Linting
+# mypy==1.8.0                        # Type checking
+# types-PyYAML==6.0.12.12            # Type stubs for PyYAML
+# types-aiofiles==23.2.0.0           # Type stubs for aiofiles
+# bandit==1.7.6                      # Security linting
+# pylint==3.0.3                      # Advanced linting
+
+# -----------------------------------------------------------------------------
+# Utilities
+# -----------------------------------------------------------------------------
+click==8.1.7                         # CLI framework (for scripts)
+tqdm==4.66.1                         # Progress bars
+colorama==0.4.6                      # Colored terminal output (Windows support)
+tabulate==0.9.0                      # Pretty-print tabular data
+
+# -----------------------------------------------------------------------------
+# Optional: Alternative Vector DBs (uncomment as needed)
+# -----------------------------------------------------------------------------
+# qdrant-client==1.7.0               # Qdrant vector DB
+# weaviate-client==3.26.0            # Weaviate vector DB
+# milvus==2.3.5                      # Milvus vector DB
+
+# -----------------------------------------------------------------------------
+# Optional: Alternative Embeddings (uncomment as needed)
+# -----------------------------------------------------------------------------
+# openai==1.6.1                      # OpenAI embeddings (paid)
+# cohere==4.37                       # Cohere embeddings (paid)
+
+# -----------------------------------------------------------------------------
+# System Dependencies Notes
+# -----------------------------------------------------------------------------
+# 
+# Linux/Mac:
+#   sudo apt-get install ffmpeg portaudio19-dev  # Ubuntu/Debian
+#   brew install ffmpeg portaudio                 # macOS
+#
+# Windows:
+#   Download ffmpeg: https://ffmpeg.org/download.html
+#   Add to PATH
+#
+# PyAudio Windows:
+#   pip install pipwin
+#   pipwin install pyaudio
+#
+# =============================================================================
+

@@ -38,3 +38,12 @@ httpx==0.25.2  # For testing HTTP endpoints
 # types-PyYAML==6.0.12.12
 # pip-audit==2.6.1
 
+# =============================================================================
+# AI Voice Assistant Extension
+# =============================================================================
+# To install AI features, run:
+#   pip install -r requirements-ai.txt
+#
+# Or install all dependencies at once:
+#   pip install -r requirements.txt -r requirements-ai.txt
+# =============================================================================
