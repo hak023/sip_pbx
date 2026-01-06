@@ -39,49 +39,48 @@ scikit-learn==1.4.0                  # ML utilities for embeddings
 pydub==0.25.1                        # Audio manipulation
 ffmpeg-python==0.2.0                 # FFmpeg wrapper for audio conversion
 webrtcvad==2.0.10                    # Voice Activity Detection
-pyaudio==0.2.14                      # Audio I/O (optional, may need system deps)
-audioop-lts==0.2.1                   # Audio operations (Python 3.11+ compat)
-wave==0.0.2                          # WAV file handling
+# pyaudio==0.2.14                    # Audio I/O (optional, may need system deps)
+# audioop and wave are built-in modules in Python 3.11+
 
 # -----------------------------------------------------------------------------
 # Resilience & Reliability
 # -----------------------------------------------------------------------------
 tenacity==8.2.3                      # Retry mechanism with exponential backoff
-circuit-breaker==1.4.0               # Circuit breaker pattern
+pybreaker==1.0.1                     # Circuit breaker pattern
 backoff==2.2.1                       # Alternative backoff implementation
 
 # -----------------------------------------------------------------------------
 # Async & Networking (extends base requirements.txt)
 # -----------------------------------------------------------------------------
-aiohttp==3.9.1                       # Async HTTP (already in base)
-aiodns==3.1.1                        # Async DNS resolution
+# aiohttp==3.9.1                     # Async HTTP (already in base requirements.txt)
+# aiodns==3.1.0                      # Async DNS resolution (already in base)
 aiofiles==23.2.1                     # Async file operations
 
 # -----------------------------------------------------------------------------
 # Configuration & Validation (extends base requirements.txt)
 # -----------------------------------------------------------------------------
-pydantic==2.5.3                      # Data validation (already in base)
-pydantic-settings==2.1.0             # Settings management (already in base)
-PyYAML==6.0.1                        # YAML configuration (already in base)
-python-dotenv==1.0.0                 # Environment variables
+# pydantic==2.5.2                    # Data validation (already in base)
+# pydantic-settings==2.1.0           # Settings management (already in base)
+# PyYAML==6.0.1                      # YAML configuration (already in base)
+# python-dotenv==1.0.0               # Environment variables (already in base)
 
 # -----------------------------------------------------------------------------
 # Monitoring & Logging (extends base requirements.txt)
 # -----------------------------------------------------------------------------
-prometheus-client==0.19.0            # Metrics collection (already in base)
-structlog==24.1.0                    # Structured logging (already in base)
-python-json-logger==2.0.7            # JSON log formatting
+# prometheus-client==0.19.0          # Metrics collection (already in base)
+# structlog==24.1.0                  # Structured logging (already in base)
+# python-json-logger==2.0.7          # JSON log formatting (already in base)
 
 # -----------------------------------------------------------------------------
 # Testing & Development
 # -----------------------------------------------------------------------------
-pytest==7.4.3                        # Testing framework
-pytest-asyncio==0.21.1               # Async test support
-pytest-cov==4.1.0                    # Coverage reporting
-pytest-mock==3.12.0                  # Mocking utilities
+# pytest==7.4.3                      # Testing framework (already in base)
+# pytest-asyncio==0.21.1             # Async test support (already in base)
+# pytest-cov==4.1.0                  # Coverage reporting (already in base)
+# pytest-mock==3.12.0                # Mocking utilities (already in base)
 pytest-vcr==1.0.2                    # Record/replay HTTP interactions
 pytest-timeout==2.2.0                # Test timeout handling
-httpx==0.25.2                        # Modern HTTP client for testing
+# httpx==0.25.2                      # Modern HTTP client (already in base)
 faker==22.0.0                        # Fake data generation
 freezegun==1.4.0                     # Time mocking for tests
 

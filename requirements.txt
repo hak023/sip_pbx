@@ -6,10 +6,15 @@
 # Async & Web Framework
 aiohttp==3.9.1
 aiodns==3.1.0
+fastapi==0.109.0              # FastAPI framework for API Gateway
+uvicorn[standard]==0.27.0     # ASGI server for FastAPI
+python-socketio==5.11.0       # Socket.IO server for WebSocket
+python-multipart==0.0.6       # File upload support for FastAPI
 
 # Configuration & Validation
 pydantic==2.5.2
 pydantic-settings==2.1.0
+pydantic[email]==2.5.2  # Email validation support
 PyYAML==6.0.1
 
 # Audio Processing
@@ -22,6 +27,10 @@ python-json-logger==2.0.7
 
 # Utilities
 python-dotenv==1.0.0
+python-jose[cryptography]==3.3.0  # JWT authentication
+passlib[bcrypt]==1.7.4            # Password hashing
+redis==5.0.1                      # Redis client for caching/pub-sub
+asyncpg==0.29.0                   # PostgreSQL async driver
 
 # Testing
 pytest==7.4.3
@@ -41,9 +50,4 @@ httpx==0.25.2  # For testing HTTP endpoints
 # =============================================================================
 # AI Voice Assistant Extension
 # =============================================================================
-# To install AI features, run:
-#   pip install -r requirements-ai.txt
-#
-# Or install all dependencies at once:
-#   pip install -r requirements.txt -r requirements-ai.txt
-# =============================================================================
+-r requirements-ai.txt

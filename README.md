@@ -14,6 +14,8 @@
 [아키텍처](#아키텍처) •
 [기여](#기여)
 
+**📚 [전체 문서 가이드 보기](DOCUMENTATION.md)**
+
 </div>
 
 ---
@@ -42,6 +44,23 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 - ✅ **독립적인 leg 관리**: 발신자/수신자 독립 제어
 - ✅ **Transaction 관리**: 상태 기반 트랜잭션 처리
 
+### 🤖 AI Voice Assistant (NEW!)
+- ✅ **자동 응대**: 부재중 시 AI가 자동으로 통화 응대
+- ✅ **실시간 STT/TTS**: Google Cloud Speech-to-Text & Text-to-Speech
+- ✅ **지능형 응답**: Gemini 1.5 Flash LLM 기반 대화 생성
+- ✅ **RAG 검색**: Vector DB 기반 지식 베이스 활용
+- ✅ **Barge-in**: 사용자 발화 시 AI 응답 중단
+- ✅ **통화 녹음**: 자동 녹음 및 지식 추출
+
+### 🎛️ Frontend Control Center (NEW!)
+- ✅ **실시간 모니터링**: WebSocket 기반 통화 실시간 추적
+- ✅ **Live Transcript**: STT/TTS 대화 내용 실시간 표시
+- ✅ **Human-in-the-Loop (HITL)**: AI가 답변 못할 시 오퍼레이터 개입
+- ✅ **운영자 부재중 모드** ✨: 부재중 시 HITL 자동 처리 및 이력 관리
+- ✅ **지식 베이스 관리**: Vector DB CRUD 인터페이스
+- ✅ **대시보드**: 메트릭, 통화 통계, AI 성능 분석
+- ✅ **통화 이력 관리**: 미처리 요청 필터링 및 후속 조치
+
 ### 미디어 처리
 - ✅ **RTP Relay**: 저지연 패킷 중계
 - ✅ **동적 포트 할당**: 10,000-20,000 포트 풀 관리
@@ -56,14 +75,54 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 - ✅ **Prometheus 메트릭**: 통화 수, 지연시간, 에러율
 - ✅ **헬스체크**: HTTP 엔드포인트 (liveness/readiness)
 
+### 🤖 AI 보이스봇 (New!)
+- ✅ **자동 응답**: 착신자 부재 시 AI가 자동으로 통화 응대 (10초 타임아웃)
+- ✅ **실시간 STT**: Google Cloud Speech-to-Text (Telephony 모델, 16kHz)
+- ✅ **자연스러운 TTS**: Google Cloud Text-to-Speech (Neural2 음성)
+- ✅ **지능형 대화**: Gemini 1.5 Flash (초고속, 초저비용)
+  - ⚡ **응답 속도**: 평균 0.9초 (Pro 대비 30% 단축)
+  - 💰 **비용 효율**: Pro 대비 94% 절감 (월 100통 ₩1,400)
+  - 🎁 **무료 할당량**: 일 1,500 요청
+- ✅ **RAG 기반 지식**: Vector DB (ChromaDB/Pinecone) + Sentence Transformers
+- ✅ **Barge-in 지원**: WebRTC VAD로 사용자 발화 감지 시 AI 응답 중단
+- ✅ **통화 녹음**: 화자 분리 + 믹싱 (WAV 저장)
+- ✅ **지식 추출**: 통화 내용에서 유용한 정보 자동 학습
+
+### 🖥️ Frontend Control Center (New!)
+- ✅ **실시간 모니터링**: 활성 통화 대시보드, 라이브 STT/TTS 트랜스크립트
+- ✅ **지식 베이스 관리**: Vector DB CRUD (추가/수정/삭제/검색)
+- ✅ **Human-in-the-Loop (HITL)** ⭐
+  - AI가 답변 못 찾을 때 운영자에게 실시간 알림
+  - 통화 상대는 "잠시만 기다려주세요" + 대기 음악
+  - 운영자가 답변 제공 → AI가 자연스럽게 다듬어서 발화
+  - 유용한 답변은 지식 베이스에 자동 저장
+- ✅ **운영자 부재중 모드** 🆕⭐
+  - 운영자 상태 관리: 대기중/부재중/통화중/오프라인
+  - 부재중 시 HITL 요청 자동 거절 + "확인 후 안내드리겠습니다" 멘트
+  - 미처리 HITL 요청을 통화 이력에 기록
+  - 운영자 복귀 후 미처리 요청 확인 및 후속 조치 가능
+- ✅ **분석 대시보드**: 통화량, AI 신뢰도, HITL 빈도, 비용 추적
+- ✅ **WebSocket 실시간 통신**: 즉각적인 이벤트 알림 및 업데이트
+
+> 📚 **전체 문서 인덱스**: [docs/INDEX.md](docs/INDEX.md) ⭐  
+> 🚀 **빠른 시작**: [docs/QUICK_START.md](docs/QUICK_START.md)  
+> 🌐 **시스템 개요**: [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md)  
+> 🤖 **AI Voicebot 아키텍처**: [docs/ai-voicebot-architecture.md](docs/ai-voicebot-architecture.md)  
+> 🖥️ **Frontend 아키텍처**: [docs/frontend-architecture.md](docs/frontend-architecture.md)
+
 ## 🚀 기술 스택
 
 | 카테고리 | 기술 |
 |---------|-----|
-| **언어** | Python 3.11+ |
-| **비동기 프레임워크** | asyncio, aiohttp |
+| **Backend** | Python 3.11+, FastAPI, asyncio, aiohttp |
+| **Frontend** | Next.js 14, React 18, TypeScript, TailwindCSS |
+| **WebSocket** | Socket.IO, python-socketio |
+| **Database** | PostgreSQL (asyncpg), Redis |
 | **설정 관리** | Pydantic, PyYAML |
-| **오디오 처리** | opuslib, G.711 |
+| **오디오 처리** | opuslib, G.711, WebRTC VAD |
+| **AI/ML** | Google Gemini 2.5 Flash, Sentence Transformers, PyTorch |
+| **Vector DB** | ChromaDB (dev), Pinecone (prod) |
+| **Google Cloud AI** | Speech-to-Text, Text-to-Speech, Generative AI |
 | **모니터링** | Prometheus, structlog |
 | **테스트** | pytest, pytest-asyncio, pytest-cov |
 | **인프라** | Docker, Kubernetes, Helm |
@@ -85,74 +144,120 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 |---------|-----|------|
 | **SIP** | 5060/UDP, 5060/TCP | SIP 시그널링 |
 | **RTP** | 10000-20000/UDP | 음성 미디어 스트림 |
-| **HTTP** | 8080 | 헬스체크 & API |
+| **HTTP (API)** | 8000 | Backend API Gateway (FastAPI) |
+| **HTTP (Frontend)** | 3000 | Frontend Web UI (Next.js) |
+| **WebSocket** | 8001 | 실시간 양방향 통신 (Socket.IO) |
 | **Prometheus** | 9090 | 메트릭 수집 |
+| **PostgreSQL** | 5432 | 데이터베이스 (선택) |
+| **Redis** | 6379 | 캐시 및 Pub/Sub (선택) |
 
 ### Python 패키지
 
-주요 의존성은 `requirements.txt`에 정의되어 있습니다:
+주요 의존성은 `requirements.txt` 및 `requirements-ai.txt`에 정의되어 있습니다:
+
+**Backend Core**:
 - aiohttp 3.9.1+ (비동기 HTTP)
-- pydantic 2.5+ (설정 관리)
+- fastapi 0.109+ (API 프레임워크)
+- uvicorn 0.27+ (ASGI 서버)
+- python-socketio 5.11+ (WebSocket 서버)
+- pydantic 2.5+ (설정 및 validation)
+- redis 5.0+ (캐시 및 Pub/Sub)
+- asyncpg 0.29+ (PostgreSQL async 드라이버)
+
+**Frontend**:
+- next 14.2+ (React 프레임워크)
+- react 18.3+ (UI 라이브러리)
+- socket.io-client 4.7+ (WebSocket 클라이언트)
+- zustand 4.5+ (상태 관리)
+- tailwindcss 3.4+ (CSS 프레임워크)
+
+**AI/ML**:
+- google-cloud-speech, google-cloud-texttospeech
+- google-generativeai (Gemini)
+- chromadb (Vector DB)
+- sentence-transformers (임베딩)
+- torch, torchvision, torchaudio
+
+**Audio**:
 - opuslib 3.0+ (Opus 코덱)
+- webrtcvad 2.0+ (음성 감지)
+- pydub 0.25+ (오디오 처리)
+
+**Monitoring**:
 - prometheus-client 0.19+ (메트릭)
 - structlog 24.1+ (구조화 로깅)
 
 ## 🔧 설치
 
-### 방법 1: Git Clone (권장)
+### 방법 1: 통합 실행 (권장) ⭐
 
-```bash
+```powershell
 # 1. 저장소 클론
 git clone https://github.com/hak023/sip_pbx.git
 cd sip_pbx
 
 # 2. 가상 환경 생성 및 활성화
 python3.11 -m venv venv
+.\venv\Scripts\Activate.ps1  # Windows
+# source venv/bin/activate    # Linux/Mac
 
-# Linux/Mac
-source venv/bin/activate
-
-# Windows PowerShell
-.\venv\Scripts\Activate.ps1
-
-# Windows CMD
-.\venv\Scripts\activate.bat
-
-# 3. 의존성 설치
+# 3. Backend 의존성 설치
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 4. 설정 파일 생성
-cp config/config.example.yaml config/config.yaml
+# 4. Frontend 의존성 설치
+cd frontend
+npm install
+cd ..
 
-# 5. 설정 편집 (선택사항)
-# config/config.yaml 파일을 편집하여 환경에 맞게 조정
+# 5. 전체 시스템 실행 (Frontend + Backend + WebSocket)
+.\start-all.ps1  # Windows
+# ./start-all.sh  # Linux/Mac (추후 제공)
 ```
 
-### 방법 2: Docker (빠른 테스트)
+이 명령으로 다음이 자동 실행됩니다:
+- ✅ **Frontend** (Next.js) - http://localhost:3000
+- ✅ **Backend API** (FastAPI) - http://localhost:8000
+- ✅ **WebSocket Server** (Socket.IO) - ws://localhost:8001
+- ❓ **SIP PBX** (선택사항)
 
-```bash
-# Docker 이미지 빌드
-docker build -t sip-pbx:latest -f docker/Dockerfile .
+---
 
-# 컨테이너 실행
-docker run -d \
-  --name sip-pbx \
-  -p 5060:5060/udp \
-  -p 5060:5060/tcp \
-  -p 8080:8080 \
-  -p 9090:9090 \
-  -p 10000-20000:10000-20000/udp \
-  -v $(pwd)/config:/app/config \
-  -v $(pwd)/logs:/app/logs \
-  sip-pbx:latest
+### 방법 2: 개별 실행
+
+#### Backend API Gateway
+```powershell
+python -m src.api.main
+# http://localhost:8000/docs 에서 API 문서 확인
 ```
 
-### 방법 3: Docker Compose
+#### WebSocket Server
+```powershell
+python -m src.websocket.server
+# ws://localhost:8001 에서 실시간 이벤트 수신
+```
+
+#### Frontend
+```powershell
+cd frontend
+npm run dev
+# http://localhost:3000 에서 UI 접속
+```
+
+#### SIP PBX (선택사항)
+```powershell
+python src/main.py
+# SIP 5060, RTP 10000-20000 포트 사용
+```
+
+---
+
+### 방법 3: Docker (추후 제공)
 
 ```bash
-# docker-compose.yml 사용
+# Docker Compose로 전체 스택 실행
 docker-compose up -d
+```
 
 # 로그 확인
 docker-compose logs -f
@@ -589,19 +694,24 @@ sequenceDiagram
 
 ## 📖 문서
 
-### 필수 가이드
-- 📘 **[사용 매뉴얼](docs/USER_MANUAL.md)** - 상세한 설치 및 사용 가이드
-- 🚀 **[빠른 시작](docs/QUICK_START.md)** - 5분 안에 실행하기
-- 🐛 **[디버깅 가이드](docs/DEBUGGING.md)** - 로그 확인 및 문제 해결
+> 📚 **[전체 문서 인덱스 (docs/INDEX.md)](docs/INDEX.md)** - 모든 문서의 체계적인 분류 및 링크 ⭐
 
-### 기술 문서
-- 🔧 **[B2BUA 구현 상태](docs/B2BUA_STATUS.md)** - 현재 구현된 기능 상태
-- 📊 **[API 문서](docs/API.md)** - REST API 레퍼런스 *(예정)*
-- 🎯 **[성능 튜닝](docs/PERFORMANCE.md)** - 최적화 가이드 *(예정)*
+### 🌟 핵심 문서 (최상위 5개만!)
 
-### 배포 가이드
-- 🐳 **[Docker 배포](docker/README.md)** - 컨테이너 기반 배포
-- ☸️ **[Kubernetes 배포](k8s/README.md)** - 프로덕션 배포
+| 문서 | 설명 |
+|------|------|
+| [docs/INDEX.md](docs/INDEX.md) | **📚 문서 인덱스** - 전체 문서 탐색 시작점 |
+| [docs/QUICK_START.md](docs/QUICK_START.md) | **🚀 5분 빠른 시작** - 설치 및 실행 |
+| [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) | **🌐 시스템 개요** - 아키텍처, 데이터 플로우 |
+| [docs/ai-voicebot-architecture.md](docs/ai-voicebot-architecture.md) | **🤖 AI Voicebot 아키텍처** - STT/TTS/LLM/RAG/HITL |
+| [docs/frontend-architecture.md](docs/frontend-architecture.md) | **🖥️ Frontend 아키텍처** - Next.js Control Center |
+
+### 📂 추가 문서
+
+- **사용/설정 가이드**: [docs/guides/](docs/guides/) - USER_MANUAL, TROUBLESHOOTING, API 설정 등 (10개)
+- **상세 설계**: [docs/design/](docs/design/) - 구현 가이드 Part 1, 2 (3개)
+- **분석 자료**: [docs/analysis/](docs/analysis/) - 응답 시간 분석 (1개)
+- **완료 보고서**: [docs/reports/](docs/reports/) - 구현 상태, B2BUA 상태 등 (5개)
 - 🔒 **[보안 가이드](docs/SECURITY.md)** - 보안 설정 *(예정)*
 
 ## 🛠️ 개발

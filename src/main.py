@@ -19,6 +19,7 @@ from src.config.models import Config
 from src.common.logger import setup_logging, get_logger
 from src.common.exceptions import SIPPBXError, ConfigurationError
 from src.sip_core.sip_endpoint import create_sip_endpoint
+from src.ai_voicebot.factory import create_ai_orchestrator
 
 # 전역 로거 (setup_logging 후에 사용)
 logger = None
@@ -129,13 +130,13 @@ def initialize_logging(config: Config) -> None:
     logger = get_logger(__name__)
 
 
-def print_banner(config: Config) -> None:
+def print_banner(config: Config, ai_voicebot_enabled: bool = False) -> None:
     """시작 배너 출력"""
     banner = f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
 ║                                                                       ║
-║   SIP PBX with Real-time Voice Analysis                              ║
-║   Version: 0.1.0                                                      ║
+║   SIP PBX with Real-time Voice Analysis & AI Voicebot               ║
+║   Version: 0.2.0                                                      ║
 ║                                                                       ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
@@ -144,6 +145,7 @@ Configuration:
   • Media Mode: {config.media.mode.upper()}
   • Port Pool: {config.media.port_pool.start}-{config.media.port_pool.end}
   • AI Analysis: {'ENABLED' if config.ai.enabled else 'DISABLED'}
+  • AI Voicebot: {'✅ ENABLED' if ai_voicebot_enabled else 'DISABLED'}
   • Log Level: {config.logging.level}
 
 Starting server...
@@ -161,10 +163,44 @@ async def run_server(config: Config) -> int:
         int: 종료 코드 (0 = 성공, 1 = 실패)
     """
     sip_endpoint = None
+    ai_orchestrator = None
     
     try:
-        # SIP Endpoint 생성
+        # AI Voicebot 초기화 (활성화된 경우)
+        ai_voicebot_config = getattr(config, 'ai_voicebot', None)
+        if ai_voicebot_config:
+            logger.info("initializing_ai_voicebot", message="Initializing AI Voicebot")
+            try:
+                # config를 dict로 변환
+                if hasattr(ai_voicebot_config, '__dict__'):
+                    ai_config_dict = ai_voicebot_config.__dict__
+                else:
+                    ai_config_dict = dict(ai_voicebot_config)
+                
+                ai_orchestrator = await create_ai_orchestrator(ai_config_dict)
+                
+                if ai_orchestrator:
+                    logger.info("ai_voicebot_initialized", 
+                              message="AI Voicebot initialized successfully")
+                    print("\n🤖 AI Voicebot initialized successfully!")
+                else:
+                    logger.warning("ai_voicebot_init_failed",
+                                 message="AI Voicebot initialization failed or disabled")
+            except Exception as e:
+                logger.error("ai_voicebot_init_error",
+                           error=str(e),
+                           exc_info=True)
+                print(f"\n⚠️  AI Voicebot initialization failed: {e}")
+                print("   Server will continue without AI Voicebot")
+        
+        # SIP Endpoint 생성 (AI Orchestrator 전달)
         logger.info("creating_sip_endpoint", message="Creating SIP endpoint")
+        
+        # config에 ai_orchestrator 추가
+        if ai_orchestrator:
+            # 임시로 config에 추가 (향후 개선 필요)
+            config._ai_orchestrator = ai_orchestrator
+        
         sip_endpoint = create_sip_endpoint(config)
         
         # SIP 서버 시작
@@ -174,11 +210,14 @@ async def run_server(config: Config) -> int:
         logger.info("server_ready", 
                    message="SIP PBX is ready to accept calls",
                    sip_port=config.sip.listen_port,
-                   health_check_port=config.monitoring.health_check_port)
+                   health_check_port=config.monitoring.health_check_port,
+                   ai_voicebot_enabled=ai_orchestrator is not None)
         
         print(f"\n✅ Server is running!")
         print(f"   SIP: {config.sip.listen_ip}:{config.sip.listen_port}")
         print(f"   Health Check: http://localhost:{config.monitoring.health_check_port}/health")
+        if ai_orchestrator:
+            print(f"   🤖 AI Voicebot: ACTIVE")
         print(f"\nPress Ctrl+C to stop the server.\n")
         
         # 메인 루프 (서버가 실행 중인 동안 대기)
@@ -234,8 +273,14 @@ def main() -> int:
         # 로깅 초기화
         initialize_logging(config)
         
+        # AI Voicebot 활성화 체크
+        ai_voicebot_enabled = False
+        ai_voicebot_config = getattr(config, 'ai_voicebot', None)
+        if ai_voicebot_config:
+            ai_voicebot_enabled = getattr(ai_voicebot_config, 'enabled', False)
+        
         # 배너 출력
-        print_banner(config)
+        print_banner(config, ai_voicebot_enabled)
         
         # 서버 실행 (asyncio)
         return asyncio.run(run_server(config))

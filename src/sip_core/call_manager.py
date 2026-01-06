@@ -29,6 +29,8 @@ class CallManager:
         call_repository: CallStateRepository,
         media_session_manager: Optional[MediaSessionManager] = None,
         b2bua_ip: str = "127.0.0.1",
+        ai_orchestrator = None,  # AI Orchestrator (optional)
+        no_answer_timeout: int = 10,  # AI 활성화 타임아웃 (초)
     ):
         """초기화
         
@@ -36,14 +38,23 @@ class CallManager:
             call_repository: 통화 상태 저장소
             media_session_manager: 미디어 세션 관리자 (None이면 미디어 처리 비활성화)
             b2bua_ip: B2BUA IP 주소 (SDP에 사용)
+            ai_orchestrator: AI Orchestrator (None이면 AI 기능 비활성화)
+            no_answer_timeout: 부재중 타임아웃 시간 (초)
         """
         self.call_repository = call_repository
         self.media_session_manager = media_session_manager
         self.b2bua_ip = b2bua_ip
         
+        # AI 보이스봇 지원
+        self.ai_orchestrator = ai_orchestrator
+        self.no_answer_timeout = no_answer_timeout
+        self.ai_enabled_calls = set()  # AI 모드가 활성화된 통화 ID 집합
+        
         logger.info("call_manager_initialized",
                    media_enabled=media_session_manager is not None,
-                   b2bua_ip=b2bua_ip)
+                   b2bua_ip=b2bua_ip,
+                   ai_enabled=ai_orchestrator is not None,
+                   no_answer_timeout=no_answer_timeout)
     
     def handle_incoming_invite(
         self,
@@ -274,8 +285,46 @@ class CallManager:
             timeout_seconds: 타임아웃 시간 (초)
             
         Returns:
-            SIP 응답 코드 (408 Request Timeout)
+            SIP 응답 코드 (408 Request Timeout 또는 AI 활성화 시 다른 코드)
         """
+        # AI 보이스봇 활성화 시도
+        if self.ai_orchestrator and timeout_seconds <= self.no_answer_timeout:
+            try:
+                # AI 모드 활성화
+                logger.info("no_answer_timeout_activating_ai",
+                          call_id=call_session.call_id,
+                          timeout_seconds=timeout_seconds)
+                
+                # AI 통화 시작 (비동기)
+                import asyncio
+                asyncio.create_task(
+                    self.ai_orchestrator.handle_call(
+                        call_id=call_session.call_id,
+                        caller=call_session.get_caller_uri(),
+                        callee=call_session.get_callee_uri()
+                    )
+                )
+                
+                # AI 활성화 통화로 표시
+                self.ai_enabled_calls.add(call_session.call_id)
+                
+                # 통화 연결 상태로 전환
+                call_session.mark_established()
+                self.call_repository.update(call_session)
+                
+                logger.info("ai_mode_activated",
+                          call_id=call_session.call_id)
+                
+                # 200 OK 반환 (AI가 응답)
+                return SIPResponseCode.OK
+                
+            except Exception as e:
+                logger.error("ai_activation_failed",
+                           call_id=call_session.call_id,
+                           error=str(e))
+                # AI 활성화 실패 시 일반 타임아웃 처리
+        
+        # 일반 타임아웃 처리
         call_session.mark_failed(reason=f"timeout_after_{timeout_seconds}s")
         self.call_repository.update(call_session)
         
@@ -443,6 +492,20 @@ class CallManager:
         Returns:
             CDR 데이터 딕셔너리
         """
+        # AI 통화 종료 처리
+        if call_session.call_id in self.ai_enabled_calls:
+            if self.ai_orchestrator:
+                try:
+                    import asyncio
+                    asyncio.create_task(self.ai_orchestrator.end_call())
+                    logger.info("ai_call_ended", call_id=call_session.call_id)
+                except Exception as e:
+                    logger.error("ai_end_call_error",
+                               call_id=call_session.call_id,
+                               error=str(e))
+            
+            self.ai_enabled_calls.discard(call_session.call_id)
+        
         # CDR 데이터 준비 (실제 CDR 생성은 Story 4.12)
         cdr_data = {
             "call_id": call_session.call_id,
@@ -454,6 +517,7 @@ class CallManager:
             "duration_seconds": call_session.get_duration_seconds(),
             "termination_reason": call_session.termination_reason,
             "state": call_session.state.value,
+            "is_ai_handled": call_session.call_id in self.ai_enabled_calls,
         }
         
         # 미디어 세션 정리 (포트 반환)
@@ -507,4 +571,29 @@ class CallManager:
                         pass
         
         return info
+    
+    def is_ai_call(self, call_id: str) -> bool:
+        """
+        AI 모드 통화 여부 확인
+        
+        Args:
+            call_id: 통화 ID
+            
+        Returns:
+            AI 모드 통화 여부
+        """
+        return call_id in self.ai_enabled_calls
+    
+    def get_ai_stats(self) -> Dict[str, Any]:
+        """
+        AI 보이스봇 통계 반환
+        
+        Returns:
+            통계 딕셔너리
+        """
+        return {
+            "ai_enabled": self.ai_orchestrator is not None,
+            "active_ai_calls": len(self.ai_enabled_calls),
+            "no_answer_timeout": self.no_answer_timeout,
+        }
 

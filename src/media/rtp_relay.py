@@ -35,6 +35,7 @@ class RTPRelayWorker:
         media_session: MediaSession,
         caller_endpoint: RTPEndpoint,
         callee_endpoint: RTPEndpoint,
+        ai_orchestrator = None,  # AI Orchestrator (optional)
     ):
         """초기화
         
@@ -42,10 +43,15 @@ class RTPRelayWorker:
             media_session: 미디어 세션
             caller_endpoint: Caller의 RTP 엔드포인트
             callee_endpoint: Callee의 RTP 엔드포인트
+            ai_orchestrator: AI Orchestrator (AI 모드용, optional)
         """
         self.media_session = media_session
         self.caller_endpoint = caller_endpoint
         self.callee_endpoint = callee_endpoint
+        
+        # AI 보이스봇 지원
+        self.ai_orchestrator = ai_orchestrator
+        self.ai_mode = False
         
         # UDP 소켓들 (각 포트별)
         self.caller_audio_transport: Optional[asyncio.DatagramTransport] = None
@@ -66,12 +72,14 @@ class RTPRelayWorker:
             "callee_audio_packets": 0,
             "callee_video_packets": 0,
             "total_bytes_relayed": 0,
+            "ai_packets": 0,  # AI로 전달된 패킷 수
         }
         
         logger.info("rtp_relay_worker_created",
                    call_id=media_session.call_id,
                    caller=str(caller_endpoint),
-                   callee=str(callee_endpoint))
+                   callee=str(callee_endpoint),
+                   ai_enabled=ai_orchestrator is not None)
     
     async def start(self) -> None:
         """Relay 시작 (소켓 바인딩 및 수신 대기)"""
@@ -210,9 +218,63 @@ class RTPRelayWorker:
         
         self.stats["total_bytes_relayed"] += len(data)
         
+        # AI 모드일 경우 AI Orchestrator로 패킷 전달
+        if self.ai_mode and self.ai_orchestrator:
+            # Caller의 오디오 패킷만 AI로 전달 (AI가 Callee 역할)
+            if socket_type == "caller_audio_rtp":
+                try:
+                    # 비동기 태스크로 AI에 패킷 전달
+                    asyncio.create_task(
+                        self.ai_orchestrator.on_audio_packet(data, direction="caller")
+                    )
+                    self.stats["ai_packets"] += 1
+                except Exception as e:
+                    logger.error("ai_packet_forward_error",
+                               call_id=self.media_session.call_id,
+                               error=str(e))
+        
         # 미디어 세션 RTP 수신 기록
         from_caller = "caller" in socket_type
         self.media_session.update_rtp_received(from_caller)
+    
+    def set_ai_mode(self, enabled: bool = True):
+        """
+        AI 모드 활성화/비활성화
+        
+        Args:
+            enabled: AI 모드 활성화 여부
+        """
+        self.ai_mode = enabled
+        logger.info("ai_mode_changed",
+                   call_id=self.media_session.call_id,
+                   ai_mode=enabled)
+    
+    def send_ai_audio(self, audio_data: bytes):
+        """
+        AI에서 생성한 오디오를 Caller에게 전송
+        
+        Args:
+            audio_data: 오디오 데이터 (AI가 생성한 TTS 음성)
+        """
+        if not self.ai_mode:
+            logger.warning("not_in_ai_mode",
+                         call_id=self.media_session.call_id)
+            return
+        
+        # Callee Audio RTP transport를 통해 Caller에게 전송
+        if self.callee_audio_transport:
+            try:
+                # RTP 패킷으로 포장하여 전송 (간단한 구현)
+                # 실제로는 RTP 헤더를 추가해야 하지만, 여기서는 단순화
+                caller_audio_port = self.media_session.caller_leg.get_audio_rtp_port()
+                self.callee_audio_transport.sendto(
+                    audio_data,
+                    (self.caller_endpoint.ip, caller_audio_port)
+                )
+            except Exception as e:
+                logger.error("ai_audio_send_error",
+                           call_id=self.media_session.call_id,
+                           error=str(e))
     
     def get_stats(self) -> dict:
         """통계 정보 반환
@@ -220,7 +282,9 @@ class RTPRelayWorker:
         Returns:
             통계 딕셔너리
         """
-        return self.stats.copy()
+        stats = self.stats.copy()
+        stats["ai_mode"] = self.ai_mode
+        return stats
 
 
 class RTPRelayProtocol(asyncio.DatagramProtocol):

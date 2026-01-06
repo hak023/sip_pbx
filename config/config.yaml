@@ -60,8 +60,8 @@ ai_voicebot:
   
   # ⭐ Google Cloud 설정 - 여기에 API 정보 입력! ⭐
   google_cloud:
-    project_id: "your-gcp-project-id"  # ← Google Cloud 프로젝트 ID
-    credentials_path: "credentials/gcp-key.json"  # ← Service Account 키 파일 경로
+    project_id: "sip-pbx-ai"  # ← Google Cloud 프로젝트 ID
+    credentials_path: "config/gcp-key.json"  # ← Service Account 키 파일 경로
     
     # Quota 관리
     quota_management:
@@ -85,9 +85,37 @@ ai_voicebot:
     
     # Gemini LLM 설정
     gemini:
-      model: "gemini-pro"  # gemini-pro | gemini-pro-vision
-      temperature: 0.7  # 0.0 - 1.0 (높을수록 창의적)
-      max_output_tokens: 200  # 최대 출력 토큰 (짧은 답변 권장)
+      # 🚀 권장 모델 (2026년 1월 기준):
+      #   1. gemini-2.5-flash (최신 안정판, 가장 빠르고 저렴, 입력 100만 토큰)
+      #   2. gemini-flash-latest (항상 최신 Flash 버전으로 자동 업데이트)
+      #   3. gemini-2.0-flash (안정적)
+      #   4. gemini-2.5-flash-lite (더 빠르고 저렴, 경량 응답용)
+      # 
+      # 💰 비용 비교 (100만 토큰):
+      #   - Flash 2.5: $0.075 (입력) / $0.30 (출력) → 월 ~₩1,400 (100통 기준)
+      #   - Pro 2.5:   $1.25 (입력) / $5.00 (출력) → 월 ~₩23,400 (100통 기준)
+      # ⚡ 응답 속도:
+      #   - Flash 2.5: 300~600ms (짧은 답변, 최고 속도)
+      #   - Flash 2.0: 400~700ms (짧은 답변)
+      #   - Pro 2.5:   800~1200ms (짧은 답변)
+      # 📊 품질: 간단한 대화(1~2문장)에서는 Flash와 Pro 차이 미미
+      model: "gemini-2.5-flash"  # gemini-2.5-flash (최신) | gemini-flash-latest | gemini-2.0-flash | gemini-2.5-flash-lite
+      
+      # ⭐ Gemini API 키 (필수)
+      # 발급: https://aistudio.google.com/app/apikey
+      api_key: "AIzaSyBhQpIGB4iCRxCE0k_g2DW4s4MYOO9Laac"
+      
+      temperature: 0.5  # 0.0 - 1.0 (낮을수록 일관적이고 빠름, 0.5 권장)
+      max_output_tokens: 150  # 최대 출력 토큰 (1~2문장, 150 토큰 권장)
+      
+      # 시스템 프롬프트 (간결한 응답 유도)
+      system_prompt: |
+        당신은 전화 응대 AI 비서입니다.
+        규칙:
+        1. 1~2문장으로 간결하게 답변하세요.
+        2. 불필요한 인사말이나 부연 설명을 생략하세요.
+        3. 질문의 핵심만 명확하게 전달하세요.
+        4. 모르는 내용은 솔직히 "잘 모르겠습니다"라고 답변하세요.
   
   # Resilience (재시도 및 Circuit Breaker)
   resilience:

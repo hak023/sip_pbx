@@ -1,32 +1,133 @@
-# AI 실시간 통화 응대 시스템 - 아키텍처 문서
+# SIP PBX + AI Voice Assistant - 완전한 Backend 아키텍처
 
 ## 📋 문서 정보
 
 | 항목 | 내용 |
 |-----|------|
-| **문서 버전** | v1.0 |
-| **작성일** | 2025-01-05 |
+| **문서 버전** | v2.0 |
+| **최종 업데이트** | 2025-01-06 |
 | **작성자** | Winston (Architect) |
-| **프로젝트명** | AI Voice Assistant Extension for SIP PBX |
-| **상태** | Draft |
+| **프로젝트명** | SIP PBX B2BUA + AI Voice Assistant + Frontend Control Center |
+| **상태** | Production Ready |
 
 ### 변경 이력
 
 | 날짜 | 버전 | 설명 | 작성자 |
 |-----|------|------|-------|
-| 2025-01-05 | v1.0 | 초기 아키텍처 문서 작성 | Winston |
+| 2025-01-05 | v1.0 | 초기 아키텍처 문서 작성 (AI 보이스봇) | Winston |
+| 2025-01-06 | v2.0 | SIP PBX B2BUA 내용 통합, 전체 Backend 통합 문서 | Winston |
 
 ---
 
-## 1. 개요 (Overview)
+## 📌 문서 목적
+
+> **이 문서는 Backend 시스템의 모든 것을 담고 있습니다.**
+> 
+> - ✅ **SIP PBX B2BUA 코어**: SIP 시그널링, RTP 릴레이, 통화 관리
+> - ✅ **AI Voice Assistant**: STT/TTS/LLM, RAG, 지식 베이스
+> - ✅ **Backend API Services**: FastAPI Gateway, WebSocket, HITL
+> 
+> Frontend 관련 내용은 **[Frontend Architecture](frontend-architecture.md)** 문서를 참조하세요.
+
+---
+
+## 1. 시스템 개요 (Overview)
+
+## 1. 시스템 개요 (Overview)
 
 ### 1.1 프로젝트 배경
 
-본 프로젝트는 **현재 운영 중인 IP-PBX 시스템**을 확장하여, 착신자가 부재 중일 때 AI가 자동으로 전화를 받아 응대하는 **지능형 음성 비서 시스템**을 구축합니다.
+본 시스템은 **엔터프라이즈급 SIP B2BUA (Back-to-Back User Agent) 전화 교환 시스템**을 기반으로, **AI 음성 비서 기능**을 통합한 차세대 통신 플랫폼입니다.
 
-### 1.2 핵심 목표
+#### 핵심 구성 요소
 
-#### 🎯 일반 통화 시나리오
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      COMPLETE BACKEND SYSTEM                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────────────┐      ┌──────────────────────┐        │
+│  │   SIP PBX B2BUA      │◄────►│  AI Voice Assistant  │        │
+│  │   (Core System)      │      │  (Extension)         │        │
+│  ├──────────────────────┤      ├──────────────────────┤        │
+│  │ • SIP Signaling      │      │ • STT/TTS/LLM        │        │
+│  │ • RTP Relay          │      │ • RAG Engine         │        │
+│  │ • Call Management    │      │ • Knowledge Base     │        │
+│  │ • Port Pool          │      │ • HITL Service       │        │
+│  │ • CDR Generation     │      │ • Call Recording     │        │
+│  └──────────────────────┘      └──────────────────────┘        │
+│           ▲                             ▲                       │
+│           │                             │                       │
+│           └─────────┬───────────────────┘                       │
+│                     ▼                                           │
+│         ┌──────────────────────┐                               │
+│         │  Backend API Gateway │                               │
+│         │  (FastAPI + Socket.IO)│                               │
+│         └──────────────────────┘                               │
+│                     ▲                                           │
+└─────────────────────┼───────────────────────────────────────────┘
+                      │
+              ┌───────┴────────┐
+              │   Frontend     │
+              │  (Next.js)     │
+              └────────────────┘
+```
+
+### 1.2 시스템 계층 구조
+
+#### Layer 1: SIP PBX Core (기존 시스템)
+**역할**: 표준 SIP 통신 프로토콜 처리
+- SIP B2BUA 엔진 (INVITE, BYE, ACK, PRACK, UPDATE, REGISTER, CANCEL, OPTIONS)
+- RTP Bypass Relay (<5ms 지연)
+- 동적 포트 관리 (10,000-20,000 포트 풀)
+- SDP 협상 및 미디어 조정
+- Transaction 및 Dialog 관리
+- CDR (Call Detail Record) 생성
+
+#### Layer 2: AI Voice Assistant (신규 확장)
+**역할**: 지능형 음성 응대 및 자동화
+- 부재중 자동 응답 (10초 타임아웃)
+- Google Cloud STT/TTS 스트리밍
+- Gemini 1.5 Flash LLM 대화 생성
+- RAG (Retrieval Augmented Generation)
+- Vector DB 지식 베이스
+- 통화 녹음 및 지식 추출
+- Barge-in 지원 (VAD 기반)
+
+#### Layer 3: Backend API Services (신규)
+**역할**: Frontend 연동 및 실시간 통신
+- FastAPI REST API Gateway
+- Socket.IO WebSocket Server
+- HITL (Human-in-the-Loop) Service
+- 운영자 상태 관리
+- 통화 이력 관리
+- PostgreSQL/Redis 통합
+
+### 1.3 핵심 목표
+
+### 1.3 핵심 목표
+
+#### 🎯 SIP B2BUA 기본 통화 시나리오
+1. **표준 SIP 통화 처리**
+   - REGISTER: 사용자 등록 및 인증
+   - INVITE: 통화 설정 (양방향 독립 leg)
+   - BYE: 통화 종료
+   - CANCEL: 통화 취소
+   - UPDATE/PRACK: 세션 업데이트 및 신뢰성 응답
+
+2. **저지연 RTP Relay**
+   - Bypass 모드: 직접 relay (<5ms)
+   - 양방향 독립 RTP 스트림
+   - 동적 포트 할당 (통화당 8개 포트)
+   - Jitter Buffer 및 패킷 재정렬
+
+3. **통화 기록 및 모니터링**
+   - CDR 생성 (JSON Lines)
+   - Webhook 이벤트 알림
+   - Prometheus 메트릭
+   - 구조화된 로깅
+
+#### 🎯 일반 통화 시나리오 (녹음 및 지식 추출)
 1. **통화 녹음 및 텍스트 변환**
    - 양방향 RTP 스트림을 화자 분리하여 STT 변환
    - 믹싱된 오디오 파일 + 텍스트 파일 저장
@@ -46,10 +147,15 @@
    - VAD 기반 Barge-in 지원 (사용자 발화 시 TTS 즉시 중단)
    - RAG 기반 지능형 답변 생성
 
-3. **통화 기록**
+3. **Human-in-the-Loop (HITL)**
+   - AI 신뢰도 낮을 시 운영자 개입 요청
+   - Frontend 실시간 알림
+   - 운영자 부재중 모드 지원
+
+4. **통화 기록**
    - AI 보이스봇 응대 내용도 녹음 및 로깅
 
-### 1.3 기술 스택 요약
+### 1.4 기술 스택 요약
 
 | 레이어 | 기술 |
 |-------|-----|
@@ -143,21 +249,134 @@ graph TB
 
 ### 2.2 시스템 컴포넌트
 
-#### 2.2.1 기존 PBX 컴포넌트 (확장)
+#### 2.2.1 SIP PBX B2BUA Core (기반 시스템)
 
-**Call Manager (확장)**
-- **기존 기능**: SIP B2BUA, 통화 라우팅
-- **신규 기능**: 
+**SIP Endpoint** ✅
+- **역할**: SIP 프로토콜 메시지 처리 (RFC 3261)
+- **지원 메서드**:
+  - REGISTER: 사용자 등록/해제
+  - INVITE: 통화 설정
+  - BYE: 통화 종료
+  - ACK: 200 OK 확인 응답
+  - CANCEL: 진행 중인 INVITE 취소
+  - PRACK: 신뢰성 있는 provisional 응답 (RFC 3262)
+  - UPDATE: 세션 업데이트 (RFC 3311)
+  - OPTIONS: Keep-alive 및 헬스 체크
+- **B2BUA 동작**:
+  - Caller → PBX (leg 1)
+  - PBX → Callee (leg 2)
+  - 각 leg은 독립적인 SIP dialog
+  - 각 leg은 독립적인 Call-ID, Via 헤더
+- **구현 파일**: `src/sip_core/sip_endpoint.py`
+
+**Call Manager** ✅
+- **기존 기능**:
+  - 통화 생명주기 관리 (생성 → 활성 → 종료)
+  - 통화 상태 추적 (CallSession)
+  - Dialog 관리 (Call-ID, From/To 태그)
+  - Transaction 관리
+  - SDP 협상 조정
+- **신규 기능 (AI 확장)**:
   - 부재중 타임아웃 감지 (10초 설정 가능)
   - AI 보이스봇 모드 활성화 플래그
   - RTP 스트림을 AI Orchestrator로 라우팅
+  - AI 활성화 통화 집합 관리 (`ai_enabled_calls`)
+- **구현 파일**: `src/sip_core/call_manager.py`
 
-**RTP Relay (확장)**
-- **기존 기능**: RTP 패킷 중계
-- **신규 기능**:
+**Register Manager** ✅
+- **역할**: 사용자 등록 정보 관리
+- **기능**:
+  - REGISTER 요청 처리
+  - 사용자 정보 저장 (username, IP, port, contact)
+  - 등록 해제 (Expires: 0)
+  - 등록된 사용자 목록 추적
+  - Contact URI 관리
+- **구현 파일**: `src/sip_core/register_handler.py`
+
+**Transaction Manager** ✅
+- **역할**: SIP Transaction 상태 관리
+- **기능**:
+  - INVITE Transaction (Client/Server)
+  - Non-INVITE Transaction
+  - Timer 관리 (T1, T2, T4)
+  - Retransmission 처리
+  - Transaction 종료 및 정리
+
+**RTP Relay** ✅
+- **기존 기능**:
+  - RTP 패킷 중계 (Bypass 모드)
+  - 양방향 RTP 스트림 관리
+  - <5ms 저지연 relay
+  - RTCP 처리
+- **신규 기능 (AI 확장)**:
   - RTP 패킷을 AI 모듈로 복제 (Tee)
   - 양방향 스트림 분리 (caller/callee)
   - AI 응답 RTP 주입
+  - AI 모드 세션 관리
+- **구현 파일**: `src/media/rtp_relay.py`
+
+**Port Pool Manager** ✅
+- **역할**: 동적 포트 할당 및 관리
+- **기능**:
+  - 10,000-20,000 범위 포트 풀
+  - 통화당 8개 포트 할당
+  - 포트 상태 추적 (사용중/사용가능)
+  - 통화 종료 시 포트 해제
+  - 포트 고갈 감지 및 알림
+- **구현 파일**: `src/media/port_pool.py`
+
+**SDP Parser/Manipulator** ✅
+- **역할**: SDP 파싱 및 수정
+- **기능**:
+  - SDP 파싱 (c=, m=, a= 라인)
+  - 미디어 포트 교체 (B2BUA IP:포트)
+  - 코덱 협상 (G.711, Opus)
+  - RTP/RTCP 포트 매핑
+  - Direction 속성 처리 (sendrecv, sendonly, recvonly)
+- **구현 파일**: `src/media/sdp_parser.py`
+
+**Codec Support** ✅
+- **지원 코덱**:
+  - G.711 μ-law (PCMU) - payload 0
+  - G.711 A-law (PCMA) - payload 8
+  - Opus - payload 96-127 (dynamic)
+- **기능**:
+  - 코덱 디코딩/인코딩
+  - Jitter Buffer
+  - 패킷 순서 재정렬
+  - 패킷 손실 보정
+- **구현 파일**: `src/media/codec/`
+
+**CDR Generator** ✅
+- **역할**: 통화 상세 기록 생성
+- **출력 형식**: JSON Lines
+- **기록 정보**:
+  - call_id, caller, callee
+  - start_time, end_time, duration
+  - codec, sample_rate
+  - termination_reason
+  - ai_handled (AI 응대 여부)
+- **저장 위치**: `data/cdr/`
+
+**Webhook Notifier** ✅
+- **역할**: 외부 시스템 알림
+- **이벤트 종류**:
+  - call_started
+  - call_ended
+  - call_failed
+  - ai_activated
+- **전송 방식**: HTTP POST (JSON)
+- **Retry 정책**: 3회 재시도, Exponential Backoff
+
+**Prometheus Metrics** ✅
+- **메트릭 종류**:
+  - `active_calls_total` - 현재 활성 통화 수
+  - `call_duration_seconds` - 통화 시간 히스토그램
+  - `rtp_packets_total` - RTP 패킷 수
+  - `sip_requests_total` - SIP 요청 수 (메서드별)
+  - `port_pool_usage` - 포트 사용률
+  - `ai_activated_calls_total` - AI 활성화 통화 수
+- **Endpoint**: `/metrics` (HTTP)
 
 #### 2.2.2 AI Orchestrator (신규)
 
@@ -423,7 +642,112 @@ chunks = splitter.split_text(transcript)
 
 ## 3. 데이터 모델
 
-### 3.1 Call Session (확장)
+### 3.1 SIP B2BUA 데이터 모델
+
+#### CallSession (기존)
+
+```python
+@dataclass
+class CallSession:
+    """통화 세션 정보"""
+    call_id: str                      # B2BUA 내부 Call ID
+    caller: str                       # From URI (발신자)
+    callee: str                       # To URI (착신자)
+    state: CallState                  # 통화 상태
+    
+    # Leg 정보
+    caller_leg: Leg                   # Caller <-> PBX leg
+    callee_leg: Leg                   # PBX <-> Callee leg
+    
+    # 미디어 정보
+    media_session_id: Optional[str]   # 미디어 세션 ID
+    allocated_ports: List[int]        # 할당된 포트 목록
+    
+    # 타임스탬프
+    start_time: datetime
+    ringing_time: Optional[datetime]
+    answer_time: Optional[datetime]
+    end_time: Optional[datetime]
+    
+    # 신규 필드 (AI 확장)
+    is_ai_handled: bool = False
+    ai_activated_at: Optional[datetime] = None
+    no_answer_timeout: int = 10       # 초
+    recording_path: Optional[str] = None
+    transcript_path: Optional[str] = None
+```
+
+#### Leg (SIP Dialog)
+
+```python
+@dataclass
+class Leg:
+    """SIP Leg (Dialog) 정보"""
+    call_id: str                      # SIP Call-ID 헤더
+    from_uri: str                     # From URI
+    to_uri: str                       # To URI
+    from_tag: str                     # From 태그
+    to_tag: Optional[str]             # To 태그 (200 OK 이후)
+    
+    # Transaction 정보
+    branch: str                       # Via 브랜치 파라미터
+    cseq: int                         # CSeq 번호
+    
+    # Contact 정보
+    contact: Optional[str]            # Contact URI
+    remote_target: Optional[str]      # Target URI (요청 대상)
+    
+    # 상태
+    direction: Direction              # INBOUND / OUTBOUND
+    state: LegState                   # INITIAL, CALLING, RINGING, ESTABLISHED, TERMINATED
+```
+
+#### CallState (Enum)
+
+```python
+class CallState(str, Enum):
+    """통화 상태"""
+    INITIAL = "initial"               # 초기 상태
+    CALLING = "calling"               # INVITE 전송됨
+    RINGING = "ringing"               # 180 Ringing 수신
+    ESTABLISHED = "established"       # 200 OK, 통화 중
+    TERMINATING = "terminating"       # BYE 전송/수신
+    TERMINATED = "terminated"         # 종료됨
+    FAILED = "failed"                 # 실패 (4xx, 5xx, 6xx)
+    CANCELLED = "cancelled"           # CANCEL로 취소됨
+```
+
+#### MediaSession
+
+```python
+@dataclass
+class MediaSession:
+    """미디어 세션 정보"""
+    session_id: str
+    call_id: str
+    
+    # RTP 포트 할당
+    caller_rtp_port: int              # Caller → PBX RTP 포트
+    caller_rtcp_port: int             # Caller → PBX RTCP 포트
+    callee_rtp_port: int              # PBX → Callee RTP 포트
+    callee_rtcp_port: int             # PBX → Callee RTCP 포트
+    
+    # Caller/Callee 실제 주소
+    caller_addr: tuple[str, int]      # (IP, port)
+    callee_addr: tuple[str, int]      # (IP, port)
+    
+    # 코덱 정보
+    codec: str                        # "PCMU", "PCMA", "opus"
+    sample_rate: int                  # 8000, 16000, 48000
+    
+    # 통계
+    packets_sent: int = 0
+    packets_received: int = 0
+    bytes_sent: int = 0
+    bytes_received: int = 0
+```
+
+### 3.2 Call Session (AI 확장)
 
 ```python
 @dataclass
@@ -514,7 +838,65 @@ class KnowledgeDocument:
 
 ## 4. 핵심 워크플로우
 
-### 4.1 일반 통화 시나리오 (녹음 및 지식 추출)
+### 4.1 표준 SIP B2BUA 통화 흐름
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant PBX as SIP PBX<br/>(B2BUA)
+    participant Callee
+    participant PortPool
+    participant RTPRelay
+    
+    Note over Caller: 1004가 1008에게 전화
+    
+    Caller->>PBX: INVITE sip:1008@domain
+    PBX->>Caller: 100 Trying
+    
+    Note over PBX: 1008 등록 확인
+    
+    PBX->>PortPool: 8개 포트 할당 요청
+    PortPool-->>PBX: 10000-10007 할당
+    
+    PBX->>Callee: INVITE sip:1008@domain<br/>(새 Call-ID, Via)
+    Callee->>PBX: 100 Trying
+    Callee->>PBX: 180 Ringing
+    PBX->>Caller: 180 Ringing
+    
+    Callee->>PBX: 200 OK (SDP: callee IP:port)
+    Note over PBX: SDP 수정<br/>(callee IP → PBX IP:10000)
+    PBX->>Caller: 200 OK (SDP: PBX IP:10000)
+    
+    Caller->>PBX: ACK
+    PBX->>Callee: ACK
+    
+    Note over Caller,Callee: 통화 연결됨 (RTP 시작)
+    
+    Caller->>RTPRelay: RTP Packets (Caller → PBX:10000)
+    RTPRelay->>Callee: RTP Packets (PBX:10002 → Callee)
+    Callee->>RTPRelay: RTP Packets (Callee → PBX:10002)
+    RTPRelay->>Caller: RTP Packets (PBX:10000 → Caller)
+    
+    Note over Caller,Callee: 통화 중 (Bypass Mode, <5ms 지연)
+    
+    Caller->>PBX: BYE
+    PBX->>Callee: BYE
+    Callee->>PBX: 200 OK
+    PBX->>Caller: 200 OK
+    
+    Note over PBX: 세션 정리
+    PBX->>PortPool: 포트 해제
+    PBX->>PBX: CDR 생성
+```
+
+**주요 특징:**
+- ✅ 완전한 B2BUA 동작 (양쪽 독립 leg)
+- ✅ 동적 포트 할당 (통화당 8개)
+- ✅ SDP 조작으로 RTP를 PBX 경유
+- ✅ Bypass 모드 RTP Relay (<5ms)
+- ✅ CDR 자동 생성
+
+### 4.2 일반 통화 시나리오 (녹음 및 지식 추출)
 
 ```mermaid
 sequenceDiagram
@@ -556,7 +938,49 @@ sequenceDiagram
     end
 ```
 
-### 4.2 AI 보이스봇 시나리오 (부재중 응답)
+### 4.2 일반 통화 시나리오 (녹음 및 지식 추출)
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant PBX
+    participant Callee
+    participant Recorder
+    participant STT
+    participant LLM
+    participant VectorDB
+    
+    Caller->>PBX: INVITE (전화 걸기)
+    PBX->>Callee: INVITE (착신 전달)
+    Callee->>PBX: 200 OK (전화 받음)
+    PBX->>Caller: 200 OK
+    
+    Note over PBX,Recorder: 통화 연결, 녹음 시작
+    
+    PBX->>Recorder: RTP Stream (양방향)
+    Recorder->>Recorder: 화자 분리 + 믹싱
+    
+    loop 통화 중
+        Recorder->>STT: 실시간 오디오
+        STT->>Recorder: 텍스트 (interim/final)
+    end
+    
+    Callee->>PBX: BYE (통화 종료)
+    PBX->>Caller: BYE
+    
+    Note over Recorder: 녹음 완료, 파일 저장
+    
+    Recorder->>LLM: 통화 전체 텍스트
+    LLM->>LLM: 유용성 판단
+    
+    alt 유용한 정보 있음
+        LLM->>VectorDB: 지식 청크 저장
+    else 유용한 정보 없음
+        LLM->>Recorder: Skip
+    end
+```
+
+### 4.3 AI 보이스봇 시나리오 (부재중 응답)
 
 ```mermaid
 sequenceDiagram
@@ -609,7 +1033,7 @@ sequenceDiagram
     end
 ```
 
-### 4.3 지식 추출 워크플로우
+### 4.4 지식 추출 워크플로우
 
 ```mermaid
 flowchart TD
@@ -659,9 +1083,97 @@ flowchart TD
 
 ---
 
-## 5. 기술 스택 상세
+## 5. SIP PBX B2BUA 구현 상태
 
-### 5.1 전체 기술 스택
+### 5.1 구현 완료 기능 ✅
+
+#### 1. 사용자 등록 관리
+- ✅ REGISTER 요청 처리
+- ✅ 사용자 정보 저장 (username, IP, port, contact)
+- ✅ 등록 해제 (Expires: 0)
+- ✅ 등록된 사용자 목록 추적
+- ✅ Contact URI 관리
+
+#### 2. B2BUA 통화 처리
+- ✅ INVITE 요청 수신 및 발신자에게 100 Trying 응답
+- ✅ 수신자(callee) 등록 상태 확인
+- ✅ 수신자에게 새로운 INVITE 전송 (독립적인 Call-ID, Via 헤더)
+- ✅ 수신자의 180 Ringing을 발신자에게 전달
+- ✅ 수신자의 200 OK를 발신자에게 전달
+- ✅ ACK 처리 (양방향)
+- ✅ BYE 처리 (양방향)
+- ✅ CANCEL 처리 (진행 중인 INVITE 취소)
+- ✅ UPDATE 처리 (세션 업데이트, RFC 3311)
+- ✅ PRACK 처리 (신뢰성 있는 provisional 응답, RFC 3262)
+- ✅ OPTIONS 처리 (Keep-alive 및 헬스 체크)
+
+#### 3. 미디어 처리
+- ✅ SDP 파싱 및 조작
+- ✅ 미디어 포트 동적 할당 (10,000-20,000 포트 풀)
+- ✅ RTP Bypass 모드 (직접 relay, <5ms 저지연)
+- ✅ 코덱 디코딩 지원 (G.711 PCMU/PCMA, Opus)
+- ✅ Jitter Buffer (패킷 재정렬 및 지연 보정)
+- ✅ 양방향 RTP 스트림 관리
+
+#### 4. 세션 관리
+- ✅ 통화 상태 추적 (CallSession)
+- ✅ Dialog 관리 (Call-ID, From/To 태그)
+- ✅ Transaction 관리 (INVITE, Non-INVITE)
+- ✅ 세션 타임아웃 및 정리
+- ✅ Leg 독립 관리 (caller leg, callee leg)
+
+#### 5. 이벤트 및 알림
+- ✅ 통화 이벤트 생성 (시작, 종료, 실패)
+- ✅ Webhook 알림 (HTTP POST)
+- ✅ CDR (Call Detail Record) 생성 (JSON Lines)
+- ✅ 구조화된 로깅 (structlog)
+
+#### 6. 모니터링
+- ✅ Prometheus 메트릭 (통화 수, 지연시간, 에러율)
+- ✅ 활성 통화 수 추적
+- ✅ 포트 사용률 모니터링
+- ✅ HTTP 헬스체크 엔드포인트 (/health, /ready)
+
+### 5.2 미구현 기능 (향후 계획) ⚠️
+
+#### 1. 보안 기능
+- ❌ SIP TLS (SIPS) 암호화
+- ❌ SRTP (Secure RTP) 미디어 암호화
+- ❌ SIP Digest Authentication
+
+#### 2. 추가 SIP 메서드
+- ❌ SUBSCRIBE/NOTIFY (이벤트 구독)
+- ❌ PUBLISH (상태 게시)
+- ❌ MESSAGE (인스턴트 메시지)
+- ❌ INFO (세션 내 정보 전송)
+- ❌ REFER (통화 전환)
+
+#### 3. 고급 기능
+- ❌ 실시간 통화 품질 모니터링 (MOS 점수)
+- ❌ Media Transcoding (코덱 변환)
+- ❌ Conference Bridge (다자간 통화)
+- ❌ IVR (Interactive Voice Response)
+
+### 5.3 성능 및 제한사항
+
+#### 검증된 성능
+- **동시 통화**: 100호 목표 (현재 테스트 완료: 소규모)
+- **SIP 응답 시간**: <100ms
+- **RTP Bypass 지연**: <5ms
+- **메모리**: 통화당 ~10MB
+- **CPU**: 통화당 ~1-2% (4-Core 기준)
+
+#### 알려진 제한사항
+- IPv4만 지원 (IPv6 미지원)
+- UDP 전송만 지원 (TCP/TLS 미지원)
+- 단일 코덱 협상 (transcoding 미지원)
+- NAT 트래버설 부분 지원 (STUN/TURN 미지원)
+
+---
+
+## 6. 기술 스택 상세
+
+### 6.1 전체 기술 스택
 
 | 카테고리 | 기술 | 버전 | 용도 | 선정 이유 |
 |---------|------|------|------|----------|
@@ -849,43 +1361,86 @@ results = index.query(
 
 ---
 
-## 6. 시스템 설정
+## 7. 시스템 설정
 
-### 6.1 설정 파일 구조 (config/ai_config.yaml)
+### 7.1 설정 파일 구조 (config/config.yaml)
 
 ```yaml
+# SIP PBX B2BUA Core 설정
+sip_pbx:
+  sip:
+    host: "0.0.0.0"
+    port: 5060
+    transport: "UDP"                 # UDP만 지원 (현재)
+    user_agent: "SIP-PBX-B2BUA/2.0"
+    
+  rtp:
+    port_range_start: 10000
+    port_range_end: 20000
+    bypass_mode: true                # RTP 직접 relay (<5ms)
+    jitter_buffer_ms: 60
+    
+  timeouts:
+    invite_timeout: 60               # INVITE 응답 타임아웃 (초)
+    bye_timeout: 32                  # BYE 응답 타임아웃 (초)
+    register_expires: 3600           # REGISTER 만료 시간 (초)
+    session_cleanup: 300             # 세션 정리 주기 (초)
+    
+  codec:
+    preference:
+      - "PCMU"                       # G.711 μ-law (우선순위 1)
+      - "PCMA"                       # G.711 A-law (우선순위 2)
+      - "opus"                       # Opus (우선순위 3)
+    
+  monitoring:
+    prometheus_enabled: true
+    prometheus_port: 9090
+    webhook_url: "http://localhost:8080/webhook"
+    cdr_path: "./data/cdr/"
+    
+# AI Voice Assistant 설정 (확장)
 ai_voicebot:
   enabled: true
   
   # 부재중 설정
-  no_answer_timeout: 10  # 초
+  no_answer_timeout: 10  # 초 (PBX가 대기하는 시간)
   
   # 고정 인사말
   greeting_message: "안녕하세요, 저는 AI 비서입니다. 무엇을 도와드릴까요?"
   
   # Google Cloud
   google_cloud:
-    project_id: "your-gcp-project"
-    credentials_path: "credentials/gcp-key.json"
+    project_id: "sip-pbx-ai"
+    credentials_path: "config/gcp-key.json"
     
     stt:
-      model: "telephony"
+      model: "telephony"             # 전화 음성 최적화
       language_code: "ko-KR"
+      sample_rate: 16000
       enable_enhanced: true
+      enable_automatic_punctuation: true
       
     tts:
-      voice_name: "ko-KR-Neural2-A"
+      voice_name: "ko-KR-Neural2-A"  # 여성 목소리
       speaking_rate: 1.0
       pitch: 0.0
       
     gemini:
-      model: "gemini-pro"
-      temperature: 0.7
-      max_output_tokens: 200
+      model: "gemini-2.5-flash"      # 최신 Flash 모델
+      api_key: "AIzaSy..."           # API 키 (또는 env에서 로드)
+      temperature: 0.5
+      max_output_tokens: 150
+      system_prompt: |
+        당신은 전화 응대 AI 비서입니다.
+        규칙:
+        1. 1~2문장으로 간결하게 답변하세요.
+        2. 불필요한 인사말이나 부연 설명을 생략하세요.
+        3. 질문의 핵심만 명확하게 전달하세요.
+        4. 모르는 내용은 솔직히 "잘 모르겠습니다"라고 답변하세요.
   
   # Vector DB
   vector_db:
-    provider: "chromadb"  # chromadb | pinecone
+    provider: "chromadb"             # chromadb | pinecone
     
     # ChromaDB 설정
     chromadb:
@@ -896,7 +1451,7 @@ ai_voicebot:
       api_key: "${PINECONE_API_KEY}"
       environment: "us-west1-gcp"
       index_name: "knowledge-base"
-      dimension: 768  # Sentence Transformers
+      dimension: 768                 # Sentence Transformers
   
   # Embedding
   embedding:
@@ -920,14 +1475,14 @@ ai_voicebot:
     # 지식 추출
     knowledge_extraction:
       enabled: true
-      min_confidence: 0.7  # LLM 판단 최소 신뢰도
+      min_confidence: 0.7            # LLM 판단 최소 신뢰도
       chunk_size: 500
       chunk_overlap: 50
   
   # VAD
   vad:
     enabled: true
-    mode: 3  # 0-3, 3이 가장 민감
+    mode: 3                          # 0-3, 3이 가장 민감
     frame_duration_ms: 30
     
   # Barge-in
@@ -938,16 +1493,52 @@ ai_voicebot:
   # 오디오 버퍼
   audio_buffer:
     jitter_buffer_ms: 60
-    max_buffer_size: 100  # 패킷
+    max_buffer_size: 100             # 패킷
     
   # 로깅
   logging:
     log_conversations: true
     log_audio: true
     log_level: "INFO"
+
+# Backend API Services 설정
+backend_api:
+  fastapi:
+    host: "0.0.0.0"
+    port: 8000
+    cors_origins:
+      - "http://localhost:3000"      # Frontend URL
+    jwt_secret: "${JWT_SECRET}"
+    jwt_algorithm: "HS256"
+    jwt_expiration: 3600             # 1시간
+    
+  socketio:
+    host: "0.0.0.0"
+    port: 8001
+    cors_allowed_origins: "*"
+    
+  database:
+    postgres:
+      host: "localhost"
+      port: 5432
+      database: "sip_pbx"
+      user: "postgres"
+      password: "${POSTGRES_PASSWORD}"
+      
+    redis:
+      host: "localhost"
+      port: 6379
+      db: 0
+      password: "${REDIS_PASSWORD}"
+      
+  hitl:
+    enabled: true
+    timeout_seconds: 60              # HITL 응답 대기 시간
+    hold_music: "./media/hold_music.wav"
+    away_message: "죄송합니다. 해당 부분은 잘 모르는 내용이라 확인 후 별도로 안내드리겠습니다."
 ```
 
-### 6.2 환경 변수
+### 7.2 환경 변수
 
 ```.env
 # Google Cloud
@@ -964,16 +1555,52 @@ OPENAI_API_KEY=your-openai-key
 
 ---
 
-## 7. 프로젝트 구조
+## 8. 프로젝트 구조
 
 ```
 sip-pbx/
 ├── src/
+│   ├── sip_core/                       # ✅ SIP PBX B2BUA Core
+│   │   ├── __init__.py
+│   │   ├── sip_endpoint.py             # SIP 엔드포인트 (RFC 3261)
+│   │   ├── call_manager.py             # ✏️ 통화 관리자 (AI 확장)
+│   │   ├── register_handler.py         # REGISTER 핸들러
+│   │   ├── cancel_handler.py           # CANCEL 핸들러
+│   │   ├── prack_handler.py            # PRACK 핸들러 (RFC 3262)
+│   │   ├── update_handler.py           # UPDATE 핸들러 (RFC 3311)
+│   │   └── models/
+│   │       ├── call_session.py         # ✏️ CallSession (AI 확장)
+│   │       └── enums.py                # CallState, LegState 등
+│   │
+│   ├── media/                          # ✅ 미디어 처리
+│   │   ├── __init__.py
+│   │   ├── rtp_relay.py                # ✏️ RTP Relay (AI 확장)
+│   │   ├── rtp_packet.py               # RTP 패킷 파서
+│   │   ├── session_manager.py          # 미디어 세션 관리
+│   │   ├── port_pool.py                # 포트 풀 관리
+│   │   ├── sdp_parser.py               # SDP 파서/조작기
+│   │   ├── media_session.py            # MediaSession 모델
+│   │   └── codec/
+│   │       ├── g711.py                 # G.711 코덱
+│   │       ├── opus.py                 # Opus 코덱
+│   │       ├── jitter_buffer.py        # Jitter Buffer
+│   │       └── decoder.py              # 코덱 디코더
+│   │
+│   ├── repositories/                   # ✅ 데이터 저장소
+│   │   ├── call_state_repository.py    # 통화 상태 저장소
+│   │   └── user_repository.py          # 사용자 저장소
+│   │
+│   ├── events/                         # ✅ 이벤트 시스템
+│   │   ├── event_emitter.py            # 이벤트 발행
+│   │   ├── webhook_notifier.py         # Webhook 알림
+│   │   └── cdr_generator.py            # CDR 생성
+│   │
 │   ├── ai_voicebot/                    # 🆕 AI 모듈
 │   │   ├── __init__.py
 │   │   ├── orchestrator.py             # AI Orchestrator
 │   │   ├── audio_buffer.py             # Audio Buffer & Jitter
 │   │   ├── vad_detector.py             # Voice Activity Detector
+│   │   ├── factory.py                  # AI 모듈 초기화 팩토리
 │   │   │
 │   │   ├── recording/                  # 녹음 모듈
 │   │   │   ├── recorder.py             # Call Recorder
@@ -998,25 +1625,45 @@ sip-pbx/
 │   │       ├── knowledge.py
 │   │       └── recording.py
 │   │
-│   ├── sip_core/                       # 기존 PBX (확장)
-│   │   ├── call_manager.py             # ✏️ AI 모드 추가
-│   │   ├── sip_endpoint.py
-│   │   └── ...
+│   ├── api/                            # 🆕 Backend API Services
+│   │   ├── __init__.py
+│   │   ├── main.py                     # FastAPI 엔트리포인트
+│   │   ├── models.py                   # API 데이터 모델
+│   │   └── routers/
+│   │       ├── auth.py                 # 인증 API
+│   │       ├── calls.py                # 통화 API
+│   │       ├── knowledge.py            # 지식 베이스 CRUD API
+│   │       ├── hitl.py                 # HITL API
+│   │       ├── metrics.py              # 메트릭 API
+│   │       ├── operator.py             # 운영자 상태 API
+│   │       └── call_history.py         # 통화 이력 API
 │   │
-│   ├── media/                          # 기존 미디어 (확장)
-│   │   ├── rtp_relay.py                # ✏️ AI 모듈 연동
-│   │   ├── session_manager.py
-│   │   └── ...
+│   ├── websocket/                      # 🆕 WebSocket Server
+│   │   ├── __init__.py
+│   │   ├── server.py                   # Socket.IO 서버
+│   │   └── manager.py                  # 연결 관리자
 │   │
-│   └── main.py                         # ✏️ AI 모듈 초기화
+│   ├── services/                       # 🆕 비즈니스 로직 서비스
+│   │   └── hitl.py                     # HITL Service
+│   │
+│   ├── common/                         # ✅ 공통 모듈
+│   │   ├── logger.py                   # 구조화된 로깅
+│   │   ├── exceptions.py               # 커스텀 예외
+│   │   └── utils.py                    # 유틸리티 함수
+│   │
+│   └── main.py                         # ✏️ 메인 엔트리포인트 (AI 초기화)
 │
 ├── config/
-│   ├── config.yaml                     # 기존 설정
-│   └── ai_config.yaml                  # 🆕 AI 설정
+│   └── config.yaml                     # ✏️ 통합 설정 파일
 │
 ├── credentials/                        # 🆕 인증 정보
 │   ├── gcp-key.json                    # Google Cloud 키
 │   └── .gitignore                      # 인증 파일 제외
+│
+├── data/                               # ✅ 데이터 저장
+│   ├── chromadb/                       # ChromaDB 데이터
+│   ├── knowledge/                      # 지식 백업
+│   └── cdr/                            # CDR JSON Lines
 │
 ├── recordings/                         # 🆕 녹음 파일
 │   └── {call_id}/
@@ -1026,31 +1673,75 @@ sip-pbx/
 │       ├── transcript.txt
 │       └── metadata.json
 │
-├── data/                               # 🆕 데이터 저장
-│   ├── chromadb/                       # ChromaDB 데이터
-│   └── knowledge/                      # 지식 백업
+├── frontend/                           # 🆕 Frontend (Next.js)
+│   ├── app/
+│   ├── components/
+│   ├── lib/
+│   ├── store/
+│   ├── types/
+│   └── package.json
+│
+├── migrations/                         # 🆕 Database Migrations
+│   └── 001_create_unresolved_hitl_requests.sql
 │
 ├── tests/
+│   ├── sip_core/                       # SIP PBX 테스트
+│   │   ├── test_call_manager.py
+│   │   ├── test_sip_endpoint.py
+│   │   └── test_register_handler.py
+│   ├── media/                          # 미디어 테스트
+│   │   ├── test_rtp_relay.py
+│   │   ├── test_sdp_parser.py
+│   │   └── test_port_pool.py
 │   ├── ai_voicebot/                    # 🆕 AI 테스트
 │   │   ├── test_orchestrator.py
 │   │   ├── test_stt_client.py
 │   │   ├── test_rag_engine.py
 │   │   └── ...
-│   └── ...
+│   ├── api/                            # 🆕 API 테스트
+│   │   └── test_hitl_routes.py
+│   └── integration/                    # 통합 테스트
+│       └── test_full_call_flow.py
 │
 ├── docs/
-│   ├── architecture.md                 # 기존 아키텍처
-│   └── ai-voicebot-architecture.md     # 🆕 이 문서
+│   ├── ai-voicebot-architecture.md     # 🆕 이 문서 (통합 Backend 아키텍처)
+│   ├── frontend-architecture.md        # 🆕 Frontend 아키텍처
+│   ├── SYSTEM_OVERVIEW.md              # 시스템 개요
+│   ├── B2BUA_STATUS.md                 # B2BUA 구현 상태
+│   └── guides/
+│       ├── google-api-setup.md
+│       ├── gemini-model-comparison.md
+│       └── ai-response-time-analysis.md
 │
-├── requirements.txt                    # ✏️ AI 패키지 추가
-└── README.md                           # ✏️ AI 기능 안내
+├── requirements.txt                    # ✏️ Python 의존성 (통합)
+├── README.md                           # ✏️ 프로젝트 소개 (통합)
+├── DOCUMENTATION.md                    # 🆕 문서 가이드
+├── start-all.ps1                       # 🆕 전체 시스템 실행 스크립트
+└── .env                                # 환경 변수
 ```
+
+### 8.1 핵심 파일 설명
+
+#### SIP PBX Core
+- `sip_endpoint.py`: SIP 프로토콜 메시지 처리, B2BUA leg 관리
+- `call_manager.py`: 통화 생명주기 관리, AI 모드 활성화
+- `rtp_relay.py`: RTP 패킷 relay, AI 모듈 연동
+- `port_pool.py`: 10,000-20,000 포트 동적 할당
+
+#### AI Voice Assistant
+- `orchestrator.py`: AI 대화 흐름 제어, 상태 머신
+- `stt_client.py` / `tts_client.py`: Google Cloud 스트리밍 API
+- `llm_client.py`: Gemini 1.5 Flash 통합
+- `rag_engine.py`: Vector DB 검색 및 RAG
+
+#### Backend API Services
+- `api/main.py`: FastAPI 엔트리포인트, CORS, JWT 인증
+- `websocket/server.py`: Socket.IO 실시간 통신
+- `services/hitl.py`: HITL 로직, 운영자 상태 관리
 
 ---
 
-## 8. 핵심 코드 구조
-
-### 8.1 AI Orchestrator (핵심)
+## 9. 핵심 코드 구조
 
 ```python
 # src/ai_voicebot/orchestrator.py
@@ -1841,9 +2532,838 @@ async def test_response_latency():
 
 ---
 
+## 18. Frontend Control Center (신규)
+
+### 18.1 개요
+
+AI 보이스봇 시스템의 **운영 및 모니터링을 위한 웹 기반 관리 콘솔**을 제공합니다.
+
+#### 핵심 기능
+
+1. **실시간 통화 모니터링**
+   - 활성 통화 목록 및 상태
+   - 실시간 STT 트랜스크립트 표시
+   - AI 응답 (TTS) 실시간 확인
+
+2. **지식 베이스 관리 (Vector DB CRUD)**
+   - ➕ 새 지식 추가
+   - ✏️ 기존 지식 수정
+   - 🗑️ 불필요한 지식 삭제
+   - 🔍 지식 검색 및 필터링
+   - 📊 지식 사용 통계
+
+3. **Human-in-the-Loop (HITL)** ⭐
+   - AI가 답변 못 찾을 때 운영자에게 실시간 알림
+   - 통화 상대는 대기 음악 청취
+   - 운영자가 답변 제공 → AI가 다듬어서 발화
+   - 유용한 답변은 지식 베이스에 자동 저장
+
+4. **분석 대시보드**
+   - 통화량, AI 신뢰도, 응답 시간
+   - HITL 요청 빈도 및 해결 시간
+   - 비용 추적 (STT/TTS/LLM)
+
+### 18.2 아키텍처 개요
+
+```mermaid
+graph LR
+    subgraph "Frontend (Next.js)"
+        UI[React UI]
+        WS[WebSocket Client]
+    end
+    
+    subgraph "Backend Services"
+        API[FastAPI Gateway]
+        WSS[WebSocket Server]
+        HITL[HITL Service]
+    end
+    
+    subgraph "AI System"
+        Orch[AI Orchestrator]
+        VDB[(Vector DB)]
+    end
+    
+    UI --> WS
+    UI --> API
+    WS <-.Real-time.-> WSS
+    API --> VDB
+    API --> HITL
+    WSS --> Orch
+    HITL --> Orch
+```
+
+### 18.3 기술 스택
+
+| 레이어 | 기술 |
+|-------|-----|
+| **Frontend** | Next.js 14, React 18, Tailwind CSS, shadcn/ui |
+| **State** | Zustand (global state) |
+| **Real-time** | Socket.IO Client |
+| **API Client** | TanStack Query (React Query) |
+| **Backend API** | FastAPI, Socket.IO (Python) |
+| **Database** | PostgreSQL (user/call logs), Redis (real-time state) |
+
+### 18.4 주요 화면
+
+#### Dashboard
+- 활성 통화 수, HITL 대기 수, AI 신뢰도
+- 실시간 통화 리스트
+- HITL 긴급 알림
+
+#### Live Call Monitor
+- 개별 통화의 실시간 트랜스크립트
+- 사용자 발화 (STT) + AI 응답 (TTS)
+- HITL 개입 버튼
+
+#### Knowledge Manager
+- Vector DB 항목 목록 (카테고리별)
+- 검색, 추가, 수정, 삭제
+- 사용 통계 (어떤 지식이 많이 활용되는지)
+
+#### HITL Queue
+- 대기 중인 도움 요청 목록
+- 질문, 대화 컨텍스트, 발신자 정보
+- 답변 작성 인터페이스
+
+### 18.5 상세 문서
+
+전체 Frontend 아키텍처는 별도 문서를 참조하세요:
+
+📄 **[Frontend Architecture 상세 문서](frontend-architecture.md)**
+
+---
+
+## 19. Human-in-the-Loop (HITL) Workflow
+
+### 19.1 HITL 트리거 조건
+
+AI가 다음 상황에서 사람의 도움을 요청합니다:
+
+1. **낮은 신뢰도**
+   - RAG 검색 점수 < 0.6
+   - LLM 생성 신뢰도 < 0.5
+
+2. **명시적 요청**
+   - "담당자와 통화하고 싶어요"
+   - "실제 사람과 얘기하고 싶어요"
+
+3. **민감한 주제**
+   - 계약, 결제, 환불, 클레임 등
+   - 설정 파일에서 키워드 관리
+
+4. **복잡한 질문**
+   - NLP 분석 결과 복잡도 > 0.7
+   - 다단계 추론 필요
+
+### 19.2 운영자 상태 관리 (신규 기능) ⭐
+
+#### 운영자 상태 정의
+
+```python
+class OperatorStatus(str, Enum):
+    AVAILABLE = "available"   # 대기 중 - HITL 요청 즉시 처리
+    AWAY = "away"            # 부재중 - HITL 자동 거절 + 통화 이력 기록
+    BUSY = "busy"            # 통화 중 - HITL 대기열 추가
+    OFFLINE = "offline"      # 오프라인
+```
+
+#### HITL 동작 모드
+
+| 운영자 상태 | HITL 요청 발생 시 동작 | AI 응답 |
+|------------|---------------------|---------|
+| **AVAILABLE** | Frontend 알림 + 대기 음악 | "잠시만 기다려 주세요" |
+| **AWAY** | 통화 이력 기록 + 자동 거절 | "확인 후 별도 안내드리겠습니다" |
+| **BUSY** | 대기열 추가 (타임아웃 적용) | "잠시만 기다려 주세요" |
+| **OFFLINE** | 통화 이력 기록 + 자동 거절 | "확인 후 별도 안내드리겠습니다" |
+
+### 19.3 HITL 프로세스 - 운영자 대기 중
+
+```mermaid
+sequenceDiagram
+    participant C as 📞 발신자
+    participant AI as 🤖 AI Orchestrator
+    participant HITL as 🔧 HITL Service
+    participant Redis as 💾 Redis
+    participant WS as 🌐 WebSocket
+    participant Frontend as 👨‍💻 운영자
+
+    Note over Frontend: 운영자 상태: AVAILABLE
+
+    C->>AI: "내일 회의 시간은?"
+    AI->>AI: RAG 검색 (신뢰도 0.4)
+    
+    Note over AI: HITL 요청 필요
+    
+    AI->>HITL: request_human_help(call_id, question)
+    HITL->>Redis: GET operator:status
+    Redis-->>HITL: status = "available"
+    
+    HITL->>WS: broadcast('hitl_requested')
+    WS->>Frontend: 🔔 알림
+    
+    AI->>C: "잠시만 기다려 주세요"
+    AI->>C: 🎵 대기 음악
+    
+    Frontend->>Frontend: 다이얼로그 표시
+    Frontend->>HITL: POST /api/hitl/response
+    HITL->>AI: deliver_response(call_id, response)
+    
+    AI->>AI: LLM으로 답변 다듬기
+    AI->>C: 최종 답변
+```
+
+### 19.4 HITL 프로세스 - 운영자 부재중 (신규) ⭐
+
+```mermaid
+sequenceDiagram
+    participant C as 📞 발신자
+    participant AI as 🤖 AI Orchestrator
+    participant HITL as 🔧 HITL Service
+    participant Redis as 💾 Redis
+    participant CallHistory as 📋 통화 이력 DB
+    participant Frontend as 👨‍💻 운영자 (복귀 후)
+
+    Note over Frontend: 운영자가 "부재중" 토글 ON
+    Frontend->>HITL: PUT /api/operator/status (away)
+    HITL->>Redis: SET operator:status = "away"
+    
+    C->>AI: "내일 회의 시간은?"
+    AI->>AI: RAG 검색 (신뢰도 0.4)
+    
+    Note over AI: HITL 요청 필요
+    
+    AI->>HITL: request_human_help(call_id, question)
+    HITL->>Redis: GET operator:status
+    Redis-->>HITL: status = "away"
+    
+    Note over HITL: ⚠️ 운영자 부재중 감지<br/>자동 거절 모드
+    
+    HITL->>CallHistory: INSERT unresolved_hitl_request<br/>(call_id, question, context, status=unresolved)
+    HITL->>Redis: LPUSH unresolved_hitl_queue {call_id}
+    HITL->>AI: auto_fallback_response(away_message)
+    
+    AI->>C: "죄송합니다. 해당 부분은<br/>잘 모르는 내용이라<br/>확인 후 별도로 안내드리겠습니다."
+    
+    Note over C,AI: 통화 정상 종료
+    
+    Note over Frontend: 운영자 복귀
+    Frontend->>HITL: PUT /api/operator/status (available)
+    Frontend->>CallHistory: GET /api/call-history?unresolved_hitl=true
+    CallHistory-->>Frontend: 미처리 HITL 목록 (발신자, 질문, 시각)
+    
+    Frontend->>Frontend: 배지 표시: 🔴 미처리 5건
+    
+    Frontend->>CallHistory: GET /api/call-history/{call_id}
+    CallHistory-->>Frontend: 통화 상세 + 전체 STT 기록
+    
+    Frontend->>CallHistory: POST /api/call-history/{call_id}/note<br/>(operator_note, follow_up_required)
+    
+    alt 후속 조치 필요
+        Frontend->>Frontend: "고객에게 전화" 버튼
+        Note over Frontend: 운영자가 직접 고객에게 회신
+        Frontend->>CallHistory: PUT /api/call-history/{call_id}/resolve
+    else 메모만 남김
+        CallHistory->>CallHistory: status = "noted"
+    end
+```
+
+### 19.5 통화 이력 미처리 HITL 요청 데이터 모델
+
+```python
+class UnresolvedHITLRequest(BaseModel):
+    """미처리 HITL 요청 (통화 이력)"""
+    request_id: str = Field(default_factory=lambda: str(uuid4()))
+    call_id: str
+    caller_id: str
+    callee_id: str
+    
+    # HITL 요청 정보
+    user_question: str                    # 사용자 질문
+    conversation_history: List[Dict]      # 이전 대화 내용
+    rag_results: List[Dict]               # RAG 검색 결과
+    ai_confidence: float                  # AI 신뢰도
+    
+    # 상태 관리
+    timestamp: datetime                   # 요청 발생 시각
+    status: str = "unresolved"            # unresolved | noted | resolved | contacted
+    
+    # 운영자 처리
+    operator_note: Optional[str] = None   # 운영자 메모
+    follow_up_required: bool = False      # 후속 조치 필요 여부
+    follow_up_phone: Optional[str] = None # 회신 전화번호
+    
+    # 처리 완료 정보
+    noted_at: Optional[datetime] = None
+    noted_by: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+```
+
+### 19.6 Frontend UI 변경사항
+
+#### Dashboard 운영자 상태 토글
+
+```tsx
+// 대시보드 상단에 운영자 상태 토글 추가
+<Card className="col-span-12">
+  <CardContent className="flex items-center justify-between p-4">
+    <div className="flex items-center gap-4">
+      <span className="text-sm font-medium">운영자 상태:</span>
+      <Badge variant={status === 'available' ? 'success' : 'secondary'}>
+        {status === 'available' ? '🟢 대기중' : '🔴 부재중'}
+      </Badge>
+      <Switch
+        checked={status === 'available'}
+        onCheckedChange={(checked) => updateStatus(checked ? 'available' : 'away')}
+      />
+    </div>
+    
+    {unresolvedCount > 0 && (
+      <Alert variant="warning">
+        ⚠️ 미처리 HITL 요청 {unresolvedCount}건
+        <Button onClick={() => router.push('/call-history?filter=unresolved')}>
+          확인하기
+        </Button>
+      </Alert>
+    )}
+  </CardContent>
+</Card>
+```
+
+#### 통화 이력 페이지 미처리 HITL 필터
+
+```tsx
+// 통화 이력 페이지에 미처리 HITL 필터 탭 추가
+<Tabs defaultValue="all">
+  <TabsList>
+    <TabsTrigger value="all">전체 통화</TabsTrigger>
+    <TabsTrigger value="unresolved">
+      미처리 HITL 
+      <Badge className="ml-2">{unresolvedCount}</Badge>
+    </TabsTrigger>
+    <TabsTrigger value="noted">메모 작성됨</TabsTrigger>
+    <TabsTrigger value="resolved">처리 완료</TabsTrigger>
+  </TabsList>
+  
+  <TabsContent value="unresolved">
+    <DataTable
+      columns={unresolvedHITLColumns}
+      data={unresolvedHITLRequests}
+      onRowClick={(row) => showCallDetail(row.call_id)}
+    />
+  </TabsContent>
+</Tabs>
+```
+
+### 19.7 HITL Service 코드 수정사항
+
+#### HITLService에 운영자 상태 확인 로직 추가
+
+```python
+async def request_human_help(
+    self,
+    call_id: str,
+    question: str,
+    context: Dict[str, Any],
+    urgency: str = 'medium',
+    timeout_seconds: int = 300
+) -> bool:
+    """
+    HITL 요청 생성 (운영자 상태 확인 추가)
+    """
+    # 운영자 상태 확인 (신규)
+    operator_status = await self.redis_client.get("operator:status")
+    
+    if operator_status in ['away', 'offline']:
+        logger.warning("Operator is away/offline - auto fallback",
+                      call_id=call_id,
+                      operator_status=operator_status)
+        
+        # 통화 이력에 미처리 HITL 요청 기록
+        unresolved_request = UnresolvedHITLRequest(
+            call_id=call_id,
+            caller_id=context.get('caller_id'),
+            callee_id=context.get('callee_id'),
+            user_question=question,
+            conversation_history=context.get('conversation_history', []),
+            rag_results=context.get('rag_results', []),
+            ai_confidence=context.get('ai_confidence', 0.0),
+            timestamp=datetime.now(),
+            status='unresolved'
+        )
+        
+        # DB에 저장
+        await self.db.execute(
+            """
+            INSERT INTO unresolved_hitl_requests
+            (request_id, call_id, caller_id, callee_id, user_question,
+             conversation_history, rag_results, ai_confidence, timestamp, status)
+            VALUES (:request_id, :call_id, :caller_id, :callee_id, :user_question,
+                    :conversation_history, :rag_results, :ai_confidence, :timestamp, :status)
+            """,
+            unresolved_request.dict()
+        )
+        
+        # Redis 큐에 추가
+        await self.redis_client.lpush(
+            "unresolved_hitl_queue",
+            unresolved_request.request_id
+        )
+        
+        # AI Orchestrator에 자동 거절 응답 전달
+        away_message = await self.redis_client.get("operator:away_message") or \
+                      "죄송합니다. 해당 부분은 잘 모르는 내용이라 확인 후 별도로 안내드리겠습니다."
+        
+        return False  # HITL 요청 거절 (자동 fallback)
+    
+    # 기존 로직 (운영자 대기 중)
+    # ... (기존 코드 유지)
+
+```mermaid
+sequenceDiagram
+    participant C as 📞 발신자
+    participant A as 🤖 AI
+    participant H as 🔧 HITL Service
+    participant F as 👨‍💻 운영자<br/>(Frontend)
+    participant L as 💡 LLM
+    
+    C->>A: "내일 회의 시간은?"
+    A->>A: RAG 검색 (confidence: 0.4)
+    
+    Note over A: 신뢰도 낮음!<br/>사람 도움 필요
+    
+    A->>H: HITL 요청<br/>(call_id, question, context)
+    H->>H: Redis 저장<br/>(5분 timeout)
+    H->>F: WebSocket Event:<br/>HITL_REQUESTED
+    
+    A->>C: 🔊 "잠시만 확인 중이니<br/>기다려 주세요"
+    A->>C: 🎵 대기 음악 재생
+    
+    F->>F: 🔔 알림 팝업<br/>+ 사운드
+    Note over F: 운영자가 질문 확인<br/>- 대화 내역<br/>- 발신자 정보<br/>- RAG 결과
+    
+    F->>F: 답변 작성
+    F->>H: 답변 제출<br/>"내일 오후 2시입니다"
+    
+    H->>A: Human Response Event
+    A->>A: 🎵 대기 음악 중지
+    
+    A->>L: 사람 답변 다듬기<br/>(더 자연스럽게)
+    L-->>A: "네, 확인해 드렸습니다.<br/>내일 오후 2시에 회의가<br/>예정되어 있습니다."
+    
+    A->>C: 🔊 최종 답변 발화
+    
+    Note over H: 유용한 답변이면<br/>지식 베이스 저장
+    H->>VDB: 새 지식 추가
+    
+    H->>F: WebSocket: HITL_RESOLVED
+    F->>F: ✅ 알림 제거
+```
+
+### 19.3 대기 경험 (Hold Experience)
+
+#### 초기 멘트 (0초)
+```
+"잠시만 확인 중이니 기다려 주세요. 곧 답변 드리겠습니다."
+```
+
+#### 대기 음악 (0~15초)
+- 부드러운 배경 음악 재생
+- 루프 재생
+- 볼륨 조절 가능
+
+#### 중간 업데이트 (15초)
+```
+"곧 답변 드리겠습니다. 잠시만 더 기다려 주세요."
+```
+
+#### 추가 대기 (30초)
+```
+"조금만 더 기다려 주시면 답변 드리겠습니다."
+```
+
+#### 타임아웃 (60초)
+```
+"죄송합니다. 지금은 확인이 어렵습니다. 
+나중에 다시 전화 주시거나, [담당자 번호]로 연락 주세요."
+```
+→ 통화 종료 또는 음성사서함 전환
+
+### 19.4 HITL 답변 가이드라인
+
+운영자를 위한 답변 작성 가이드:
+
+#### ✅ 좋은 답변
+- **간결하고 명확**: "내일 오후 2시에 회의가 있습니다"
+- **핵심만 전달**: 불필요한 인사말 생략 (AI가 자동 추가)
+- **정확한 정보**: 확실한 정보만 제공
+
+#### ❌ 피해야 할 답변
+- 너무 길거나 복잡한 설명
+- 불확실한 정보 ("아마도...", "~인 것 같습니다")
+- 지나친 격식 (AI가 자연스럽게 다듬음)
+
+#### 예시
+
+**운영자 입력:**
+```
+내일 오후 2시, 본사 3층 회의실
+```
+
+**AI 최종 발화:**
+```
+확인해 드렸습니다. 내일 오후 2시에 본사 3층 회의실에서 
+회의가 예정되어 있습니다. 다른 궁금하신 점이 있으신가요?
+```
+
+### 19.5 HITL 메트릭
+
+시스템이 자동 추적하는 지표:
+
+1. **HITL 요청 빈도**
+   - 전체 통화 대비 HITL 요청 비율
+   - 목표: <10%
+
+2. **평균 응답 시간**
+   - 운영자가 답변하기까지 걸린 시간
+   - 목표: <30초
+
+3. **해결률**
+   - HITL 요청 중 성공적으로 해결된 비율
+   - 목표: >95%
+
+4. **지식 기여도**
+   - HITL 답변 중 지식 베이스에 추가된 비율
+   - 목표: >70%
+
+---
+
+## 20. Frontend-Backend Integration
+
+### 20.1 새로운 Backend 서비스
+
+기존 IP-PBX 백엔드에 다음 서비스가 추가됩니다:
+
+#### 1. API Gateway (FastAPI)
+
+```python
+# backend/api/main.py
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="AI Voicebot API")
+
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Routes
+app.include_router(auth_router, prefix="/api/auth")
+app.include_router(knowledge_router, prefix="/api/knowledge")
+app.include_router(calls_router, prefix="/api/calls")
+app.include_router(hitl_router, prefix="/api/hitl")
+app.include_router(metrics_router, prefix="/api/metrics")
+```
+
+#### 2. WebSocket Server (Socket.IO)
+
+```python
+# backend/websocket/server.py
+
+import socketio
+
+sio = socketio.AsyncServer(
+    async_mode='aiohttp',
+    cors_allowed_origins='*'
+)
+
+@sio.event
+async def connect(sid, environ, auth):
+    """클라이언트 연결"""
+    token = auth.get('token')
+    user = await verify_jwt_token(token)
+    if not user:
+        return False
+    
+    await sio.save_session(sid, {'user': user})
+    await sio.enter_room(sid, f"role_{user.role}")
+    return True
+```
+
+#### 3. HITL Service
+
+```python
+# backend/services/hitl.py
+
+class HITLService:
+    """Human-in-the-Loop 관리"""
+    
+    async def request_human_help(
+        self,
+        call_id: str,
+        question: str,
+        context: dict,
+        urgency: str = 'medium'
+    ):
+        """AI가 사람의 도움을 요청"""
+        # Redis에 저장
+        await self.redis.setex(
+            f"hitl:{call_id}",
+            300,  # 5분
+            json.dumps({
+                'call_id': call_id,
+                'question': question,
+                'context': context,
+                'urgency': urgency,
+                'timestamp': datetime.now().isoformat()
+            })
+        )
+        
+        # Frontend에 알림
+        await self.websocket.emit('hitl_requested', {
+            'call_id': call_id,
+            'question': question,
+            'urgency': urgency
+        }, room='operators')
+        
+        # AI Orchestrator에 대기 멘트 시작 신호
+        orchestrator = self.ai_orchestrators[call_id]
+        await orchestrator.start_hold_experience()
+```
+
+### 20.2 AI Orchestrator 확장
+
+기존 `AIOrchestrator`에 HITL 지원 기능 추가:
+
+```python
+# src/ai_voicebot/orchestrator.py
+
+class AIOrchestrator:
+    # ... 기존 코드 ...
+    
+    async def _generate_and_speak_response(self, user_text: str):
+        """답변 생성 (HITL 지원)"""
+        self.state = AIState.THINKING
+        
+        # 1. RAG 검색
+        context_docs = await self.rag.search(user_text, owner_filter=self.callee_id)
+        context_texts = [doc.text for doc in context_docs]
+        
+        # 2. 신뢰도 확인
+        max_confidence = max([doc.score for doc in context_docs], default=0.0)
+        
+        # 3. HITL 트리거 조건 확인
+        if max_confidence < 0.6 or self._is_sensitive_topic(user_text):
+            logger.info("Low confidence, requesting HITL", 
+                       call_id=self.call_id, 
+                       confidence=max_confidence)
+            
+            # HITL 요청
+            await self.request_human_help(user_text, context_docs)
+            
+            # 사람 응답 대기
+            human_response = await self.wait_for_human_response(timeout=60)
+            
+            if human_response:
+                # 사람의 답변을 LLM으로 다듬기
+                response_text = await self.llm.refine_human_response(
+                    human_response,
+                    user_text,
+                    context_texts
+                )
+            else:
+                # 타임아웃: 기본 답변
+                response_text = "죄송합니다. 지금은 확인이 어렵습니다."
+        else:
+            # 일반 LLM 응답
+            response_text = await self.llm.generate_response(
+                user_text=user_text,
+                context_docs=context_texts,
+                system_prompt=self.config.google_cloud.gemini.system_prompt
+            )
+        
+        # 4. 응답 발화
+        await self._speak(response_text)
+    
+    async def request_human_help(self, question: str, rag_results: list):
+        """사람의 도움 요청"""
+        await hitl_service.request_human_help(
+            call_id=self.call_id,
+            question=question,
+            context={
+                'previous_messages': self.conversation_history[-5:],
+                'rag_results': [doc.dict() for doc in rag_results],
+                'caller_info': self.caller_info
+            },
+            urgency='high' if max([r.score for r in rag_results], default=0) < 0.3 else 'medium'
+        )
+        
+        # 대기 경험 시작
+        await self.hold_manager.start_hold(self.call_id)
+    
+    async def wait_for_human_response(self, timeout: int = 60) -> Optional[str]:
+        """사람의 응답 대기"""
+        self.hitl_response_event = asyncio.Event()
+        self.hitl_response = None
+        
+        try:
+            await asyncio.wait_for(
+                self.hitl_response_event.wait(),
+                timeout=timeout
+            )
+            return self.hitl_response
+        except asyncio.TimeoutError:
+            logger.warning("HITL timeout", call_id=self.call_id)
+            await self.hold_manager.end_hold(self.call_id)
+            return None
+    
+    async def handle_human_response(self, response_text: str, operator_id: str):
+        """Frontend에서 받은 사람의 응답 처리"""
+        logger.info("Human response received", 
+                   call_id=self.call_id,
+                   operator=operator_id)
+        
+        self.hitl_response = response_text
+        self.hitl_response_event.set()
+        
+        # 대기 경험 종료
+        await self.hold_manager.end_hold(self.call_id)
+```
+
+### 20.3 실시간 이벤트 브로드캐스팅
+
+AI Orchestrator가 중요 이벤트를 Frontend로 전송:
+
+```python
+# AI Orchestrator 내부
+
+async def _on_stt_result(self, text: str, is_final: bool):
+    """STT 결과 → Frontend로 전송"""
+    await websocket_manager.broadcast_to_call(
+        self.call_id,
+        'stt_transcript',
+        {
+            'call_id': self.call_id,
+            'text': text,
+            'is_final': is_final,
+            'timestamp': datetime.now().isoformat()
+        }
+    )
+    
+    # 기존 로직 계속...
+
+async def _speak(self, text: str):
+    """TTS 시작 → Frontend로 전송"""
+    await websocket_manager.broadcast_to_call(
+        self.call_id,
+        'tts_started',
+        {
+            'call_id': self.call_id,
+            'text': text,
+            'timestamp': datetime.now().isoformat()
+        }
+    )
+    
+    # TTS 실행
+    # ...
+    
+    await websocket_manager.broadcast_to_call(
+        self.call_id,
+        'tts_completed',
+        {
+            'call_id': self.call_id,
+            'timestamp': datetime.now().isoformat()
+        }
+    )
+```
+
+### 20.4 배포 구조
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Nginx / Load Balancer             │
+│                   (SSL Termination)                 │
+└─────────┬───────────────────────────────┬───────────┘
+          │                               │
+          ↓                               ↓
+┌─────────────────────┐       ┌─────────────────────┐
+│  Frontend (Next.js) │       │   Backend Services  │
+│   Port: 3000        │       │                     │
+│   - Vercel / VM     │       │   - FastAPI (8000)  │
+│   - Static Assets   │       │   - WebSocket (8001)│
+│   - SSR             │       │   - AI Orchestrator │
+└─────────────────────┘       │   - SIP/RTP         │
+                              │   - PostgreSQL      │
+                              │   - Redis           │
+                              └─────────────────────┘
+```
+
+---
+
+## 21. 업데이트된 시스템 로드맵
+
+### Phase 1: Core AI Voicebot (완료 예정)
+- ✅ AI Orchestrator
+- ✅ STT/TTS/LLM 통합
+- ✅ RAG Engine
+- ✅ 통화 녹음
+
+### Phase 2: Frontend & HITL (신규) ⭐
+**기간: 4주**
+
+#### Week 1: Frontend 기초
+- Next.js 프로젝트 설정
+- 인증 시스템 (JWT)
+- Dashboard 레이아웃
+- REST API 클라이언트
+
+#### Week 2: 실시간 모니터링
+- WebSocket 연동
+- 활성 통화 목록
+- 실시간 트랜스크립트 표시
+- 기본 HITL UI
+
+#### Week 3: 지식 베이스 관리
+- Vector DB CRUD API
+- Knowledge Manager UI
+- 검색 및 필터링
+- 카테고리 관리
+
+#### Week 4: HITL 완성 & 운영자 부재중 모드 (신규) ⭐
+- **운영자 상태 관리 시스템**
+  - 대기중/부재중/통화중/오프라인 상태 토글
+  - 부재중 시 HITL 자동 거절 + 통화 이력 기록
+  - 미처리 HITL 요청 관리 UI
+- HITL 워크플로우 완성
+- 알림 시스템 (브라우저 + 사운드)
+- 운영자 교육 자료
+- 통합 테스트
+
+**📄 관련 설계 문서**: [운영자 부재중 모드 설계](OPERATOR-AWAY-MODE-DESIGN.md)
+
+### Phase 3: 고도화 (향후)
+- 모바일 앱 (React Native)
+- 다국어 지원
+- 고급 분석 대시보드
+- CRM 연동
+
+---
+
 **문서 작성 완료**
 
-이 아키텍처 문서는 현재 IP-PBX 시스템을 기반으로 AI 실시간 통화 응대 시스템을 확장 구현하기 위한 완전한 기술 청사진입니다.
+이 아키텍처 문서는 현재 IP-PBX 시스템을 기반으로 **AI 실시간 통화 응대 시스템 + Frontend Control Center + Human-in-the-Loop**를 확장 구현하기 위한 완전한 기술 청사진입니다.
+
+### 📚 관련 문서
+
+- 📄 **[Frontend Architecture 상세](frontend-architecture.md)** - 웹 콘솔 전체 설계
+- 📄 **[Gemini Model Comparison](gemini-model-comparison.md)** - Flash vs Pro 비교
+- 📄 **[Response Time Analysis](ai-response-time-analysis.md)** - 성능 분석
 
 **질문이 있으시거나 특정 섹션을 더 상세히 설명해드려야 할 부분이 있으면 말씀해주세요!** 🏗️
 

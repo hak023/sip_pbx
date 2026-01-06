@@ -117,3 +117,4 @@ junit.xml
 *.sqlite
 *.sqlite3
 
+config/gcp-key.json
