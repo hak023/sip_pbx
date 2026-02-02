@@ -1,0 +1,280 @@
+# SIP PBX Project - Specific Rules
+# 전역 규칙(.cursor/.cursorrules)에 추가되는 프로젝트 특화 규칙
+
+## 프로젝트 개요
+Python 기반 SIP B2BUA (Back-to-Back User Agent) 서버
+- **목적**: 기업용 전화 교환기 (PBX)
+- **SIP**: RFC 3261 준수
+- **미디어**: RTP Relay 방식
+- **AI**: Google Cloud STT/TTS, Gemini LLM
+- **로깅**: structlog JSON 포맷
+
+---
+
+## 프로젝트 특화 Debug Mode
+
+Debug Mode 실행 시 추가 확인:
+1. `logs/app.log` - 애플리케이션 로그
+2. `config/config.yaml` - 설정 파일
+3. `config/gcp-key.json` - GCP 인증 파일 존재 여부
+4. `recordings/` - 최근 통화 녹음 확인
+
+**주요 디버깅 경로:**
+- STT 문제: `config.ai_voicebot.recording.post_processing_stt`
+- RTP 문제: `src/media/rtp_relay.py`, `src/media/rtp_parser.py`
+- SIP 문제: `src/sip_core/sip_endpoint.py`, `src/sip_core/sip_message.py`
+
+---
+
+## 핵심 코딩 규칙
+
+### SIP 메시지 처리
+```python
+# RFC 3261 준수
+- Via, Contact 헤더는 advertised_ip 사용
+- Call-ID는 B2BUA에서 새로 생성
+- Transaction timeout: T1=0.5s, T2=4s, T4=5s
+```
+
+### RTP 처리 (중요!)
+```python
+# ⚠️ RTP 헤더(12 bytes) 반드시 제거 후 payload 처리
+# Bad (음질 왜곡 발생)
+audio_payload = rtp_packet_data  # 헤더 포함
+
+# Good
+rtp_packet = RTPParser.parse(data)
+audio_payload = rtp_packet.payload  # 헤더 제거됨
+
+# Fallback (파싱 실패 시)
+if len(data) > 12:
+    audio_payload = data[12:]  # 헤더 건너뛰기
+```
+
+### G.711 코덱
+```python
+import audioop
+
+# μ-law 디코딩
+pcm_data = audioop.ulaw2lin(g711_payload, 2)  # 16-bit
+
+# A-law 디코딩
+pcm_data = audioop.alaw2lin(g711_payload, 2)
+
+# 샘플링 레이트
+- 전화 통화: 8000Hz
+- STT 입력: 16000Hz (업샘플링 필요)
+```
+
+### Config 접근 (안전하게)
+```python
+# Good - AttributeError 방지
+enable_stt = getattr(
+    getattr(
+        getattr(config, 'ai_voicebot', None),
+        'recording',
+        None
+    ),
+    'post_processing_stt',
+    None
+)
+
+# Bad - AttributeError 위험
+enable_stt = config.ai_voicebot.recording.post_processing_stt
+```
+
+### 로깅
+```python
+# Call ID 항상 포함
+logger.info("call_started",
+           call_id=call_id,
+           caller=caller,
+           callee=callee)
+
+# 에러는 exc_info=True
+logger.error("process_failed",
+            call_id=call_id,
+            error=str(e),
+            exc_info=True)
+```
+
+---
+
+## 파일 구조
+
+```
+sip-pbx/
+├── src/
+│   ├── main.py                    # 진입점
+│   ├── config/
+│   │   ├── models.py             # Pydantic 모델 (Config 클래스)
+│   │   └── config_loader.py      # YAML 로더
+│   ├── sip_core/
+│   │   ├── sip_endpoint.py       # B2BUA 서버 (메인 로직)
+│   │   ├── sip_message.py        # SIP 메시지 파싱/생성
+│   │   └── sip_call_recorder.py  # 통화 녹음 + Google STT
+│   ├── media/
+│   │   ├── rtp_relay.py          # RTP 릴레이 (양방향)
+│   │   └── rtp_parser.py         # RTP 헤더 파싱
+│   └── call_manager/              # 통화 세션 관리
+├── config/
+│   ├── config.yaml               # 메인 설정 (Pydantic 검증)
+│   └── gcp-key.json              # Google Cloud 인증
+├── logs/
+│   └── app.log                   # structlog JSON
+└── recordings/                    # 통화 녹음
+    └── YYYYMMDD_HHMMSS_caller_to_callee/
+        ├── caller.wav            # 발신자 음성
+        ├── callee.wav            # 수신자 음성
+        ├── mixed.wav             # 믹싱된 음성
+        ├── transcript.txt        # STT 결과 (화자 분리)
+        └── metadata.json         # 통화 메타데이터
+```
+
+---
+
+## 테스트 절차
+
+### 1. 서버 시작
+```powershell
+cd C:\work\workspace_sippbx\sip-pbx
+.\start-server.ps1
+```
+
+### 2. 로그 모니터링 (별도 터미널)
+```powershell
+Get-Content logs\app.log -Wait -Tail 20
+```
+
+### 3. 통화 테스트
+- **Caller**: 1003 (10.153.195.11)
+- **Callee**: 1004 (10.153.195.83)
+- **최소 통화 시간**: 10초 이상 (STT 테스트 시)
+
+### 4. 결과 확인
+```powershell
+# 최신 녹음 확인
+cd recordings
+dir | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+# STT 결과 확인
+cd (최신_디렉토리)
+cat transcript.txt
+cat metadata.json
+```
+
+---
+
+## 주요 설정 경로
+
+### STT 활성화
+```yaml
+# config/config.yaml
+ai_voicebot:
+  recording:
+    post_processing_stt:
+      enabled: true              # ← STT 활성화
+      language: "ko-KR"          # 한국어
+      enable_diarization: true   # 화자 분리
+      model: "telephony"         # 전화 최적화 모델
+```
+
+### GCP 인증
+```yaml
+ai_voicebot:
+  google_cloud:
+    project_id: "sip-pbx-ai"
+    credentials_path: "config/gcp-key.json"  # ← Service Account 키
+```
+
+### Gemini LLM
+```yaml
+ai_voicebot:
+  google_cloud:
+    gemini:
+      model: "gemini-2.5-flash"        # 빠르고 저렴
+      api_key: "AIza..."               # API 키
+      max_output_tokens: 150           # 간결한 응답
+      temperature: 0.5                 # 일관성
+```
+
+---
+
+## 주요 의존성
+
+```toml
+# pyproject.toml
+[project.dependencies]
+pydantic = ">=2.0"              # 설정 검증
+pyyaml = ">=6.0"                # YAML 파싱
+structlog = ">=23.0"            # 구조화 로깅
+google-cloud-speech = ">=2.0"   # STT
+google-cloud-texttospeech = ">=2.0"  # TTS
+google-generativeai = ">=0.3"   # Gemini
+```
+
+---
+
+## 디버깅 체크리스트
+
+### STT가 작동하지 않을 때
+```
+1. ✅ config.yaml에서 enabled: true 확인
+2. ✅ config/gcp-key.json 파일 존재 확인
+3. ✅ 로그에서 "enable_post_stt": true 확인
+4. ✅ 로그에서 "stt_config_loaded" 이벤트 확인
+5. ✅ 통화 시간 10초 이상 확인
+6. ✅ metadata.json에서 has_transcript: true 확인
+7. ✅ Google Cloud API 활성화 확인
+8. ✅ Service Account 권한 확인
+```
+
+### 음질이 나쁠 때
+```
+1. ✅ RTP 헤더(12 bytes) 제거 확인
+2. ✅ G.711 디코딩 로직 확인 (audioop)
+3. ✅ 샘플링 레이트 8000Hz 확인
+4. ✅ 로그에서 "rtp_parse_failed_using_raw_payload" 확인
+5. ✅ RTP 패킷 크기 확인 (최소 12 bytes 이상)
+```
+
+### 통화 연결 실패 시
+```
+1. ✅ 로그에서 "sip_send", "sip_recv" 이벤트 확인
+2. ✅ Via, Contact 헤더의 IP 주소 확인
+3. ✅ SIP 응답 코드 확인 (100, 180, 200 등)
+4. ✅ RTP 포트 바인딩 성공 확인
+5. ✅ Transaction timeout 확인
+```
+
+---
+
+## 일반 지침
+
+1. **코드 변경 전**: 반드시 파일 읽기 (특히 sip_endpoint.py, rtp_relay.py)
+2. **Config 변경 후**: 서버 재시작 필수 (.\start-server.ps1)
+3. **로그 확인**: 변경사항 적용 여부 로그로 검증
+4. **점진적 수정**: 한 번에 하나의 모듈만 수정
+5. **테스트**: 통화 테스트로 정상 작동 확인
+
+---
+
+## 프로젝트 히스토리 (참고용)
+
+### 해결된 주요 이슈
+1. **STT 미작동** (2026-01-30)
+   - 원인: Config 모델에 `ai_voicebot` 필드 미정의
+   - 해결: `src/config/models.py`에 `AIVoicebotConfig` 클래스 추가
+
+2. **음성 왜곡** (2026-01-29)
+   - 원인: RTP 파싱 실패 시 헤더 포함하여 디코딩
+   - 해결: Fallback에서 `data[12:]`로 헤더 제거
+
+3. **Config 로드 실패**
+   - 원인: `config.recording` 경로 오류
+   - 해결: 올바른 경로 `config.ai_voicebot.recording` 사용
+
+---
+
+전역 규칙은 `C:\Users\hak23\.cursor\.cursorrules`에 있습니다.
+이 파일은 SIP PBX 프로젝트 특화 규칙만 포함합니다.

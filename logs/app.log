@@ -1,0 +1,24 @@
+{"event": "\ud83d\udd27 [TIMING] SIP Endpoint creation starting...", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
+{"message": "Creating SIP endpoint", "event": "creating_sip_endpoint", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
+{"start_port": 10000, "end_port": 10100, "total_ports": 50, "max_concurrent_calls": 12, "event": "port_pool_manager_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
+{"default_mode": "bypass", "event": "media_session_manager_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
+{"event": "call_state_repository_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
+{"output_dir": "recordings", "sample_rate": 8000, "enable_post_stt": false, "enable_diarization": true, "event": "SIPCallRecorder initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.994+09:00"}
+{"recording_dir": "./recordings", "event": "SIP call recording enabled", "level": "info", "timestamp": "2026-01-26T20:15:28.994+09:00"}
+{"output_dir": "cdr", "filename_pattern": "cdr-%Y-%m-%d.jsonl", "event": "cdr_writer_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"output_dir": "./cdr", "event": "CDR writer enabled", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"media_enabled": true, "b2bua_ip": "0.0.0.0", "ai_enabled": false, "recording_enabled": true, "knowledge_extraction_enabled": false, "cdr_enabled": true, "no_answer_timeout": 10, "event": "call_manager_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"session_expires": 1800, "min_se": 90, "default_refresher": "uas", "event": "SessionTimer initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"t1": 0.5, "t2": 4.0, "t4": 5.0, "event": "TransactionTimer initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"output_dir": "cdr", "filename_pattern": "cdr-%Y-%m-%d.jsonl", "event": "cdr_writer_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"output_dir": "./cdr", "event": "CDR writer initialized for SIP Endpoint", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"log_file": "logs\\sip_traffic_20260126.log", "event": "sip_traffic_log_opened", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"message": "SIP B2BUA endpoint initialized (signaling + media relay)", "timers": {"session_expires": 1800, "t1": 0.5, "bye_timeout": 32}, "event": "sip_endpoint_created", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"event": "\ud83d\udd27 [TIMING] SIP Endpoint created in 0.00s", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
+{"event": "\ud83d\udd27 [TIMING] SIP Server starting...", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
+{"message": "Starting SIP server", "event": "starting_sip_server", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
+{"listen_ip": "0.0.0.0", "listen_port": 5060, "event": "mock_sip_server_started", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
+{"event": "\ud83d\udd27 [TIMING] SIP Server started in 0.00s", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
+{"event": "\ud83d\udd27 [TIMING] \u2b50 TOTAL STARTUP TIME: 0.00s", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
+{"message": "SIP PBX is ready to accept calls", "sip_port": 5060, "health_check_port": 8080, "ai_voicebot_enabled": false, "startup_time": "0.00s", "event": "server_ready", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
+{"listen_ip": "0.0.0.0", "listen_port": 5060, "bind_time": "0.000s", "event": "mock_udp_socket_bound", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}

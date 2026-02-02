@@ -1,0 +1,110 @@
+{
+  // Cursor AI Agent Settings
+  "cursor.agent.enabled": true,
+  
+  // Agent 모드 기본 설정
+  "cursor.agent.autoMode": "smart", // smart: 자동으로 적절한 모드 선택
+  
+  // Subagents 설정
+  "cursor.agent.subagents": {
+    "enabled": true,
+    "maxParallel": 4, // 최대 4개의 subagent 동시 실행
+    "autoDetect": true // 자동으로 병렬 작업 감지
+  },
+  
+  // Debug Mode 설정
+  "cursor.agent.debugMode": {
+    "autoTrigger": true, // 에러 키워드 감지 시 자동 활성화
+    "keywords": [
+      "버그", "bug", "오류", "error", "에러", 
+      "문제", "실패", "안돼", "작동 안", "디버깅", "debug"
+    ]
+  },
+  
+  // Plan Mode 설정
+  "cursor.agent.planMode": {
+    "autoTrigger": true, // 복잡한 작업 감지 시 자동 활성화
+    "keywords": [
+      "계획", "plan", "설계", "구조", "아키텍처",
+      "추가해줘", "구현해줘", "리팩토링", "어떻게"
+    ],
+    "minComplexity": 3 // 3단계 이상 작업 시 자동 활성화
+  },
+  
+  // Code Review 설정
+  "cursor.agent.codeReview": {
+    "enabled": true,
+    "autoReview": true, // 코드 작성 후 자동 리뷰
+    "checks": ["bugs", "security", "performance", "style"]
+  },
+  
+  // Context 설정
+  "cursor.agent.context": {
+    "useProjectRules": true, // .cursorrules 사용
+    "useSkills": true, // SKILL.md 사용
+    "maxFiles": 50, // 최대 컨텍스트 파일 수
+    "autoInclude": [
+      "src/**/*.py",
+      "config/*.yaml",
+      "logs/app.log",
+      "*.md"
+    ]
+  },
+  
+  // 프로젝트별 단축키 매핑
+  "cursor.agent.shortcuts": {
+    "triggerDebugMode": "ctrl+shift+d",
+    "triggerPlanMode": "ctrl+shift+p",
+    "spawnSubagent": "ctrl+shift+s"
+  },
+  
+  // Python 관련 설정
+  "python.defaultInterpreterPath": "${workspaceFolder}/sip-pbx/.venv/Scripts/python.exe",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.linting.flake8Enabled": true,
+  "python.formatting.provider": "black",
+  
+  // 파일 감시 설정
+  "files.watcherExclude": {
+    "**/.venv/**": true,
+    "**/node_modules/**": true,
+    "**/recordings/**": true,
+    "**/logs/**": true,
+    "**/__pycache__/**": true,
+    "**/.pytest_cache/**": true
+  },
+  
+  // 에디터 설정
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  
+  // Cursor 특화 설정
+  "cursor.chat.contextWindow": "large", // 큰 컨텍스트 윈도우
+  "cursor.chat.streaming": true,
+  "cursor.tab.enabled": true, // Tab 자동완성
+  "cursor.tab.partialAccepts": true,
+  
+  // 터미널 설정
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.env.windows": {
+    "PYTHONIOENCODING": "utf-8"
+  },
+  
+  // 파일 연관
+  "files.associations": {
+    "*.yaml": "yaml",
+    ".cursorrules": "markdown",
+    "SKILL.md": "markdown"
+  },
+  
+  // 추천 확장
+  "recommendations": [
+    "cursor.cursor-ai",
+    "ms-python.python",
+    "ms-python.vscode-pylance"
+  ]
+}
