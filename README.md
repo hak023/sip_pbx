@@ -45,9 +45,11 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 - ✅ **Transaction 관리**: 상태 기반 트랜잭션 처리
 
 ### 🤖 AI Voice Assistant (NEW!)
-- ✅ **자동 응대**: 부재중 시 AI가 자동으로 통화 응대
+- ✅ **AI 응대 모드**: 타이머 또는 수동 부재중 설정 시 자동 응답
+  - 🕐 **타이머 기반**: `no_answer_timeout` 설정으로 자동 전환
+  - 🔴 **수동 설정**: 웹 API로 부재중 상태 전환
 - ✅ **실시간 STT/TTS**: Google Cloud Speech-to-Text & Text-to-Speech
-- ✅ **지능형 응답**: Gemini 1.5 Flash LLM 기반 대화 생성
+- ✅ **지능형 응답**: Gemini 2.5 Flash LLM 기반 대화 생성
 - ✅ **RAG 검색**: Vector DB 기반 지식 베이스 활용
 - ✅ **Barge-in**: 사용자 발화 시 AI 응답 중단
 - ✅ **통화 녹음**: 자동 녹음 및 지식 추출
@@ -79,7 +81,7 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 - ✅ **자동 응답**: 착신자 부재 시 AI가 자동으로 통화 응대 (10초 타임아웃)
 - ✅ **실시간 STT**: Google Cloud Speech-to-Text (Telephony 모델, 16kHz)
 - ✅ **자연스러운 TTS**: Google Cloud Text-to-Speech (Neural2 음성)
-- ✅ **지능형 대화**: Gemini 1.5 Flash (초고속, 초저비용)
+- ✅ **지능형 대화**: Gemini 2.5 Flash (초고속, 초저비용)
   - ⚡ **응답 속도**: 평균 0.9초 (Pro 대비 30% 단축)
   - 💰 **비용 효율**: Pro 대비 94% 절감 (월 100통 ₩1,400)
   - 🎁 **무료 할당량**: 일 1,500 요청
@@ -178,6 +180,8 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 - sentence-transformers (임베딩)
 - torch, torchvision, torchaudio
 
+> 🎮 **GPU 가속**: AI 임베딩 성능을 5-10배 향상시키려면 [GPU 설정 가이드](docs/GPU_SETUP.md) 참고
+
 **Audio**:
 - opuslib 3.0+ (Opus 코덱)
 - webrtcvad 2.0+ (음성 감지)
@@ -188,6 +192,25 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 - structlog 24.1+ (구조화 로깅)
 
 ## 🔧 설치
+
+### ⚡ AI 모델 사전 다운로드 (선택, 권장)
+
+서버 시작 시간을 **80초 → 5초**로 단축하려면:
+
+```powershell
+# AI 모델 사전 다운로드 (최초 1회만 실행)
+python scripts/download_models.py
+```
+
+**효과**:
+- 첫 실행: 약 1-5분 소요 (네트워크 속도에 따라 다름)
+- 이후 실행: 서버 시작 시간 75초 단축! 🚀
+
+**다운로드 모델**:
+- `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` (1.1GB)
+- 용도: 텍스트 임베딩 (VectorDB 지식 베이스)
+
+---
 
 ### 방법 1: 통합 실행 (권장) ⭐
 
@@ -704,11 +727,13 @@ sequenceDiagram
 | [docs/QUICK_START.md](docs/QUICK_START.md) | **🚀 5분 빠른 시작** - 설치 및 실행 |
 | [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) | **🌐 시스템 개요** - 아키텍처, 데이터 플로우 |
 | [docs/ai-voicebot-architecture.md](docs/ai-voicebot-architecture.md) | **🤖 AI Voicebot 아키텍처** - STT/TTS/LLM/RAG/HITL |
+| [docs/architecture/voice-ai-conversation-engine.md](docs/architecture/voice-ai-conversation-engine.md) | **🧠 Voice AI 대화 엔진** - Pipecat + Smart Turn + LangGraph Agentic RAG |
 | [docs/frontend-architecture.md](docs/frontend-architecture.md) | **🖥️ Frontend 아키텍처** - Next.js Control Center |
 
 ### 📂 추가 문서
 
 - **사용/설정 가이드**: [docs/guides/](docs/guides/) - USER_MANUAL, TROUBLESHOOTING, API 설정 등 (10개)
+- **아키텍처 설계**: [docs/architecture/](docs/architecture/) - Technical Architecture, Voice AI Conversation Engine
 - **상세 설계**: [docs/design/](docs/design/) - 구현 가이드 Part 1, 2 (3개)
 - **분석 자료**: [docs/analysis/](docs/analysis/) - 응답 시간 분석 (1개)
 - **완료 보고서**: [docs/reports/](docs/reports/) - 구현 상태, B2BUA 상태 등 (5개)
@@ -1086,6 +1111,75 @@ watch -n 1 curl -s http://localhost:8080/api/stats
 
 더 자세한 내용은 [디버깅 가이드](docs/DEBUGGING.md)를 참조하세요.
 
+## 🧪 품질 보증 (QA)
+
+### 테스트 전략
+
+본 프로젝트는 **기능 테스트**에 중점을 두고 있으며, 다음과 같은 테스트 레벨을 제공합니다:
+
+#### 테스트 피라미드
+```
+         ▲
+        / \
+       / E2E \ (10%)
+      /───────\
+     / Integration \ (30%)
+    /─────────────\
+   /   Unit Tests  \ (60%)
+  /___________________\
+```
+
+### 테스트 실행
+
+#### 1. 단위 테스트 (Unit Tests)
+```bash
+# 전체 단위 테스트 실행
+pytest tests_new/unit/ -v
+
+# 특정 모듈 테스트
+pytest tests_new/unit/test_sip_core/ -v
+pytest tests_new/unit/test_events/ -v
+pytest tests_new/unit/test_ai_pipeline/ -v
+```
+
+#### 2. 상세 리포트 생성
+```bash
+# JUnit XML 형식으로 테스트 결과 생성
+pytest tests_new/unit/ -v --junit-xml=test-report.xml
+
+# 상세 마크다운 리포트 생성
+python generate_test_report.py
+
+# 결과: docs/qa/test-detailed-report.md
+```
+
+#### 3. 리포트 내용
+생성된 리포트에는 다음 정보가 포함됩니다:
+- ✅ 테스트 실행 통계 (총/통과/실패/에러/스킵)
+- ✅ 카테고리별 요약 (23개 카테고리)
+- ✅ **각 테스트별 상세 정보**:
+  - 🟢 **수행 내용**: 무엇을 테스트했는지
+  - 🎯 **예상 결과**: 어떤 결과를 기대했는지
+  - ✅ **실제 결과**: 통과/실패 상세 정보
+  - ❌ **실패 시**: 에러 메시지 및 전체 Traceback
+
+### 테스트 커버리지
+
+#### 현재 커버리지
+- **SIP Core Models**: 100% ✅
+- **Call Session**: 100% ✅
+- **Text Embedder**: 88.06%
+- **CDR**: 57.59%
+
+### QA 문서
+
+자세한 테스트 전략 및 실행 가이드는 다음 문서를 참조하세요:
+- 📋 [테스트 전략](docs/qa/test-strategy.md) - 전체 테스트 전략 및 계획
+- 📝 [테스트 실행 가이드](docs/qa/test-execution-guide.md) - 단계별 실행 방법
+- 📊 [테스트 상세 리포트](docs/qa/test-detailed-report.md) - 최신 테스트 결과
+
+---
+
 ## 🤝 기여
 
 이 프로젝트에 기여해 주셔서 감사합니다! 다음 가이드라인을 따라주세요.
@@ -1121,8 +1215,12 @@ watch -n 1 curl -s http://localhost:8080/api/stats
    black src/ tests/
    isort src/ tests/
    
-   # 테스트 실행
-   pytest tests/ -v
+   # 단위 테스트 실행
+   pytest tests_new/unit/ -v
+   
+   # 상세 리포트 생성
+   pytest tests_new/unit/ -v --junit-xml=test-report.xml
+   python generate_test_report.py
    
    # 커버리지 확인
    pytest --cov=src --cov-report=term-missing
@@ -1215,7 +1313,6 @@ SOFTWARE.
 
 이 프로젝트는 다음 오픈소스 프로젝트에 영감을 받았습니다:
 
-- [PJSIP](https://www.pjsip.org/) - SIP 스택
 - [Kamailio](https://www.kamailio.org/) - SIP 서버
 - [Asterisk](https://www.asterisk.org/) - PBX 시스템
 - [FreeSWITCH](https://freeswitch.org/) - 소프트스위치
