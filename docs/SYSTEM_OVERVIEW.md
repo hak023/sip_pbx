@@ -28,7 +28,7 @@
                                                             ├──────────────────────┤
                                                             │  🎤 Google STT       │
                                                             │  🔊 Google TTS       │
-                                                            │  💡 Gemini 1.5 Flash │
+                                                            │  💡 Gemini 2.5 Flash │
                                                             └──────────────────────┘
 ```
 
@@ -108,7 +108,7 @@ Caller → AI → [Low Confidence] → HITL Request
 | **AI Orchestrator** | Python asyncio | AI conversation flow |
 | **STT Client** | Google Cloud | Speech-to-Text (streaming) |
 | **TTS Client** | Google Cloud | Text-to-Speech (streaming) |
-| **LLM Client** | Gemini 1.5 Flash | Response generation |
+| **LLM Client** | Gemini 2.5 Flash | Response generation |
 | **RAG Engine** | Sentence Transformers | Knowledge retrieval |
 | **Vector DB** | ChromaDB/Pinecone | Embedding storage |
 | **HITL Service** | Python + Redis | Human intervention logic |
@@ -417,6 +417,67 @@ docker-compose up
 - Custom AI model training
 - White-label frontend
 - Enterprise SLA
+
+---
+
+## 🧪 Quality Assurance (QA)
+
+### Test Strategy
+
+Our QA approach focuses on **functional testing** with a pyramid structure:
+
+```
+         ▲
+        / \
+       / E2E \ (10%)
+      /───────\
+     / Integration \ (30%)
+    /─────────────\
+   /   Unit Tests  \ (60%)
+  /___________________\
+```
+
+### Test Coverage
+
+#### Current Test Results
+- **Total Tests**: 32
+- **Passed**: ✅ 32 (100%)
+- **Failed**: ❌ 0 (0%)
+- **Success Rate**: 100% ✨
+
+#### Module Coverage
+- **SIP Core Models**: 100% ✅
+- **Call Session**: 100% ✅
+- **Text Embedder**: 88.06%
+- **CDR**: 57.59%
+
+### Running Tests
+
+```bash
+# Run all unit tests
+pytest tests_new/unit/ -v
+
+# Generate detailed report
+pytest tests_new/unit/ -v --junit-xml=test-report.xml
+python generate_test_report.py
+
+# View results
+cat docs/qa/test-detailed-report.md
+```
+
+### Test Documentation
+
+Comprehensive test documentation is available:
+- 📋 [Test Strategy](qa/test-strategy.md) - Overall testing approach
+- 📝 [Test Execution Guide](qa/test-execution-guide.md) - Step-by-step instructions
+- 📊 [Detailed Test Report](qa/test-detailed-report.md) - Latest test results with:
+  - Test execution statistics
+  - Category-wise summaries (23 categories)
+  - **Detailed results for each test**:
+    - 🟢 **Action**: What was tested
+    - 🎯 **Expected**: Expected outcome
+    - ✅ **Result**: Pass/Fail with details
+    - ❌ **Failure Info**: Error messages and traceback
 
 ---
 

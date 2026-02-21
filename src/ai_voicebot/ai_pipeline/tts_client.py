@@ -23,7 +23,7 @@ class TTSClient:
         """
         Args:
             config: TTS 설정
-                - voice_name: "ko-KR-Neural2-A"
+                - voice_name: "ko-KR-Chirp3-HD-Kore" (Chirp3 HD 음성 권장)
                 - language_code: "ko-KR"
                 - speaking_rate: 1.0
                 - pitch: 0.0
@@ -33,11 +33,16 @@ class TTSClient:
         self.client = texttospeech.TextToSpeechClient()
         
         # 음성 설정
-        voice_name = config.get("voice_name", "ko-KR-Neural2-A")
+        voice_name = config.get("voice_name", "ko-KR-Chirp3-HD-Kore")
         language_code = config.get("language_code", "ko-KR")
         
-        # SSML Gender 자동 결정 (voice_name의 마지막 문자 기반)
-        if voice_name.endswith("A") or voice_name.endswith("C"):
+        # SSML Gender 자동 결정
+        # Chirp3 HD 음성은 이름 기반으로 성별 결정
+        _chirp3_female = {"Achernar", "Aoede", "Autonoe", "Callirrhoe", "Despina", 
+                          "Erinome", "Gacrux", "Kore", "Laomedeia", "Leda",
+                          "Pulcherrima", "Sulafat", "Vindemiatrix", "Zephyr"}
+        voice_suffix = voice_name.rsplit("-", 1)[-1] if "-" in voice_name else ""
+        if voice_suffix in _chirp3_female or voice_name.endswith("A") or voice_name.endswith("C"):
             ssml_gender = texttospeech.SsmlVoiceGender.FEMALE
         else:
             ssml_gender = texttospeech.SsmlVoiceGender.MALE

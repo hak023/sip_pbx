@@ -1,10 +1,11 @@
 # SmartPBX AI - Technical Architecture Document
 ## Active RAG 기반 지능형 통화 응대 시스템 - 기술 아키텍처
 
-**문서 버전**: v1.0  
+**문서 버전**: v2.0 (멀티테넌트 반영)  
 **작성일**: 2026-01-30  
+**최종 업데이트**: 2026-02-13  
 **작성자**: Architecture Team  
-**상태**: Design Review
+**상태**: Implemented
 
 ---
 
@@ -45,13 +46,11 @@
 | **STT** | Google Cloud Speech | v2 | Speech-to-Text |
 | **TTS** | Google Cloud TTS | v1 | Text-to-Speech |
 | **LLM** | Gemini 2.5 Flash | - | AI Agent Core |
-| **Embedding** | OpenAI | text-embedding-3-large | Semantic Embedding |
-| **Vector DB** | Qdrant | 1.7+ | Knowledge Storage |
+| **Embedding** | Google Generative AI | text-embedding-004 | Semantic Embedding |
+| **Vector DB** | ChromaDB | 0.4+ | Knowledge Storage, Tenant Config |
 | **Orchestration** | LangGraph | 0.1+ | Agent Workflow |
-| **Message Queue** | Redis | 7.0+ | Event Bus, Caching |
-| **Database** | PostgreSQL | 15+ | Metadata, Audit Log |
-| **Object Storage** | MinIO (S3) | Latest | Recording Storage |
-| **Frontend** | React | 18+ | Operator Dashboard |
+| **Pipeline** | Pipecat | Latest | Real-time Voice AI Pipeline |
+| **Frontend** | Next.js (React) | 15+ | Operator Dashboard |
 | **Real-time** | WebSocket | - | Live Communication |
 | **Container** | Docker | Latest | Containerization |
 | **Orchestration** | Kubernetes | 1.28+ | Container Management |
@@ -97,10 +96,9 @@ graph TB
     end
     
     subgraph "Data Layer"
-        VectorDB[(Qdrant<br/>Vector DB)]
-        PostgreSQL[(PostgreSQL<br/>Metadata)]
-        Redis[(Redis<br/>Cache/MQ)]
-        S3[(MinIO S3<br/>Recordings)]
+        VectorDB[(ChromaDB<br/>Vector DB<br/>Multi-Tenant)]
+        CDR[(JSONL<br/>CDR Files)]
+        Recordings[(Local FS<br/>Recordings)]
     end
     
     subgraph "External Services"
@@ -174,10 +172,9 @@ graph TB
 - Dialog Manager: 대화 상태 관리
 
 #### 4. Data Layer
-- **Qdrant**: Vector embeddings, Knowledge base
-- **PostgreSQL**: Call metadata, User data, Audit logs
-- **Redis**: Session cache, Message queue
-- **MinIO S3**: Call recordings, Transcripts
+- **ChromaDB**: Vector embeddings, Knowledge base, Tenant configurations, Capabilities (멀티테넌트 `owner` 필드로 데이터 격리)
+- **JSONL Files**: CDR (Call Detail Record) 파일 기반 통화 이력
+- **Local FS**: 녹음 파일, Transcript 저장
 
 #### 5. External Services
 - **Google Cloud**: STT, TTS, Gemini LLM
@@ -431,7 +428,7 @@ class AIAgentService:
         return response
 ```
 
-**Agent Workflow (LangGraph)**:
+**Agent Workflow (LangGraph - 멀티테넌트 지원)**:
 ```python
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
@@ -443,6 +440,7 @@ class AgentState(TypedDict):
     rag_results: list
     confidence: float
     response: str
+    _owner: str  # 멀티테넌트: callee ID로 테넌트 식별
 
 # Workflow 정의
 workflow = StateGraph(AgentState)
@@ -480,83 +478,100 @@ agent = workflow.compile()
 
 **Purpose**: Vector 검색 및 Embedding 생성
 
-**Architecture**:
+**Architecture** (구현 완료 - 멀티테넌트 지원):
 ```python
-# src/ai/rag_engine.py
+# src/services/knowledge_service.py
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, Distance, VectorParams
-from langchain.embeddings import OpenAIEmbeddings
+import chromadb
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-class RAGEngine:
-    """RAG 검색 엔진"""
+class KnowledgeService:
+    """ChromaDB 기반 멀티테넌트 RAG 검색 엔진"""
     
     def __init__(self):
-        self.vector_db = QdrantClient(host="qdrant", port=6333)
-        self.embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-        self.reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-12-v2")
-        
-    async def search(self, query: str, top_k: int = 5) -> list:
-        """Semantic Search"""
-        # 1. Query Embedding
-        query_vector = await self.embeddings.aembed_query(query)
-        
-        # 2. Vector Search
-        results = self.vector_db.search(
-            collection_name="knowledge_base",
-            query_vector=query_vector,
-            limit=top_k * 2,  # Reranking을 위해 2배 검색
-            score_threshold=0.7
+        self.chroma_client = chromadb.PersistentClient(path="./data/vectordb")
+        self.embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/text-embedding-004"
         )
+        # 컬렉션: knowledge, faq, tenant_config, capabilities
+    
+    async def search(
+        self, 
+        query: str, 
+        top_k: int = 5,
+        owner_filter: Optional[str] = None  # 멀티테넌트 필터
+    ) -> list:
+        """멀티테넌트 Semantic Search"""
+        collection = self.chroma_client.get_collection("knowledge")
         
-        # 3. Reranking (선택)
-        if len(results) > top_k:
-            reranked = self.rerank(query, results)
-            results = reranked[:top_k]
+        # owner 기반 데이터 격리
+        where_filter = {"owner": owner_filter} if owner_filter else None
+        
+        results = collection.query(
+            query_texts=[query],
+            n_results=top_k,
+            where=where_filter
+        )
         
         return results
     
-    async def upsert(self, qa_pair: dict):
-        """Knowledge 저장"""
-        # 1. Embedding 생성
-        text = f"{qa_pair['question']} {qa_pair['answer']}"
-        vector = await self.embeddings.aembed_query(text)
+    async def add_knowledge(self, data: dict, owner: str):
+        """Knowledge 저장 (owner 필드 포함)"""
+        collection = self.chroma_client.get_or_create_collection("knowledge")
         
-        # 2. Qdrant에 저장
-        point = PointStruct(
-            id=qa_pair["id"],
-            vector=vector,
-            payload={
-                "question": qa_pair["question"],
-                "answer": qa_pair["answer"],
-                "call_id": qa_pair["call_id"],
-                "date": qa_pair["date"],
-                "category": qa_pair["category"],
-                "source": qa_pair["source"]  # "auto" or "operator_correction"
-            }
-        )
-        
-        self.vector_db.upsert(
-            collection_name="knowledge_base",
-            points=[point]
+        collection.add(
+            documents=[f"{data['question']} {data['answer']}"],
+            metadatas=[{
+                "question": data["question"],
+                "answer": data["answer"],
+                "owner": owner,  # 멀티테넌트 식별자
+                "type": data.get("type", "qa"),
+                "source": data.get("source", "auto"),
+            }],
+            ids=[data["id"]]
         )
 ```
 
-**Vector DB Schema (Qdrant)**:
+**Vector DB Schema (ChromaDB - 멀티테넌트)**:
 ```yaml
-Collection: knowledge_base
-  Vector Config:
-    size: 3072  # OpenAI text-embedding-3-large
-    distance: Cosine
-  
-  Payload Schema:
-    question: string (indexed)
-    answer: string
-    call_id: string (indexed)
-    date: datetime (indexed)
-    category: string (indexed)
-    source: string (indexed)
-    metadata: object
+# ChromaDB Collection Configuration (구현 완료)
+
+Collections:
+  knowledge:
+    # 지식 베이스 (Q&A, FAQ 등)
+    Embedding Model: Google text-embedding-004
+    Metadata Schema:
+      owner: string (indexed) # 멀티테넌트 식별자 (예: "1003", "1004")
+      type: string           # "qa", "faq", "document"
+      question: string
+      answer: string
+      source: string         # "auto", "manual", "extraction"
+      created_at: string
+
+  faq:
+    # 자주 묻는 질문
+    Metadata Schema:
+      owner: string (indexed)
+      question: string
+      answer: string
+
+  tenant_config:
+    # 테넌트별 설정 (인사말, 시스템 프롬프트 등)
+    Metadata Schema:
+      owner: string (indexed)
+      type: string           # "tenant_config"
+      org_name: string
+      greeting_templates: string (JSON)
+      system_prompt: string
+      language: string
+
+  capabilities:
+    # 테넌트별 AI 기능 정의
+    Metadata Schema:
+      owner: string (indexed)
+      type: string           # "capability"
+      capability_name: string
+      description: string
 ```
 
 ---
@@ -1612,112 +1627,83 @@ CREATE TABLE audit_logs (
 
 ---
 
-### Vector Database Schema (Qdrant)
+### Vector Database Schema (ChromaDB - 멀티테넌트 구현 완료)
 
 ```yaml
-# Qdrant Collection Configuration
+# ChromaDB Persistent Storage Configuration
+# Path: ./data/vectordb/
+# Embedding Model: Google text-embedding-004 (768 dimensions)
 
-collection_name: knowledge_base
+# ==================== Collection: knowledge ====================
+collection: knowledge
+  description: "테넌트별 지식 베이스 (Q&A, FAQ, 문서)"
+  metadata_schema:
+    owner:         string  # 멀티테넌트 식별자 (필수, 예: "1003", "1004")
+    type:          string  # "qa", "faq", "document"
+    question:      string
+    answer:        string
+    source:        string  # "auto", "manual", "extraction"
+    call_id:       string  # 추출 원본 통화 ID
+    created_at:    string  # ISO 8601
+    quality_score: float
 
-vectors:
-  size: 3072  # OpenAI text-embedding-3-large
-  distance: Cosine
-  
-indexes:
-  - field: payload.call_id
-    type: keyword
-  - field: payload.date
-    type: datetime
-  - field: payload.category
-    type: keyword
-  - field: payload.source
-    type: keyword
+# ==================== Collection: tenant_config ====================
+collection: tenant_config
+  description: "테넌트별 조직 설정 (인사말, 시스템 프롬프트, 언어 등)"
+  metadata_schema:
+    owner:               string  # 멀티테넌트 식별자 (필수)
+    type:                string  # "tenant_config"
+    org_name:            string  # 조직명 (예: "이탈리안 비스트로")
+    greeting_templates:  string  # JSON string (인사말 템플릿)
+    system_prompt:       string  # AI 시스템 프롬프트
+    language:            string  # "ko", "en" 등
+    business_hours:      string  # JSON string
 
-payload_schema:
-  question:
-    type: text
-    indexed: true
-  answer:
-    type: text
-  call_id:
-    type: keyword
-    indexed: true
-  date:
-    type: datetime
-    indexed: true
-  category:
-    type: keyword
-    indexed: true
-    # Values: "배송", "환불", "교환", "상품문의", "기타"
-  source:
-    type: keyword
-    indexed: true
-    # Values: "auto", "operator_correction", "manual"
-  quality_score:
-    type: float
-  metadata:
-    type: object
-    properties:
-      resolved: boolean
-      sentiment: keyword
-      tags: array<keyword>
+# ==================== Collection: capabilities ====================
+collection: capabilities
+  description: "테넌트별 AI 응대 가능 기능 정의"
+  metadata_schema:
+    owner:           string  # 멀티테넌트 식별자 (필수)
+    type:            string  # "capability"
+    capability_name: string  # 기능명 (예: "메뉴 안내")
+    description:     string  # 기능 설명
 
-# Sharding Strategy (Future)
-# - Monthly collections: knowledge_base_2026_01, knowledge_base_2026_02, ...
-# - Auto-archiving: > 6 months old → archive collection
+# ==================== Collection: faq ====================
+collection: faq
+  description: "테넌트별 자주 묻는 질문"
+  metadata_schema:
+    owner:    string  # 멀티테넌트 식별자 (필수)
+    question: string
+    answer:   string
+
+# ==================== Seed Data (초기 테넌트) ====================
+# 1003: 이탈리안 비스트로 (Italian Bistro)
+# 1004: 한국 기상청 (Korea Meteorological Administration)
+# seed_data.py에서 서버 시작 시 자동 시딩
+# legacy data (owner 없는 문서)는 자동 정리됨
 ```
 
 ---
 
-### Object Storage Structure (MinIO S3)
+### Local Storage Structure (구현 완료)
 
 ```
-s3://smartpbx-recordings/
-├── calls/
-│   └── {YYYY}/{MM}/{DD}/
-│       └── {call_id}/
-│           ├── caller.wav         # 발신자 오디오
-│           ├── callee.wav         # 수신자 오디오
-│           ├── mixed.wav          # 믹싱된 오디오
-│           ├── transcript.txt     # 전체 Transcript
-│           └── metadata.json      # 메타데이터
+sip-pbx/
+├── recordings/                        # 녹음 파일 저장
+│   └── {YYYYMMDD}_{HHMMSS}_{caller}_to_{callee}/
+│       ├── caller.wav                 # 발신자 오디오
+│       ├── callee.wav                 # 수신자 오디오 (AI TTS 포함)
+│       └── transcript.txt             # 전체 Transcript
 │
-├── backups/
-│   └── vector_db/
-│       └── {YYYY-MM-DD}/
-│           └── knowledge_base.snapshot
+├── cdr/                               # CDR (Call Detail Record) 파일
+│   └── cdr-{YYYY-MM-DD}.jsonl        # 일별 JSONL 형식 CDR
 │
-└── exports/
-    └── {export_id}/
-        └── data.zip
-```
-
-**S3 Bucket Policy**:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {"Service": "sip-pbx-service"},
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject"
-      ],
-      "Resource": "arn:aws:s3:::smartpbx-recordings/calls/*"
-    },
-    {
-      "Effect": "Allow",
-      "Principal": {"Service": "backup-service"},
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::smartpbx-recordings/backups/*"
-    }
-  ]
-}
+└── data/
+    └── vectordb/                      # ChromaDB Persistent Storage
+        ├── knowledge/                 # 지식 베이스 (멀티테넌트)
+        ├── tenant_config/             # 테넌트 설정
+        ├── capabilities/              # AI 기능 정의
+        └── faq/                       # 자주 묻는 질문
 ```
 
 ---
@@ -2188,152 +2174,18 @@ spec:
 
 ---
 
-#### 3. Qdrant Vector DB
+#### 3. ChromaDB Vector DB (구현 완료)
 
-```yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: qdrant
-  namespace: smartpbx
-spec:
-  serviceName: qdrant
-  replicas: 3  # HA mode
-  selector:
-    matchLabels:
-      app: qdrant
-  template:
-    metadata:
-      labels:
-        app: qdrant
-    spec:
-      containers:
-      - name: qdrant
-        image: qdrant/qdrant:v1.7.0
-        ports:
-        - name: http
-          containerPort: 6333
-        - name: grpc
-          containerPort: 6334
-        volumeMounts:
-        - name: storage
-          mountPath: /qdrant/storage
-        resources:
-          requests:
-            memory: "4Gi"
-            cpu: "2000m"
-          limits:
-            memory: "8Gi"
-            cpu: "4000m"
-  volumeClaimTemplates:
-  - metadata:
-      name: storage
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      storageClassName: fast-ssd
-      resources:
-        requests:
-          storage: 500Gi
 ```
+현재 구현: ChromaDB PersistentClient (Embedded Mode)
+- 별도 서버 불필요, 애플리케이션 내장
+- 저장 경로: ./data/vectordb/
+- Embedding: Google text-embedding-004 (768 dimensions)
+- 멀티테넌트: owner 필드 기반 metadata 필터링
 
----
-
-#### 4. PostgreSQL (Metadata DB)
-
-```yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: postgres
-  namespace: smartpbx
-spec:
-  serviceName: postgres
-  replicas: 1  # Primary only (Replication 추후 추가)
-  selector:
-    matchLabels:
-      app: postgres
-  template:
-    metadata:
-      labels:
-        app: postgres
-    spec:
-      containers:
-      - name: postgres
-        image: postgres:15-alpine
-        ports:
-        - name: postgres
-          containerPort: 5432
-        env:
-        - name: POSTGRES_DB
-          value: smartpbx
-        - name: POSTGRES_USER
-          valueFrom:
-            secretKeyRef:
-              name: db-secrets
-              key: postgres_user
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: db-secrets
-              key: postgres_password
-        volumeMounts:
-        - name: data
-          mountPath: /var/lib/postgresql/data
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1000m"
-          limits:
-            memory: "4Gi"
-            cpu: "2000m"
-  volumeClaimTemplates:
-  - metadata:
-      name: data
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      storageClassName: standard
-      resources:
-        requests:
-          storage: 100Gi
-```
-
----
-
-#### 5. Redis (Cache & Message Queue)
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis
-  namespace: smartpbx
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: redis
-  template:
-    metadata:
-      labels:
-        app: redis
-    spec:
-      containers:
-      - name: redis
-        image: redis:7.0-alpine
-        ports:
-        - name: redis
-          containerPort: 6379
-        args:
-        - redis-server
-        - --maxmemory 4gb
-        - --maxmemory-policy allkeys-lru
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "500m"
-          limits:
-            memory: "4Gi"
-            cpu: "1000m"
+향후 확장 (K8s 배포 시):
+- ChromaDB Server Mode로 전환
+- 또는 Qdrant/Milvus 등 전용 Vector DB로 마이그레이션
 ```
 
 ---
@@ -3042,12 +2894,124 @@ async def process_query(query: str):
 
 ---
 
+## Multi-Tenant Architecture (구현 완료)
+
+### 개요
+
+2026-02-13에 구현 완료된 멀티테넌트 아키텍처로, 하나의 SIP PBX 시스템에서 여러 조직(테넌트)을 동시에 지원합니다. 각 테넌트는 `owner` 필드(= SIP 착신번호 `callee`)로 식별되며, 데이터가 완전히 격리됩니다.
+
+### 테넌트 식별 체계
+
+```
+테넌트 식별자 = SIP callee (착신번호)
+예시:
+  - "1003" → 이탈리안 비스트로 (Italian Bistro)
+  - "1004" → 한국 기상청 (Korea Meteorological Administration)
+```
+
+### 데이터 격리 구조
+
+```mermaid
+graph TB
+    subgraph "ChromaDB (Multi-Tenant)"
+        subgraph "tenant_config Collection"
+            TC1003[owner: 1003<br/>이탈리안 비스트로<br/>인사말/시스템프롬프트]
+            TC1004[owner: 1004<br/>한국 기상청<br/>인사말/시스템프롬프트]
+        end
+        
+        subgraph "capabilities Collection"
+            CAP1003[owner: 1003<br/>메뉴안내/예약/영업시간]
+            CAP1004[owner: 1004<br/>날씨정보/예보/특보]
+        end
+        
+        subgraph "knowledge Collection"
+            K1003[owner: 1003<br/>이탈리안 비스트로 지식]
+            K1004[owner: 1004<br/>기상청 지식]
+        end
+    end
+```
+
+### 통화 흐름에서의 멀티테넌트 처리
+
+```mermaid
+sequenceDiagram
+    participant Caller as 발신자
+    participant SIP as SIP Endpoint
+    participant CM as Call Manager
+    participant PB as Pipeline Builder
+    participant OIM as OrganizationInfoManager
+    participant RAG as RAG Engine
+    participant VDB as ChromaDB
+    
+    Caller->>SIP: INVITE (to 1003)
+    SIP->>CM: handle_call(callee=1003)
+    CM->>PB: build_and_run(callee=1003)
+    
+    Note over PB,VDB: 동적 테넌트 설정 로드
+    PB->>OIM: create_org_manager(owner="1003")
+    OIM->>VDB: query tenant_config WHERE owner="1003"
+    VDB-->>OIM: 이탈리안 비스트로 설정
+    OIM->>VDB: query capabilities WHERE owner="1003"
+    VDB-->>OIM: 메뉴안내, 예약, 영업시간
+    
+    Note over PB,RAG: AI 파이프라인 시작
+    PB->>RAG: search(query, owner_filter="1003")
+    RAG->>VDB: query knowledge WHERE owner="1003"
+    VDB-->>RAG: 테넌트별 지식 결과
+```
+
+### 핵심 구현 컴포넌트
+
+| 컴포넌트 | 파일 | 멀티테넌트 변경 사항 |
+|----------|------|---------------------|
+| **OrganizationInfoManager** | `src/ai_voicebot/knowledge/organization_info.py` | JSON 파일 → VectorDB 기반, `owner` 파라미터로 동적 로드 |
+| **ConversationState** | `src/ai_voicebot/langgraph/state.py` | `_owner: str` 필드 추가 |
+| **ConversationAgent** | `src/ai_voicebot/langgraph/agent.py` | `owner` 파라미터, invoke_state에 `_owner` 주입 |
+| **adaptive_rag_node** | `src/ai_voicebot/langgraph/nodes/adaptive_rag.py` | `owner_filter=owner` 전달 |
+| **step_back_node** | `src/ai_voicebot/langgraph/nodes/step_back_prompt.py` | `owner_filter=owner` 전달 |
+| **RAGLLMProcessor** | `src/ai_voicebot/pipecat/processors/rag_processor.py` | `owner` 파라미터 추가 |
+| **PipelineBuilder** | `src/ai_voicebot/pipecat/pipeline_builder.py` | `callee`에서 owner 추출, 동적 OIM 생성 |
+| **CallManager** | `src/sip_core/call_manager.py` | org_manager=None 전달 (PipelineBuilder에서 생성) |
+| **KnowledgeService** | `src/services/knowledge_service.py` | 모든 CRUD에 `owner` 필터 지원 |
+| **seed_data** | `src/services/seed_data.py` | 초기 테넌트 데이터 시딩 + legacy 정리 |
+
+### API 멀티테넌트 지원
+
+| API Endpoint | 필터 파라미터 | 설명 |
+|-------------|-------------|------|
+| `GET /api/knowledge` | `owner` | 테넌트별 지식 조회 |
+| `POST /api/knowledge` | `owner` (body) | 테넌트별 지식 추가 |
+| `GET /api/call-history` | `callee` | 테넌트별 통화 이력 |
+| `GET /api/extractions/` | `owner` | 테넌트별 추출 이력 |
+| `GET /api/extractions/stats` | `owner` | 테넌트별 추출 통계 |
+| `GET /api/tenants` | - | 전체 테넌트 목록 |
+| `GET /api/tenants/{owner}` | - | 특정 테넌트 설정 |
+| `PUT /api/tenants/{owner}` | - | 테넌트 설정 수정 |
+| `GET /api/ai-services` | `owner` | 테넌트별 AI 서비스 |
+
+### Frontend 멀티테넌트 지원
+
+**로그인 방식**: 내선번호(Extension) 기반 로그인
+- localStorage에 `tenant` 정보 저장: `{ owner: "1003", name: "이탈리안 비스트로" }`
+- 모든 페이지에서 `localStorage.getItem('tenant')`로 owner 추출
+- API 호출 시 `owner` 또는 `callee` 쿼리 파라미터로 전달
+
+**테넌트 필터 적용 페이지**:
+- 대시보드 (`/dashboard`): 테넌트별 통계
+- 지식 관리 (`/knowledge`): 테넌트별 지식 CRUD
+- 통화 이력 (`/call-history`): callee 기준 필터
+- 추출 이력 (`/extractions`): owner 기준 필터
+- AI 서비스 (`/ai-services`): 테넌트별 기능 관리
+
+---
+
 ## 관련 문서
 
 | 문서 | 설명 |
 |------|------|
 | [ai-voicebot-architecture.md](./ai-voicebot-architecture.md) | SIP PBX B2BUA + AI 전체 Backend 아키텍처 |
 | [voice-ai-conversation-engine.md](./voice-ai-conversation-engine.md) | **Voice AI 대화 엔진 상세설계서** - Pipecat + Smart Turn + LangGraph Agentic RAG |
+| [multi-tenant-rag-and-dashboard.md](../design/multi-tenant-rag-and-dashboard.md) | **멀티테넌트 RAG + 대시보드 기획/구현 문서** |
 
 ---
 

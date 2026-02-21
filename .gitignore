@@ -60,6 +60,10 @@ dmypy.json
 .env.local
 .env.*.local
 
+# Google Cloud / API keys (do not commit)
+config/*key*.json
+config/sip_pbx_stt_key*.json
+
 # OS
 .DS_Store
 Thumbs.db

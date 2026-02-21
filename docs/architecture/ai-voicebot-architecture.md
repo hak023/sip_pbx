@@ -4,8 +4,8 @@
 
 | 항목 | 내용 |
 |-----|------|
-| **문서 버전** | v2.0 |
-| **최종 업데이트** | 2025-01-06 |
+| **문서 버전** | v5.1 |
+| **최종 업데이트** | 2026-02-19 |
 | **작성자** | Winston (Architect) |
 | **프로젝트명** | SIP PBX B2BUA + AI Voice Assistant + Frontend Control Center |
 | **상태** | Production Ready |
@@ -16,6 +16,10 @@
 |-----|------|------|-------|
 | 2025-01-05 | v1.0 | 초기 아키텍처 문서 작성 (AI 보이스봇) | Winston |
 | 2025-01-06 | v2.0 | SIP PBX B2BUA 내용 통합, 전체 Backend 통합 문서 | Winston |
+| 2026-02-13 | v3.0 | AI 인사말/Capability, Knowledge Extraction v2, AI 호 연결(Transfer) 통합 (섹션 23~25) | AI Assistant |
+| 2026-01-29 | v4.0 | AI Outbound Call (목적지향 대화, TaskTracker, OutboundCallManager) 구현 및 통합 (섹션 26) | AI Assistant |
+| 2026-02-13 | v5.0 | **멀티테넌트 RAG 아키텍처** - VectorDB 기반 OrganizationInfoManager, owner 필터, 테넌트별 데이터 격리, Frontend 멀티테넌트 지원 (섹션 27) | AI Assistant |
+| 2026-02-19 | v5.1 | **TTS→RTP 파이프라인·Phase 타이밍** (4.3.2a), **RAG 부족 시 HITL 대응 플로우** (19.1a) 설계 반영. 참고: docs/reports/TTS_RTP_AND_HITL_DESIGN.md | AI Assistant |
 
 ---
 
@@ -25,9 +29,16 @@
 > 
 > - ✅ **SIP PBX B2BUA 코어**: SIP 시그널링, RTP 릴레이, 통화 관리
 > - ✅ **AI Voice Assistant**: STT/TTS/LLM, RAG, 지식 베이스
+> - ✅ **AI 인사말 + Capability 가이드**: 2-Phase Greeting, VectorDB Capability 관리
+> - ✅ **Knowledge Extraction v2**: 멀티스텝 추출 파이프라인, 자동 승인
+> - ✅ **AI 호 연결 (Call Transfer)**: B2BUA 3pcc, RTP Bridge, Transfer API
+> - ✅ **AI Outbound Call**: 목적지향 대화, TaskTracker, OutboundCallManager, Goal-Oriented LLM
 > - ✅ **Backend API Services**: FastAPI Gateway, WebSocket, HITL
+> - ✅ **TTS→RTP 파이프라인·Phase 타이밍**: Pipecat 큐잉·변수 정의·Phase1→Phase2 대기 (섹션 4.3.2a)
+> - ✅ **RAG 부족 시 HITL 대응**: 모른다 명시 → HITL 요청 → timeout/응답에 따른 문구·종료·피드백 (섹션 19.1a)
 > 
-> Frontend 관련 내용은 **[Frontend Architecture](frontend-architecture.md)** 문서를 참조하세요.
+> Frontend 관련 내용은 **[Frontend Architecture](frontend-architecture.md)** 문서를 참조하세요.  
+> 상세 설계: **[TTS_RTP_AND_HITL_DESIGN.md](../reports/TTS_RTP_AND_HITL_DESIGN.md)** (TTS→RTP 변수 정의, RAG 부족 HITL 플로우).
 
 ---
 
@@ -84,23 +95,28 @@
 - Transaction 및 Dialog 관리
 - CDR (Call Detail Record) 생성
 
-#### Layer 2: AI Voice Assistant (신규 확장)
+#### Layer 2: AI Voice Assistant (확장)
 **역할**: 지능형 음성 응대 및 자동화
 - 부재중 자동 응답 (10초 타임아웃)
+- 2-Phase AI 인사말 (고정 + VectorDB Capability 가이드 멘트)
 - Google Cloud STT/TTS 스트리밍
 - Gemini 2.5 Flash LLM 대화 생성
 - RAG (Retrieval Augmented Generation)
-- Vector DB 지식 베이스
-- 통화 녹음 및 지식 추출
+- Vector DB 지식 베이스 + Capability 관리
+- 통화 녹음 및 지식 추출 v2 (멀티스텝 파이프라인)
+- **AI 호 연결 (Call Transfer)** - B2BUA 기반 3pcc 전환
 - Barge-in 지원 (VAD 기반)
 
-#### Layer 3: Backend API Services (신규)
+#### Layer 3: Backend API Services (확장)
 **역할**: Frontend 연동 및 실시간 통신
 - FastAPI REST API Gateway
 - Socket.IO WebSocket Server
 - HITL (Human-in-the-Loop) Service
 - 운영자 상태 관리
 - 통화 이력 관리
+- Capability CRUD API
+- **Transfer API** (`/api/transfers/` - 호 전환 상태/이력/통계)
+- Extraction Review API (`/api/extractions/` - 지식 추출 리뷰)
 - PostgreSQL/Redis 통합
 
 ### 1.3 핵심 목표
@@ -133,9 +149,9 @@
    - 믹싱된 오디오 파일 + 텍스트 파일 저장
    
 2. **지식 베이스 자동 구축**
-   - LLM(Gemini)이 통화 내용 분석
-   - 유용한 정보 판단 시 Vector DB에 자동 저장
-   - 착신자의 말하는 내용을 AI 보이스봇의 지식으로 활용
+   - LLM이 통화 전사에서 지식정보를 정제(추출·분류). 맥락 파악을 위해 **전체 전사(발신자+착신자)** 를 LLM에 전달하고, **저장은 착신자 발화만** 추출. 긴 통화는 `judgment_max_input_chars`(설정 가능)로 입력 길이 제한.
+   - 정제 결과가 기준을 만족하면 Vector DB에 자동 저장.
+   - 상세: [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md)
 
 #### 🤖 AI 응대 모드 (AI Attendant Mode)
 1. **트리거 방식**
@@ -158,9 +174,9 @@
    - RTP Relay Worker 중지
    - Knowledge Extraction 트리거
 
-5. **Knowledge Extraction**
-   - 통화 종료 후 STT → LLM 질의 → VectorDB 저장
-   - 착신자 발화 내용을 AI 보이스봇의 지식으로 활용
+5. **Knowledge Extraction (지식 정제)**
+   - 통화 종료 후 전사 로드 → LLM에 **전체 전사**(맥락) 전달 → 지식 정제(착신자 발화만 저장 대상 추출) → VectorDB 저장.
+   - 착신자 발화 내용을 AI 보이스봇의 지식으로 활용. 상세: [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md)
 
 6. **Human-in-the-Loop (HITL)**
    - AI 신뢰도 낮을 시 운영자 개입 요청
@@ -583,7 +599,7 @@ audio_config = {
 
 **책임:**
 - 사용자 의도 파악
-- 통화 내용 유용성 판단
+- 통화 내용 지식 정제 (추출·분류)
 - RAG 기반 답변 생성
 - 대화 컨텍스트 유지
 
@@ -895,7 +911,7 @@ class KnowledgeDocument:
     # 메타데이터
     extracted_at: datetime
     speaker: Literal["caller", "callee"]
-    confidence_score: float  # LLM 유용성 판단 점수
+    confidence_score: float  # LLM 지식 정제 신뢰도
     
     # 분류
     category: Optional[str]  # "약속", "정보", "지시" 등
@@ -996,54 +1012,12 @@ sequenceDiagram
     
     Note over Recorder: 녹음 완료, 파일 저장
     
-    Recorder->>LLM: 통화 전체 텍스트
-    LLM->>LLM: 유용성 판단
+    Recorder->>LLM: 통화 전체 전사 (발신자+착신자, 맥락)
+    LLM->>LLM: 지식 정제 (저장은 착신자 발화만)
     
-    alt 유용한 정보 있음
+    alt 저장할 지식 있음
         LLM->>VectorDB: 지식 청크 저장
-    else 유용한 정보 없음
-        LLM->>Recorder: Skip
-    end
-```
-
-### 4.2 일반 통화 시나리오 (녹음 및 지식 추출)
-
-```mermaid
-sequenceDiagram
-    participant Caller
-    participant PBX
-    participant Callee
-    participant Recorder
-    participant STT
-    participant LLM
-    participant VectorDB
-    
-    Caller->>PBX: INVITE (전화 걸기)
-    PBX->>Callee: INVITE (착신 전달)
-    Callee->>PBX: 200 OK (전화 받음)
-    PBX->>Caller: 200 OK
-    
-    Note over PBX,Recorder: 통화 연결, 녹음 시작
-    
-    PBX->>Recorder: RTP Stream (양방향)
-    Recorder->>Recorder: 화자 분리 + 믹싱
-    
-    loop 통화 중
-        Recorder->>STT: 실시간 오디오
-        STT->>Recorder: 텍스트 (interim/final)
-    end
-    
-    Callee->>PBX: BYE (통화 종료)
-    PBX->>Caller: BYE
-    
-    Note over Recorder: 녹음 완료, 파일 저장
-    
-    Recorder->>LLM: 통화 전체 텍스트
-    LLM->>LLM: 유용성 판단
-    
-    alt 유용한 정보 있음
-        LLM->>VectorDB: 지식 청크 저장
-    else 유용한 정보 없음
+    else 없음
         LLM->>Recorder: Skip
     end
 ```
@@ -1081,6 +1055,49 @@ sequenceDiagram
                                     ↓
                             [RTP Relay Worker] → [Caller RTP]
 ```
+
+#### 4.3.2a TTS→RTP 전송 흐름 및 Phase 타이밍 (Pipecat)
+
+Pipecat 기반 AI 응대 시, TTS 오디오가 발신자 RTP로 나가기까지의 파이프라인과 Phase1→Phase2 인사말 타이밍은 아래와 같다.
+
+**파이프라인 순서**
+
+```
+TTS(Google) → TTSEndFrameForwarder → TTSCompleteNotifier → SIPPBXOutputTransport
+                                                                  ↓
+                                              send_audio_to_caller(pcm) → RTP Relay
+                                                                  ↓
+                                              _pipecat_outgoing_queue.put_nowait(패킷들)
+                                                                  ↓
+                                              _pipecat_outgoing_sender_loop: 20ms마다 1패킷 sendto()
+```
+
+- **Output (SIPPBXOutputTransport)**: 오디오 프레임마다 PCM을 RTP 패킷으로 쪼개 **발송 큐**에 넣기만 하고 반환한다. 실제 UDP 전송은 **발송 루프**가 20ms 간격으로 수행한다.
+- **Notifier (TTSCompleteNotifier)**: 동일 오디오 프레임의 재생 길이(바이트→초)를 누적해, EndFrame 시 `last_tts_duration_sec`와 이벤트를 설정한다.
+
+**변수 정의 (로그·동기화 해석용)**
+
+| 변수 | 설정 위치 | 의미 |
+|------|-----------|------|
+| **last_tts_duration_sec** | TTSCompleteNotifier | 해당 응답(Start~End) 구간에서 TTS가 내보낸 **모든 오디오 프레임**의 재생 길이 합(초). "이 응답 음원이 몇 초짜리인가". |
+| **bytes_sent** | SIPPBXOutputTransport | 해당 응답 구간에서 `send_audio_to_caller()`로 **발송 큐에 넣은** PCM 바이트 합. 실제 UDP 전송 완료량이 아님. |
+| **duration_sec** (Output 로그) | SIPPBXOutputTransport | `bytes_sent / (16000*2)` = 16kHz 16bit 기준 큐에 넣은 양을 초로 환산. Phase1→Phase2 대기 시 `KEY_LAST_RTP_SENT_SEC`로 사용. |
+| **tts_rtp_duration_mismatch** | Output(EndFrame 시) | Notifier의 `last_tts_duration_sec`와 Output의 `duration_sec` 차이가 10% 이상일 때 경고. |
+
+**Phase1 → Phase2 시간 계산**
+
+- **목적**: Phase1 인사말 TTS가 전화기에서 재생될 시간만큼 기다린 뒤 Phase2(Capability 가이드)를 보내기 위함.
+- **흐름**:
+  1. RAGLLMProcessor가 Phase1 텍스트를 보내고 `event.wait()`로 대기.
+  2. Notifier가 Phase1의 EndFrame을 보면 재생 길이를 `last_tts_duration_sec`에 넣고 `event.set()`.
+  3. 파이프라인 순서가 Notifier → Output이므로, RAG에서는 `event.wait()` 직후 **0.05초 sleep** 후 `KEY_LAST_RTP_SENT_SEC`를 pop해 Output이 값을 쓸 시간을 준다.
+  4. `rtp_sent_sec`가 있으면 `gap_sec = rtp_sent_sec + PHASE_GAP_BUFFER_SEC`로 대기, 없으면 Notifier 누적값 + 버퍼로 대기.
+
+**끊김(choppy) 가능 원인 및 개선 방향**
+
+- 발송 루프가 20ms마다 한 패킷만 보내므로, TTS가 청크를 늦게 주면 큐가 잠깐 비어 끊김처럼 들릴 수 있음.
+- 큐가 가득 찬 경우 `put_nowait` 실패 시 해당 청크의 패킷이 누락될 수 있음(경고 후 break). 개선 시 큐 크기 유지, 누락 시 재시도 또는 블로킹 옵션 검토.
+- 상세 설계: `docs/reports/TTS_RTP_AND_HITL_DESIGN.md`.
 
 #### 4.3.3 시퀀스 다이어그램
 
@@ -1214,8 +1231,8 @@ sequenceDiagram
     CallManager->>LLM: Extract Q&A pairs<br/>(from callee speech)
     LLM-->>CallManager: Q&A pairs
     
-    CallManager->>LLM: Judge usefulness
-    LLM-->>CallManager: Filtered Q&A
+    CallManager->>LLM: 지식 정제 (전체 전사 맥락, 저장은 착신자만)
+    LLM-->>CallManager: extracted_info (착신자 발화만)
     
     CallManager->>VectorDB: Store knowledge<br/>(with embeddings)
     VectorDB-->>CallManager: Success
@@ -1225,21 +1242,21 @@ sequenceDiagram
 
 **구현 메서드**:
 - `CallManager.trigger_knowledge_extraction()`: Knowledge Extraction 트리거
-- `KnowledgeExtractor.extract_from_call()`: 통화에서 지식 추출
-- `KnowledgeExtractor._filter_by_speaker()`: 착신자 발화 필터링
-- `LLM.judge_usefulness()`: 유용성 판단
+- `KnowledgeExtractor.extract_from_call()`: 통화에서 지식 추출 (LLM에는 **전체 전사** 전달, 저장 후보는 착신자만)
+- `KnowledgeExtractor._filter_by_speaker()`: 착신자 발화 필터링 (최소 길이 검사 등)
+- `LLM.judge_usefulness(transcript=전체전사, speaker=callee)`: 지식 정제 (맥락용 전체 전사, 출력은 착신자 발화만)
 
 ### 4.5 지식 추출 워크플로우 (일반 통화)
 
 ```mermaid
 flowchart TD
-    A[통화 종료] --> B[전체 텍스트 로드]
-    B --> C[화자별 발화 분리]
-    C --> D[착신자 발화만 추출]
+    A[통화 종료] --> B[전체 전사 로드]
+    B --> C[착신자 발화 길이 검사]
+    C --> D[LLM에 전체 전사 전달 (맥락)]
     
-    D --> E{LLM 유용성 판단}
-    E -->|유용함| F[텍스트 청킹]
-    E -->|유용하지 않음| Z[종료]
+    D --> E{LLM 지식 정제}
+    E -->|저장할 지식 있음<br/>(착신자 발화만 추출)| F[텍스트 청킹]
+    E -->|없음| Z[종료]
     
     F --> G[각 청크 임베딩]
     G --> H[VectorDB 저장]
@@ -1247,35 +1264,12 @@ flowchart TD
     I --> Z
 ```
 
-**LLM 유용성 판단 프롬프트:**
-```
-다음 통화 내용을 분석하여 향후 AI 비서가 활용할 수 있는 
-유용한 정보가 있는지 판단하세요.
+> **지식 정제** 상세(입력=전체 전사·저장=착신자만, 출력 스키마, 카테고리, 토큰/길이 처리)는 **§24.4 지식 정제 (Knowledge Refinement)** 및 설계서 [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md), [USEFULNESS_JUDGMENT_DESIGN.md](../reports/USEFULNESS_JUDGMENT_DESIGN.md) 참조.
 
-유용한 정보 예시:
-- 약속 일정
-- 연락처 정보
-- 업무 지시사항
-- 자주 묻는 질문에 대한 답변
-- 개인 선호도
-
-통화 내용:
-{transcript}
-
-출력 형식:
-{
-  "is_useful": true/false,
-  "confidence": 0.0-1.0,
-  "reason": "판단 이유",
-  "extracted_info": [
-    {
-      "text": "추출할 텍스트",
-      "category": "약속|정보|지시|기타",
-      "keywords": ["키워드1", "키워드2"]
-    }
-  ]
-}
-```
+**LLM 지식 정제 (요약):**
+- **입력**: 통화 **전체 전사**(발신자+착신자) — 맥락 파악용. 길이 제한은 `judgment_max_input_chars`(기본 6000자).
+- **저장 대상**: **착신자(callee) 발화만** `extracted_info[].text`에 넣음. 프롬프트에 명시.
+- 출력: `is_useful`, `confidence`, `reason`, `extracted_info[]` (text, category, keywords, contains_pii). 카테고리: FAQ|이슈해결|약속|정보|지시|선호도|기타.
 
 ---
 
@@ -2316,6 +2310,37 @@ logger.info("knowledge_extracted",
 )
 ```
 
+#### 주요 진행 구분 (progress)
+
+`app.log`에서 **주요 진행사항**만 빠르게 보고 싶을 때는 `progress` 필드로 필터링한다. 구조화 로그에 `progress`가 포함된 이벤트만 모으면 된다.
+
+| progress | 의미 | 대표 이벤트 |
+|----------|------|-------------|
+| **llm** | LLM 질의/답변 | `langgraph_agent_result`, `LLM response generated`, `⏱️ [TIMING] 전체 응답 파이프라인` |
+| **stt** | STT 결과 | `rag_llm_user_input`, `STT transcription completed`, `✅ [STT Flow] STT completed` |
+| **tts** | TTS 결과 | `greeting_phase1_sent`, `greeting_phase2_sent`, `streaming_tts_gateway_flushed`, `tts_complete_notifier_signalled` |
+| **rag** | RAG 처리 결과 | `rag_search_results`, `adaptive_rag_no_results`, `⏱️ [TIMING] adaptive_rag 완료` |
+| **call** | 전화 이벤트 | `invite_received`, `200_ok_received_*`, `ack_received_*`, `bye_received_*`, `call_terminated`, `ai_voicebot_activated`, `ai_call_ended` |
+
+**예: JSON 로그에서 progress로 필터**
+
+```bash
+# LLM 관련만
+jq -c 'select(.progress == "llm")' logs/app.log
+
+# 전화 이벤트만
+jq -c 'select(.progress == "call")' logs/app.log
+
+# RAG + LLM
+jq -c 'select(.progress == "rag" or .progress == "llm")' logs/app.log
+```
+
+Windows PowerShell 등에서 `Select-String` 사용 예:
+
+```powershell
+Select-String -Path logs\app.log -Pattern '"progress":\s*"call"'
+```
+
 ---
 
 ## 10. 보안 및 프라이버시
@@ -2518,29 +2543,52 @@ async def test_response_latency():
 
 ## 13. 향후 개선 사항 (Roadmap)
 
-### Phase 1: MVP (현재)
+### Phase 1: MVP (완료) ✅
 - ✅ 기본 AI 보이스봇 구현
 - ✅ 녹음 및 지식 추출
 - ✅ Google Cloud AI 통합
 - ✅ ChromaDB 로컬 개발
 
-### Phase 2: 기능 강화 (3개월)
+### Phase 2: Dashboard + HITL (완료) ✅
+- ✅ Frontend Dashboard (Next.js)
+- ✅ Human-in-the-Loop 워크플로우
+- ✅ Knowledge Manager UI
+- ✅ WebSocket 실시간 모니터링
+
+### Phase 3: AI 인사말 + Capability + Knowledge v2 (완료) ✅
+- ✅ **2-Phase AI 인사말**: 고정 인사말 + VectorDB Capability 가이드 멘트
+- ✅ **Capability 관리**: CRUD API + Frontend UI + response_type 분기
+- ✅ **Knowledge Extraction v2**: 멀티스텝 파이프라인 + 자동 승인
+
+### Phase 4: AI 호 연결 (완료) ✅
+- ✅ **B2BUA Call Transfer**: TransferManager 3pcc 패턴
+- ✅ **RTP Bridge 모드**: 발신자 ↔ 서버 ↔ 착신자 미디어 경로
+- ✅ **Transfer REST API + WebSocket**: 실시간 전환 상태 모니터링
+- ✅ **Frontend 전환 이력 페이지**: 통계 + 필터링 테이블
+
+### Phase 5: AI Outbound Call (완료) ✅
+- ✅ **OutboundCallManager**: 발신 콜 생명주기 관리 (대기열, 발신, 재시도)
+- ✅ **SIP Endpoint 확장**: Outbound INVITE 발신 + 응답 처리 + BYE
+- ✅ **TaskTracker**: 확인 사항 진행 상태 추적 (answered/pending/unclear/refused)
+- ✅ **AI Orchestrator Outbound Mode**: 목적지향 대화 + LLM Structured Output
+- ✅ **Outbound REST API + WebSocket**: 실시간 상태 + 결과 조회
+- ✅ **Frontend UI**: 발신 요청 폼 + 이력 + 결과 상세 (대화록/답변)
+
+### Phase 6: 기능 강화 (향후)
 - 📋 **감정 인식**: STT + 감정 분석
 - 📋 **다국어 지원**: 영어, 중국어 추가
-- 📋 **통화 요약**: 통화 종료 후 자동 요약
-- 📋 **Pinecone 마이그레이션**: 프로덕션 전환
+- 📋 **Attended Transfer**: 상담 후 전환
+- 📋 **Conference Call**: 3자 통화
+- 📋 **예약 발신**: 특정 시간에 자동 발신
+- 📋 **대량 발신 캠페인**: CSV 업로드 일괄 발신
 
-### Phase 3: 고도화 (6개월)
-- 📋 **Multi-turn 컨텍스트**: 긴 대화 메모리
-- 📋 **Action API**: 일정 등록, 메일 전송 등
-- 📋 **Voice Cloning**: 착신자 목소리 학습
-- 📋 **Dashboard**: 관리자 UI
-
-### Phase 4: 엔터프라이즈 (12개월)
+### Phase 7: 엔터프라이즈 (향후)
 - 📋 **Fine-tuning LLM**: 도메인 특화 모델
 - 📋 **On-premise LLM**: 데이터 주권
 - 📋 **A/B Testing**: 응답 품질 개선
 - 📋 **Analytics**: 통화 인사이트
+- 📋 **CRM 연동**: Salesforce, HubSpot
+- 📋 **모바일 앱**: React Native
 
 ---
 
@@ -2850,6 +2898,38 @@ AI가 다음 상황에서 사람의 도움을 요청합니다:
 4. **복잡한 질문**
    - NLP 분석 결과 복잡도 > 0.7
    - 다단계 추론 필요
+
+### 19.1a RAG/지식 부족 시 HITL 대응 플로우 ⭐
+
+RAG 검색 결과가 없거나 confidence가 낮을 때, "모른다"를 명시하고 HITL로 담당자 문의 후 timeout/응답에 따라 처리하는 플로우다.
+
+**목표 플로우 (요구 방향)**
+
+| 단계 | 조건 | 동작 |
+|------|------|------|
+| 1 | 모르는 내용 | 모른다고 명시적으로 답변 |
+| 2 | 확인 필요 | "관련 내용 확인하겠으니 잠시만 기다려 주세요" → HITL로 Frontend 담당자에게 문의 (question, context, call_id, timeout) |
+| 3 | HITL timeout | "확인이 지연되고 있습니다. 확인되는 대로 연락 드리겠습니다." TTS 재생 후 통화 종료; Frontend에 timeout 피드백 |
+| 4 | HITL 응답 수신 | 담당자 답변 텍스트를 LLM에 "고객에게 전달할 문장으로 정리" 요청 후 TTS로 고객 안내 |
+| 0 | 지식 있음 | 기존처럼 RAG+LLM 응답만 사용 |
+
+**설계 요약**
+
+| 단계 | 조건 | 동작 |
+|------|------|------|
+| RAG/LLM | 검색 결과 없음 또는 confidence < 임계값 | "해당 내용은 확인이 필요합니다. 잠시만 기다려 주세요." + HITL 요청 발송 |
+| HITL | 담당자 응답 수신 (timeout 내) | 응답 텍스트를 LLM으로 고객용 문장 정리 후 TTS 재생 |
+| HITL | timeout | 정해진 문구 TTS 재생, 통화 종료, Frontend에 `hitl_timeout` 등 피드백 |
+| 사전 답변 | 지식 있음 | 기존 RAG+LLM 응답만 사용 |
+
+**구현 시 필요한 것**
+
+- **RAG/LLM 쪽**: confidence 또는 검색 점수/결과 없음 판단 시, 기존 HITL 요청 API와 동일한 형식으로 `hitl_requested` 이벤트 발생.
+- **HITL 응답 수신 시**: 해당 call_id에 대해 담당자 답변 텍스트를 LLM 한 번 거쳐 고객용 문장으로 정리한 뒤 TTS 재생.
+- **HITL timeout 시**: 정해진 문구 TTS 재생, 통화 종료, Frontend에 `hitl_timeout` 피드백 (기존 이벤트 활용).
+- **Frontend**: 담당자 입력 UI, timeout 표시/피드백은 기존 HITL 플로우와 통합.
+
+상세 설계: `docs/reports/TTS_RTP_AND_HITL_DESIGN.md`.
 
 ### 19.2 운영자 상태 관리 (신규 기능) ⭐
 
@@ -4208,25 +4288,909 @@ npm install wavesurfer.js
 
 **📄 관련 설계**: 섹션 21 참조
 
-### Phase 4: 고도화 (향후)
+### Phase 4: AI 인사말 + Capability 가이드 (구현 완료) ✅
+**기간: 1주 | 상태: 완료 (2026-01-29)**
+
+- ✅ 2-Phase AI 인사말 (고정 인사말 + VectorDB 기반 가이드 멘트)
+- ✅ VectorDB Capability 스키마 확장 (response_type, transfer_to, phone_display 등)
+- ✅ Capability CRUD REST API + Frontend 관리 UI
+- ✅ AI Orchestrator 인사말 흐름 통합
+
+### Phase 5: Knowledge Extraction v2 고도화 (구현 완료) ✅
+**기간: 1주 | 상태: 완료 (2026-01-29)**
+
+- ✅ 멀티스텝 추출 파이프라인 (요약 → QA 추출 → 엔티티 추출)
+- ✅ 품질 검증 (Hallucination Check + 중복 검증)
+- ✅ 자동 승인 로직 (confidence ≥ 0.9)
+- ✅ Extraction Review UI (Frontend)
+
+### Phase 6: AI 호 연결 (Call Transfer) (구현 완료) ✅
+**기간: 2주 | 상태: 구현 완료 (2026-02-13)**
+
+- ✅ TransferManager 핵심 클래스 (전환 생명주기 관리)
+- ✅ B2BUA Transfer INVITE 발신 + 응답 처리
+- ✅ RTP Relay Bridge 모드 (발신자↔서버↔착신자)
+- ✅ AI Orchestrator Transfer Intent 감지 (RAG response_type=transfer)
+- ✅ Transfer REST API + WebSocket 실시간 이벤트
+- ✅ Frontend 호 전환 이력 페이지
+
+### Phase 7: AI Outbound Call (구현 완료) ✅
+**기간: 2주 | 상태: 구현 완료 (2026-01-29)**
+
+- ✅ OutboundCallManager 핵심 클래스 (발신 콜 생명주기)
+- ✅ SIP Endpoint Outbound INVITE 발신 + 응답/BYE 처리
+- ✅ TaskTracker (확인 사항 진행 상태 추적)
+- ✅ AI Orchestrator Outbound Mode (목적지향 대화 + Structured Output)
+- ✅ Outbound REST API (`/api/outbound/`) + WebSocket 이벤트
+- ✅ Frontend UI (발신 요청 폼 + 이력 + 결과 상세)
+
+### Phase 8: 고도화 (향후)
 - 모바일 앱 (React Native)
 - 다국어 지원
 - 고급 분석 대시보드
 - CRM 연동
+- Attended Transfer (상담 후 전환)
+- Conference Call (3자 통화)
+- 예약 발신 / 대량 캠페인
+
+---
+
+## 23. AI 인사말 + Capability 가이드 시스템
+
+> **관련 설계서**: [ai-greeting-and-capability-guide.md](../design/ai-greeting-and-capability-guide.md)
+
+### 23.1 개요
+
+AI Voicebot의 인사말을 **2-Phase** 방식으로 개선하고, VectorDB 기반 Capability 관리 시스템을 도입하여 발신자에게 가능한 서비스를 안내한다.
+
+### 23.2 2-Phase AI 인사말 흐름
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    2-Phase Greeting                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Phase 1: 고정 인사말 (config.yaml)                          │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │ "안녕하세요, AI 비서입니다. 무엇을 도와드릴까요?" │       │
+│  └──────────────────────────────────────────────────┘       │
+│       │                                                      │
+│       │ (Phase 2를 병렬 생성)                                │
+│       ▼                                                      │
+│  Phase 2: 가이드 멘트 (VectorDB → LLM 요약)                 │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │ "저는 오시는길 안내, 주차 안내, 영업시간 안내,     │       │
+│  │  개발부서 호 연결을 도와드릴 수 있어요.            │       │
+│  │  어떤 것이 궁금하신가요?"                          │       │
+│  └──────────────────────────────────────────────────┘       │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 23.3 VectorDB Capability 스키마
+
+```python
+# doc_type = "capability"
+metadata = {
+    "doc_type": "capability",
+    "display_name": "개발부서 호 연결",       # 사용자에게 표시
+    "category": "transfer",                   # location, hours, transfer 등
+    "response_type": "info|api_call|transfer|collect",  # 동작 분기
+    "keywords": "개발부서,개발팀,개발",       # 검색 키워드 (쉼표 구분)
+    "priority": 5,                            # 가이드 멘트 순서
+    "is_active": True,                        # 활성/비활성
+    "transfer_to": "8001",                    # transfer 전용: 대상 번호
+    "phone_display": "8001",                  # transfer 전용: 표시 번호
+    "owner": "callee_username",               # 소유자 (착신자별 분리)
+}
+```
+
+### 23.4 response_type 별 동작 분기
+
+| response_type | 동작 | 예시 |
+|---------------|------|------|
+| `info` | RAG 검색 → LLM 답변 → TTS 발화 | "오시는길", "영업시간" |
+| `transfer` | RAG로 대상 확인 → TransferManager 위임 | "개발부서 연결" |
+| `api_call` | 외부 API 호출 → 결과 안내 (향후) | "예약 확인" |
+| `collect` | 정보 수집 대화 (향후) | "메시지 남기기" |
+
+### 23.5 구현 파일
+
+| 파일 | 역할 |
+|------|------|
+| `src/ai_voicebot/orchestrator/ai_orchestrator.py` | `play_greeting()` 2-Phase 구현, `_generate_capability_guide()` |
+| `src/services/knowledge_service.py` | `add_capability()`, `get_all_capabilities()` |
+| `src/api/routers/capabilities.py` | Capability CRUD REST API |
+| `frontend/app/capabilities/` | Capability 관리 UI (목록/추가/수정) |
+
+---
+
+## 24. Knowledge Extraction v2 (멀티스텝 파이프라인)
+
+> **관련 설계서**: [knowledge-extraction-upgrade.md](../design/knowledge-extraction-upgrade.md)
+
+### 24.1 개요
+
+기존 단일 LLM 호출 방식(v1)에서 **멀티스텝 파이프라인(v2)**으로 업그레이드하여 추출 정밀도와 품질을 향상시킨다.
+
+### 24.2 v1 vs v2 비교
+
+| 항목 | v1 (기존) | v2 (고도화) |
+|------|-----------|-------------|
+| 추출 방식 | 단일 LLM judge_usefulness | 멀티스텝 (요약 → QA → 엔티티) |
+| 품질 검증 | confidence ≥ 0.7만 체크 | Hallucination Check + 중복 검증 |
+| 카테고리 | 5종 하드코딩 | LLM 동적 분류 |
+| 청킹 | 고정 500자 | Semantic Chunking |
+| 자동 승인 | 없음 (전부 수동) | confidence ≥ 0.9 자동 승인 |
+
+### 24.3 v2 파이프라인
+
+```
+통화 종료 → WAV 녹음
+  → Google STT (화자 분리) → transcript.txt
+    → Step 1: 대화 요약 (summarize)
+      → Step 2: QA 쌍 추출 (qa_extract)
+        → Step 3: 엔티티 추출 (entity_extract)
+          → 품질 검증 (hallucination_check + deduplication)
+            → confidence ≥ 0.9: 자동 승인 → VectorDB upsert
+            → confidence < 0.9: Extraction Review Queue → Frontend에서 수동 승인/거절
+```
+
+### 24.4 지식 정제 (Knowledge Refinement)
+
+> **관련 설계서**: [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md), [USEFULNESS_JUDGMENT_DESIGN.md](../reports/USEFULNESS_JUDGMENT_DESIGN.md)
+
+- **목적**: 통화 종료 후 전사를 분석해 VectorDB에 저장할 지식(통화정보 중 지식정보)을 정제하여, 노이즈 저장을 줄이고 FAQ/지식 품질을 유지한다.
+- **파이프라인 위치**: 정규 통화(사람–사람) 종료 후 — 녹음/전사 완료 → Knowledge Extractor가 **전체 전사** 로드 → `judge_usefulness(transcript=전체전사, speaker=callee, call_id)` 호출. LLM에는 **전체 전사(발신자+착신자)** 를 맥락으로 전달하고, **저장 후보는 착신자(callee) 발화만** 추출. (AI 통화는 정책에 따라 스킵 가능.)
+
+**입력**
+
+| 항목 | 타입 | 설명 |
+|------|------|------|
+| `transcript` | string | **전체 전사**(발신자+착신자). 맥락 파악용. 길이 제한: `judgment_max_input_chars`(기본 6000자). |
+| `speaker` | string | `"caller"` \| `"callee"` \| `"both"` (로깅·메타데이터·저장 대상 지정: 저장은 착신자만) |
+| `call_id` | string | 통화 ID (로그·CDR·저장 메타데이터 연계용) |
+
+**출력 스키마 (Judgment Result)**
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `is_useful` | boolean | ✅ | 저장할 가치가 있으면 `true` |
+| `confidence` | float [0, 1] | ✅ | 판단 신뢰도 (예: `min_confidence` 미만 시 저장 스킵) |
+| `reason` | string | ✅ | 판단 이유 (50자 이내 권장) |
+| `extracted_info` | array | ✅ | 추출 정보 목록; 비어 있으면 호출 측에서 전체 텍스트 청킹 등 폴백 가능 |
+| `extracted_info[].text` | string | ✅ | 저장 후보 텍스트 (원문에 명시된 내용만, 환각 금지) |
+| `extracted_info[].category` | string | ✅ | 아래 카테고리 Enum 중 하나 |
+| `extracted_info[].keywords` | string[] | 권장 | 검색·필터링용 키워드 |
+| `extracted_info[].contains_pii` | boolean | 선택 | 개인정보 포함 여부 (익명화/검토 대상 플래그용) |
+
+**카테고리 Enum**
+
+| 값 | 설명 |
+|----|------|
+| `FAQ` | 재사용 가능한 질문·답변 쌍 |
+| `이슈해결` | 문의/불만에 대한 해결 방법·다음 단계가 명확한 경우 |
+| `약속` | 일시·장소·담당자 등 구체적 약속 |
+| `정보` | 영업시간, 절차, 조건 등 사실 정보 |
+| `지시` | 업무 지시, "항상 A로 해주세요" 등 |
+| `선호도` | "B는 싫어합니다" 등 재사용 가능한 선호 |
+| `기타` | 위에 해당하지 않으나 재사용 가능한 정보 |
+
+**판단 기준 요약**
+
+- **유용하다고 판단할 경우 (`is_useful = true`)**: 실행 가능한 Q&A, 재사용 가능한 FAQ, 이슈 해결 내용, 약속·일정·연락처, 업무 지시·선호도 등.
+- **유용하지 않다고 판단할 경우 (`is_useful = false`)**: PII만 있는 경우, 인사·맥락만, 미해결·유보만, 원문에 없는 환각 금지(원문에 명시된 내용만 추출).
+
+**설정**
+
+| 설정 | 권장값 | 설명 |
+|------|--------|------|
+| `judgment_max_input_chars` | 6000 (기본) | LLM에 전달하는 전체 전사 길이 제한. 긴 통화 시 앞부분만 전달해 토큰/비용·지연 제어. |
+| `judgment_max_output_tokens` | 1024 이상 (필요 시 2048) | JSON 잘림 방지; `reason` 50자 이내 유지 시 토큰 증가 제한적 |
+| `temperature` (judgment 전용) | 0.2 ~ 0.3 | 일관된 판단·JSON 형식 유지 |
+| `min_confidence` (호출 측) | 0.7 등 | 이 값 미만이면 저장 스킵 |
+
+**실패·잘림 처리**
+
+- **JSON 파싱 실패**: 기본값 반환 `{ "is_useful": false, "confidence": 0.0, "reason": "...", "extracted_info": [] }` → 저장 스킵, 로그로 원인 추적.
+- **응답 잘림 (finish_reason = MAX_TOKENS)**: `judgment_max_output_tokens` 상향; `reason` 50자 이내 제한; 필요 시 재시도 1회 후 실패하면 위 기본값 적용.
+
+**향후 확장 (참고)**
+
+- **누적 기반 추출**: 여러 통화에서 동일/유사 주제 클러스터링 후 요약·중복 제거하여 지식 저장.
+- **검토 워크플로**: 추출 결과를 UI로 검토(승인/수정/거절)한 뒤 VectorDB 반영.
+
+### 24.5 설정 (config.yaml)
+
+```yaml
+ai_voicebot:
+  recording:
+    knowledge_extraction:
+      enabled: true
+      version: "v2"
+      steps:
+        summarize: true
+        qa_extract: true
+        entity_extract: true
+      quality:
+        min_confidence: 0.7
+        hallucination_check: true
+        deduplication: true
+        dedup_threshold: 0.92
+      auto_approve:
+        enabled: true
+        min_confidence: 0.9
+```
+
+### 24.6 구현 파일
+
+| 파일 | 역할 |
+|------|------|
+| `src/ai_voicebot/knowledge/knowledge_extractor.py` | v1/v2 추출 파이프라인 |
+| `src/services/knowledge_service.py` | Extraction Review Queue 관리 |
+| `src/api/routers/extractions.py` | Extraction Review REST API |
+| `frontend/app/extractions/page.tsx` | Extraction Review UI (승인/거절) |
+
+---
+
+## 25. AI 호 연결 (Call Transfer) 시스템
+
+> **관련 설계서**: [ai-call-transfer.md](../design/ai-call-transfer.md)
+
+### 25.1 개요
+
+AI Voicebot이 발신자의 요청에 따라 특정 부서/담당자에게 **호를 연결(Transfer)**하는 기능. B2BUA 기반 3자 호 제어(RFC 3725 3pcc 패턴)로 미디어 경로를 **발신자 ↔ 서버 ↔ 착신자**로 유지한다.
+
+### 25.2 시스템 아키텍처
+
+```
+┌──────────┐                ┌────────────────────────────────────┐              ┌──────────┐
+│  Caller  │  ←── RTP ──→  │          SIP PBX Server            │  ←── RTP ──→ │ Transfer │
+│  (발신자) │                │  ┌─────────────────────────────┐   │              │  Target  │
+│          │  ←── SIP ──→  │  │  AI Orchestrator            │   │  ←── SIP ──→ │ (착신자) │
+└──────────┘                │  │  ├─ RAG: transfer intent 감지│   │              └──────────┘
+                            │  │  └─ TTS: 안내 멘트 재생      │   │
+                            │  ├─────────────────────────────┤   │
+                            │  │  TransferManager (NEW)      │   │
+                            │  │  ├─ initiate_transfer()     │   │
+                            │  │  ├─ on_transfer_answered()  │   │
+                            │  │  └─ on_bye_received()       │   │
+                            │  ├─────────────────────────────┤   │
+                            │  │  RTPRelayWorker             │   │
+                            │  │  ├─ AI Mode → Bridge Mode   │   │
+                            │  │  └─ Caller ↔ Server ↔ Callee│   │
+                            │  └─────────────────────────────┘   │
+                            └────────────────────────────────────┘
+```
+
+### 25.3 전환 상태 머신
+
+```
+                         ┌───────────────────┐
+                         │    AI_MODE        │  발신자와 AI 대화 중
+                         │    (기존 상태)     │
+                         └────────┬──────────┘
+                                  │ "개발부서 연결해줘"
+                                  │ (RAG: response_type=transfer, score≥0.75)
+                                  ▼
+                         ┌───────────────────┐
+                         │ TRANSFER_ANNOUNCE │  안내 멘트 TTS 재생
+                         │                   │  "개발부서로 전화 연결하겠습니다..."
+                         └────────┬──────────┘
+                                  │ INVITE 발신
+                                  ▼
+                         ┌───────────────────┐
+            ┌──timeout──►│ TRANSFER_RINGING  │  착신 대기 (30초)
+            │            │                   │  대기 안내 재생
+            │            └────────┬──────────┘
+            │                     │ 200 OK
+            ▼                     ▼
+   ┌────────────────┐   ┌───────────────────┐
+   │ TRANSFER_FAILED│   │   TRANSFERRED     │  Bridge 모드
+   │                │   │                   │  Caller ↔ Server ↔ Callee
+   │ AI 모드 복귀   │   │                   │
+   └────────────────┘   └───────────────────┘
+```
+
+### 25.4 핵심 컴포넌트
+
+#### 25.4.1 TransferManager (`src/sip_core/transfer_manager.py`)
+
+```python
+class TransferManager:
+    """B2BUA Transfer 생명주기 관리"""
+    
+    active_transfers: Dict[str, TransferRecord]   # call_id → 전환 기록
+    transfer_leg_map: Dict[str, str]              # transfer_leg_call_id → call_id
+    
+    async def initiate_transfer(call_id, transfer_to, department_name, ...)
+    async def on_transfer_answered(transfer_leg_call_id, callee_sdp)
+    async def on_transfer_rejected(transfer_leg_call_id, status_code)
+    async def on_bye_received(leg_call_id, initiator)
+    async def cancel_transfer(call_id, reason)
+```
+
+#### 25.4.2 TransferRecord (`src/sip_core/models/transfer.py`)
+
+```python
+@dataclass
+class TransferRecord:
+    transfer_id: str          # "xfer-abc123"
+    call_id: str              # 원래 호 ID
+    transfer_leg_call_id: str # 전환 레그 Call-ID
+    department_name: str      # "개발부서"
+    transfer_to: str          # "8001" or "sip:8001@pbx"
+    phone_display: str        # "8001"
+    state: TransferState      # ANNOUNCE → RINGING → CONNECTED/FAILED
+    initiated_at: datetime
+    connected_at: datetime
+    duration_seconds: int
+```
+
+#### 25.4.3 RTP Relay Bridge 모드 (`src/media/rtp_relay.py`)
+
+```python
+class RelayMode:
+    BYPASS = "bypass"    # 기존: Caller ↔ Callee
+    AI = "ai"            # 기존: Caller ↔ AI
+    BRIDGE = "bridge"    # 신규: Caller ↔ Server ↔ New Callee
+    HOLD = "hold"        # 신규: 대기 상태
+
+class RTPRelayWorker:
+    async def set_bridge_mode(callee_ip, callee_rtp_port, bridge_rtp_port)
+    async def stop_bridge_mode()
+```
+
+Bridge 모드 패킷 흐름:
+```
+Caller Audio RTP →  caller_audio_rtp 소켓 수신
+                    → bridge_callee_transport.sendto(data, callee_addr)
+
+Callee Audio RTP →  bridge_callee_rtp 소켓 수신
+                    → caller_audio_transport.sendto(data, caller_addr)
+```
+
+### 25.5 SDP 구성 (검증 완료)
+
+Transfer INVITE의 SDP는 **AI 200 OK SDP (단말 테스트 완료)**와 동일한 형식을 사용:
+
+```
+v=0
+o=- {session_id} {session_version} IN IP4 {b2bua_ip}
+s=Talk
+c=IN IP4 {b2bua_ip}
+t=0 0
+m=audio {bridge_port} RTP/AVP 0 8 101
+a=rtpmap:101 telephone-event/8000
+a=rtcp:{bridge_rtcp_port}
+```
+
+- `s=Talk`: 단말 호환성 검증 완료 값
+- PT 0/8: well-known static type (RFC 3551) → rtpmap 생략
+- `sendrecv`: RFC 3264 기본값 → 생략
+- `a=rtcp`: RFC 3605 명시적 RTCP 포트
+
+### 25.6 AI Intent 감지 흐름
+
+```python
+# ai_orchestrator.py - generate_and_speak_response()
+
+documents = await self.rag.search(query=user_text, ...)
+top_doc = documents[0]
+
+response_type = top_doc.metadata.get('response_type', 'info')
+similarity_score = top_doc.score
+
+if response_type == "transfer" and similarity_score >= 0.75:
+    # Transfer Intent → TransferManager에 위임
+    await self._handle_transfer_intent(user_text, top_doc)
+else:
+    # 일반 응답 → LLM → TTS
+    response = await self.llm.generate_response(...)
+    await self.speak(response)
+```
+
+### 25.7 API 엔드포인트
+
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/transfers/` | 전환 목록 (활성 + 이력) |
+| GET | `/api/transfers/active` | 활성 전환만 조회 |
+| GET | `/api/transfers/stats` | 전환 통계 (성공률, 평균 링 시간) |
+| GET | `/api/transfers/{id}` | 개별 전환 상세 |
+
+### 25.8 WebSocket 이벤트
+
+| 이벤트 | 트리거 |
+|--------|--------|
+| `transfer_initiated` | 전환 시작 (안내 멘트) |
+| `transfer_ringing` | INVITE 발신 완료 |
+| `transfer_connected` | 착신자 응답 (Bridge 활성) |
+| `transfer_failed` | 실패 (timeout, reject) |
+| `transfer_ended` | 종료 (BYE) |
+
+### 25.9 설정 (config.yaml)
+
+```yaml
+ai_voicebot:
+  transfer:
+    enabled: true
+    ring_timeout: 30
+    announcement_mode: "template"
+    announcement_template: >
+      {department}로 전화 연결하겠습니다.
+      연결되는 전화번호는 {phone}입니다.
+      연결되는 동안 잠시만 기다려주세요.
+    waiting_message: "연결 중입니다. 잠시만 기다려주세요."
+    retry_enabled: true
+    max_retries: 2
+    min_similarity_threshold: 0.75
+```
+
+### 25.10 구현 파일 목록
+
+| 파일 | 역할 | 상태 |
+|------|------|------|
+| `src/sip_core/models/enums.py` | `TransferState` enum 추가 | ✅ |
+| `src/sip_core/models/transfer.py` | `TransferRecord` 데이터 모델 | ✅ New |
+| `src/sip_core/transfer_manager.py` | TransferManager 핵심 클래스 | ✅ New |
+| `src/sip_core/sip_endpoint.py` | Transfer INVITE/ACK/BYE/CANCEL 발신, 응답 처리, Bridge 전환 | ✅ |
+| `src/media/rtp_relay.py` | `RelayMode`, `set_bridge_mode()`, Bridge 패킷 라우팅 | ✅ |
+| `src/ai_voicebot/orchestrator/ai_orchestrator.py` | Transfer intent 감지, `_handle_transfer_intent()` | ✅ |
+| `src/sip_core/call_manager.py` | TransferManager ↔ AI Orchestrator 연결 | ✅ |
+| `src/config/models.py` | `TransferConfig` 모델 | ✅ |
+| `config/config.yaml` | `ai_voicebot.transfer` 섹션 | ✅ |
+| `src/api/routers/transfers.py` | Transfer REST API | ✅ New |
+| `src/api/main.py` | `/api/transfers` 라우터 등록 | ✅ |
+| `src/api/models.py` | `phone_display` 필드 추가 | ✅ |
+| `src/services/knowledge_service.py` | `phone_display` 메타데이터 지원 | ✅ |
+| `src/api/routers/capabilities.py` | 개발부서 시드 데이터 + `phone_display` | ✅ |
+| `frontend/app/transfers/page.tsx` | 호 전환 이력 페이지 | ✅ New |
+| `frontend/app/dashboard/page.tsx` | 네비게이션에 "호 전환" 추가 | ✅ |
+| `frontend/app/capabilities/add/page.tsx` | 표시 번호 입력 필드 추가 | ✅ |
 
 ---
 
 **문서 작성 완료**
 
-이 아키텍처 문서는 현재 IP-PBX 시스템을 기반으로 **AI 실시간 통화 응대 시스템 + Frontend Control Center + Human-in-the-Loop**를 확장 구현하기 위한 완전한 기술 청사진입니다.
+이 아키텍처 문서는 현재 IP-PBX 시스템을 기반으로 **AI 실시간 통화 응대 시스템 + Frontend Control Center + Human-in-the-Loop + AI 호 연결 + AI Outbound Call**을 확장 구현하기 위한 완전한 기술 청사진입니다.
 
 ### 📚 관련 문서
 
-- 📄 **[Voice AI Conversation Engine 상세설계서](voice-ai-conversation-engine.md)** - Pipecat + Smart Turn + LangGraph Agentic RAG 통합 설계 ⭐ NEW
+- 📄 **[Voice AI Conversation Engine 상세설계서](voice-ai-conversation-engine.md)** - Pipecat + Smart Turn + LangGraph Agentic RAG 통합 설계
 - 📄 **[Technical Architecture](technical-architecture.md)** - 인프라/배포/보안/모니터링 기술 아키텍처
 - 📄 **[Frontend Architecture 상세](frontend-architecture.md)** - 웹 콘솔 전체 설계
-- 📄 **[Gemini Model Comparison](gemini-model-comparison.md)** - Flash vs Pro 비교
-- 📄 **[Response Time Analysis](ai-response-time-analysis.md)** - 성능 분석
+- 📄 **[AI 호 연결 설계서](../design/ai-call-transfer.md)** - Call Transfer 상세 설계 (B2BUA 3pcc, 시퀀스, Edge Case)
+- 📄 **[AI 인사말 + Capability 가이드 설계서](../design/ai-greeting-and-capability-guide.md)** - 2-Phase Greeting + VectorDB Capability
+- 📄 **[Knowledge Extraction v2 설계서](../design/knowledge-extraction-upgrade.md)** - 멀티스텝 추출 파이프라인
+- 📄 **[AI Outbound Call 설계서](../design/ai-outbound-call.md)** - 목적지향 AI 발신, TaskTracker, OutboundCallManager
+- 📄 **[Gemini Model Comparison](../guides/gemini-model-comparison.md)** - Flash vs Pro 비교
+- 📄 **[Response Time Analysis](../analysis/ai-response-time-analysis.md)** - 성능 분석
 
-**질문이 있으시거나 특정 섹션을 더 상세히 설명해드려야 할 부분이 있으면 말씀해주세요!** 🏗️
+---
+
+## 26. AI Outbound Call 시스템
+
+> **관련 설계서**: [ai-outbound-call.md](../design/ai-outbound-call.md)
+
+### 26.1 개요
+
+AI Outbound Call은 **서버가 주도적으로 고객에게 전화를 걸어 특정 목적의 대화를 수행**하는 기능입니다.
+운영자가 웹 UI에서 발신번호, 착신번호, 통화 목적, 확인 사항을 입력하면 AI가 자동으로 전화를 걸어 목적지향 대화를 수행하고, 결과(답변, 대화록, 요약)를 웹에서 확인할 수 있습니다.
+
+### 26.2 핵심 특징
+
+| 구분 | 설명 |
+|------|------|
+| **Server-Initiated Call** | SIP INVITE를 서버에서 직접 발신 (기존 Transfer와 동일 SDP 형식 재활용) |
+| **Goal-Oriented Dialogue** | LLM Structured Output으로 태스크 완료 자동 감지 |
+| **TaskTracker** | 확인 사항별 상태 추적 (pending → answered/refused) |
+| **자동 재시도** | 미응답/통화중 시 설정에 따라 자동 재발신 |
+| **결과 웹 조회** | 답변 결과, AI 요약, 전체 대화록을 웹 UI에서 확인 |
+
+### 26.3 아키텍처
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    AI Outbound Call Flow                       │
+├──────────────────────────────────────────────────────────────┤
+│                                                                │
+│  [Web UI]  POST /api/outbound/                                │
+│     │                                                          │
+│     ▼                                                          │
+│  [OutboundCallManager]                                        │
+│     │  ● 대기열 관리                                           │
+│     │  ● 동시 콜 수 제한                                       │
+│     │  ● 자동 재시도                                           │
+│     ▼                                                          │
+│  [SIPEndpoint.send_outbound_invite()]                         │
+│     │  ● INVITE 발신 (검증된 SDP)                              │
+│     │  ● 180/200/4xx 응답 처리                                 │
+│     ▼                                                          │
+│  200 OK → [AI Orchestrator (Outbound Mode)]                   │
+│     │  ● 인사말 + 목적 전달                                    │
+│     │  ● 확인 사항 순차 질문                                    │
+│     │  ● [TASK_STATE] JSON으로 진행률 추적                     │
+│     │  ● 태스크 완료 시 끝인사 → BYE                           │
+│     ▼                                                          │
+│  [OutboundCallResult]                                         │
+│     │  ● answers: 확인 사항별 응답                              │
+│     │  ● transcript: 전체 대화록                                │
+│     │  ● summary: AI 생성 요약                                  │
+│     ▼                                                          │
+│  [Web UI]  GET /api/outbound/{id}/result                      │
+│                                                                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 26.4 핵심 컴포넌트
+
+#### OutboundCallManager (`src/sip_core/outbound_manager.py`)
+- 발신 콜 전체 생명주기 관리 (QUEUED → DIALING → RINGING → CONNECTED → COMPLETED)
+- 대기열 + 동시 통화 수 제한 (기본 5개)
+- 링 타임아웃 (30초) + 최대 통화 시간 (5분) 타이머
+- 자동 재시도 (미응답/통화중, 최대 2회, 5분 간격)
+- SIP Endpoint / AI Orchestrator와 콜백 패턴으로 연동
+
+#### TaskTracker (`src/ai_voicebot/orchestrator/task_tracker.py`)
+- 확인 사항별 상태 추적: `pending` → `answered` / `unclear` / `refused`
+- LLM 응답의 `[TASK_STATE]...[/TASK_STATE]` 태그 파싱
+- 모든 사항 완료(answered/refused) 시 `is_all_completed()` = True
+- `strip_task_tags()`로 TTS 재생 전 태그 제거
+
+#### AI Orchestrator Outbound Mode (`src/ai_voicebot/orchestrator/ai_orchestrator.py`)
+- `handle_outbound_call()`: 아웃바운드 전용 대화 루프
+- `_build_outbound_system_prompt()`: 목적/확인 사항/규칙/[TASK_STATE] JSON 형식 포함
+- `_generate_outbound_response()`: LLM 응답 생성 + TaskTracker 업데이트 + 완료 감지
+- `_finalize_outbound()`: 통화 요약 생성 + OutboundCallManager에 결과 통보
+- `get_partial_outbound_result()`: 상대방이 먼저 끊었을 때 부분 결과 수집
+
+### 26.5 SDP 구성
+
+기존 Transfer INVITE와 동일한 **검증된 SDP** 형식을 재활용합니다:
+
+```
+v=0
+o=- {session_id} {session_id} IN IP4 {b2bua_ip}
+s=Talk
+c=IN IP4 {b2bua_ip}
+t=0 0
+m=audio {media_port} RTP/AVP 0 8 101
+a=rtpmap:101 telephone-event/8000
+a=rtcp:{rtcp_port}
+```
+
+### 26.6 데이터 모델
+
+```python
+# src/sip_core/models/outbound.py
+
+class OutboundCallState(str, Enum):
+    QUEUED = "queued"        # 대기열
+    DIALING = "dialing"      # INVITE 발신 중
+    RINGING = "ringing"      # 180 수신
+    CONNECTED = "connected"  # 200 OK, AI 대화 중
+    COMPLETED = "completed"  # 정상 완료
+    NO_ANSWER = "no_answer"  # 미응답
+    BUSY = "busy"            # 486
+    REJECTED = "rejected"    # 603
+    FAILED = "failed"        # 오류
+    CANCELLED = "cancelled"  # 취소
+
+@dataclass
+class OutboundCallRecord:
+    outbound_id: str          # "ob-xxxxxxxx"
+    call_id: str              # SIP Call-ID
+    caller_number: str
+    callee_number: str
+    purpose: str
+    questions: List[str]
+    state: OutboundCallState
+    result: Optional[OutboundCallResult]
+    attempt_count: int
+    ...
+
+@dataclass
+class OutboundCallResult:
+    answers: List[QuestionAnswer]   # 확인 사항별 응답
+    summary: str                     # AI 생성 요약
+    task_completed: bool             # 모든 사항 수집 완료
+    transcript: List[TranscriptEntry]  # 대화록
+    duration_seconds: int
+    ai_turns: int
+    customer_turns: int
+```
+
+### 26.7 LLM 시스템 프롬프트 (Goal-Oriented)
+
+```
+당신은 {display_name}의 AI 비서입니다.
+고객에게 전화를 걸어 아래 목적과 확인 사항을 처리해야 합니다.
+
+## 통화 목적
+{purpose}
+
+## 확인해야 할 사항
+  1. {question_1}
+  2. {question_2}
+  ...
+
+## 대화 규칙
+1. 확인 사항을 하나씩 자연스럽게 질문하세요.
+2. 답변이 불명확하면 정중하게 다시 확인하세요.
+3. 모든 확인 사항에 대한 답변을 받으면 감사 인사 후 마무리하세요.
+...
+
+## 응답 시 내부 태스크 상태
+[TASK_STATE]{"questions": [{"id": "q1", "status": "answered", "answer": "답변 요약"}], "all_completed": false, "should_end_call": false}[/TASK_STATE]
+```
+
+### 26.8 API 엔드포인트
+
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| `POST` | `/api/outbound/` | 아웃바운드 콜 생성 |
+| `GET` | `/api/outbound/` | 콜 목록 (활성 + 이력) |
+| `GET` | `/api/outbound/active` | 활성 콜만 조회 |
+| `GET` | `/api/outbound/stats` | 통계 |
+| `GET` | `/api/outbound/{id}` | 개별 콜 상세 |
+| `GET` | `/api/outbound/{id}/result` | 통화 결과 (답변 + 대화록 + 요약) |
+| `POST` | `/api/outbound/{id}/cancel` | 콜 취소 |
+| `POST` | `/api/outbound/{id}/retry` | 재시도 |
+
+### 26.9 WebSocket 이벤트
+
+| 이벤트 | 설명 |
+|--------|------|
+| `outbound_queued` | 대기열에 추가됨 |
+| `outbound_dialing` | INVITE 발신 시작 |
+| `outbound_ringing` | 180 Ringing 수신 |
+| `outbound_connected` | 200 OK → AI 대화 시작 |
+| `outbound_completed` | 통화 정상 완료 |
+| `outbound_failed` | 발신 실패 |
+| `outbound_cancelled` | 운영자 취소 |
+| `outbound_retry_scheduled` | 자동 재시도 예정 |
+
+### 26.10 config.yaml 설정
+
+```yaml
+ai_voicebot:
+  outbound:
+    enabled: true
+    max_concurrent_calls: 5
+    ring_timeout: 30
+    max_call_duration: 300
+    retry:
+      enabled: true
+      max_retries: 2
+      retry_interval: 300
+      retry_on: ["no_answer", "busy"]
+    ai:
+      greeting_template: "안녕하세요, {display_name} AI 비서입니다. {purpose} 관련하여 연락드렸습니다."
+      closing_template: "확인 감사합니다. 좋은 하루 되세요."
+      max_turns: 20
+      task_completion_check: true
+    result:
+      save_transcript: true
+      save_recording: true
+      generate_summary: true
+```
+
+### 26.11 Transfer vs Outbound 비교
+
+| 항목 | Transfer (호 전환) | Outbound (AI 발신) |
+|------|-------------------|-------------------|
+| **트리거** | AI가 사용자 의도 감지 | 운영자가 웹 UI에서 요청 |
+| **원래 호** | 있음 (발신자-서버) | 없음 (서버가 직접 발신) |
+| **AI 역할** | 안내 후 Bridge 모드 전환 | 전체 통화를 목적지향 대화로 수행 |
+| **미디어** | AI → Bridge (발신자↔착신자) | AI 모드 유지 (서버↔고객) |
+| **대화 목표** | 없음 (연결이 목표) | 확인 사항 수집 + 태스크 완료 |
+| **결과** | 연결 성공/실패 | 답변 + 대화록 + AI 요약 |
+| **재시도** | 선택적 (max_retries) | 자동 (미응답/통화중) |
+| **BYE 주체** | 발신자 또는 착신자 | AI (태스크 완료 시) |
+
+### 26.12 구현 파일 목록
+
+**Backend:**
+- `src/sip_core/models/enums.py` - OutboundCallState enum 추가
+- `src/sip_core/models/outbound.py` - 데이터 모델 (OutboundCallRecord, OutboundCallResult, QuestionAnswer, TranscriptEntry)
+- `src/sip_core/outbound_manager.py` - OutboundCallManager 핵심 클래스
+- `src/sip_core/sip_endpoint.py` - send_outbound_invite/cancel/bye, handle_outbound_response 추가
+- `src/sip_core/call_manager.py` - OutboundCallManager ↔ AI Orchestrator 연결
+- `src/ai_voicebot/orchestrator/task_tracker.py` - TaskTracker 클래스
+- `src/ai_voicebot/orchestrator/ai_orchestrator.py` - Outbound 모드 확장 (handle_outbound_call 등)
+- `src/config/models.py` - OutboundConfig, OutboundRetryConfig, OutboundAIConfig
+- `config/config.yaml` - outbound 섹션 추가
+- `src/api/routers/outbound.py` - REST API 엔드포인트
+- `src/api/main.py` - outbound 라우터 등록
+
+**Frontend:**
+- `frontend/app/outbound/page.tsx` - 아웃바운드 콜 이력 페이지
+- `frontend/app/outbound/new/page.tsx` - 새 발신 요청 폼
+- `frontend/app/outbound/[outbound_id]/page.tsx` - 통화 결과 상세 페이지
+- `frontend/app/dashboard/page.tsx` - 네비게이션에 "AI 발신" 링크 추가
+
+---
+
+## 27. 멀티테넌트 RAG 아키텍처 (Multi-Tenant)
+
+> **구현 완료**: 2026-02-13  
+> **설계 문서**: `docs/design/multi-tenant-rag-and-dashboard.md`
+
+### 27.1 개요
+
+하나의 SIP PBX 시스템에서 여러 조직(테넌트)을 동시에 지원하는 멀티테넌트 아키텍처입니다. 각 테넌트는 **SIP 착신번호(callee)를 `owner` 식별자**로 사용하여 데이터를 완전히 격리합니다.
+
+**핵심 변경 사항**:
+- `OrganizationInfoManager`를 JSON 파일 기반에서 **VectorDB(ChromaDB) 기반**으로 전환
+- LangGraph ConversationState에 `_owner` 필드 추가
+- 모든 RAG 검색에 `owner_filter` 적용
+- Frontend 전체 페이지에 테넌트 필터 적용
+- Seed data 시스템으로 초기 테넌트 자동 생성
+
+### 27.2 테넌트 식별 흐름
+
+```
+SIP INVITE (to 1003) 
+  → CallManager: callee = "1003"
+    → PipelineBuilder: owner = callee = "1003"
+      → create_org_manager(owner="1003", knowledge_service)
+        → VectorDB에서 tenant_config WHERE owner="1003" 조회
+        → VectorDB에서 capabilities WHERE owner="1003" 조회
+      → RAGLLMProcessor(owner="1003")
+        → ConversationAgent(owner="1003")
+          → LangGraph state._owner = "1003"
+            → adaptive_rag_node: search(owner_filter="1003")
+            → step_back_node: search(owner_filter="1003")
+```
+
+### 27.3 OrganizationInfoManager 리팩토링
+
+**Before (v4.0)**: JSON 파일 기반 싱글톤
+```python
+# data/organization_info.json 을 읽어서 설정 제공
+class OrganizationInfoManager:
+    _instance = None  # 싱글톤
+    def __init__(self, json_path="data/organization_info.json"):
+        self.data = json.load(open(json_path))
+```
+
+**After (v5.0)**: VectorDB 기반, 테넌트별 동적 생성
+```python
+# src/ai_voicebot/knowledge/organization_info.py
+class OrganizationInfoManager:
+    def __init__(self, owner: str, knowledge_service):
+        self.owner = owner
+        self.knowledge_service = knowledge_service
+        # 인스턴스마다 다른 테넌트 데이터 보유
+
+async def create_org_manager(owner: str, knowledge_service) -> OrganizationInfoManager:
+    """비동기 팩토리 함수: VectorDB에서 테넌트 설정 로드"""
+    manager = OrganizationInfoManager(owner, knowledge_service)
+    
+    # 1. tenant_config 컬렉션에서 조직 설정 로드
+    config = knowledge_service.get_tenant_config(owner)
+    manager.org_name = config["org_name"]
+    manager.greeting_templates = config["greeting_templates"]
+    manager.system_prompt = config["system_prompt"]
+    
+    # 2. capabilities 컬렉션에서 AI 기능 로드
+    caps = knowledge_service.get_capabilities(owner)
+    manager.capabilities = caps
+    
+    return manager
+```
+
+### 27.4 LangGraph 멀티테넌트 확장
+
+```python
+# src/ai_voicebot/langgraph/state.py
+class ConversationState(TypedDict):
+    messages: Annotated[list, add_messages]
+    user_input: str
+    ai_response: str
+    confidence: float
+    rag_results: list
+    _owner: str  # 멀티테넌트: callee ID (NEW)
+
+# src/ai_voicebot/langgraph/nodes/adaptive_rag.py
+async def adaptive_rag_node(state: ConversationState):
+    owner = state.get("_owner", "")
+    results = await rag_engine.search(
+        query=state["user_input"],
+        owner_filter=owner  # 테넌트별 데이터만 검색
+    )
+    return {"rag_results": results, "confidence": calc_confidence(results)}
+
+# src/ai_voicebot/langgraph/nodes/step_back_prompt.py
+async def step_back_node(state: ConversationState):
+    owner = state.get("_owner", "")
+    results = await rag_engine.search(
+        query=step_back_query,
+        owner_filter=owner  # 테넌트별 데이터만 검색
+    )
+    return {"rag_results": results}
+```
+
+### 27.5 VectorDB 컬렉션 구조
+
+| 컬렉션 | 용도 | owner 필수 | 주요 필드 |
+|--------|------|-----------|----------|
+| `tenant_config` | 테넌트 조직 설정 | Yes | org_name, greeting_templates, system_prompt, language |
+| `capabilities` | AI 응대 가능 기능 | Yes | capability_name, description |
+| `knowledge` | 지식 베이스 (Q&A) | Yes | question, answer, type, source |
+| `faq` | 자주 묻는 질문 | Yes | question, answer |
+
+### 27.6 Seed Data (초기 테넌트)
+
+서버 시작 시 `seed_data.py`가 자동 실행되어 아래 테넌트를 시딩합니다:
+
+| owner | 조직명 | 언어 | 기능 |
+|-------|-------|------|------|
+| `1003` | 이탈리안 비스트로 | ko | 메뉴 안내, 예약, 영업시간, 위치, 주차 |
+| `1004` | 한국 기상청 | ko | 현재 날씨, 주간 예보, 기상 특보, 미세먼지, 자외선 지수 |
+
+시딩 후 **legacy data cleanup**: `owner` 필드가 없는 기존 문서를 자동 삭제합니다.
+
+### 27.7 API 멀티테넌트 지원
+
+**신규 API**:
+- `GET /api/tenants` - 전체 테넌트 목록
+- `GET /api/tenants/{owner}` - 특정 테넌트 설정 조회
+- `PUT /api/tenants/{owner}` - 테넌트 설정 수정
+- `POST /api/auth/login` - 내선번호 기반 로그인
+
+**기존 API 확장** (owner/callee 파라미터 추가):
+- `GET /api/knowledge?owner={owner}`
+- `GET /api/call-history?callee={callee}`
+- `GET /api/extractions/?owner={owner}`
+- `GET /api/extractions/stats?owner={owner}`
+- `GET /api/ai-services?owner={owner}`
+
+### 27.8 Frontend 멀티테넌트 지원
+
+**인증 방식**: 내선번호(Extension) 기반 로그인
+```
+로그인 → POST /api/auth/login {extension: "1003"}
+       → 응답: {owner: "1003", name: "이탈리안 비스트로", ...}
+       → localStorage.setItem('tenant', JSON.stringify(response))
+```
+
+**페이지별 테넌트 필터링**:
+```typescript
+// 모든 페이지 공통 패턴
+const tenantStr = localStorage.getItem('tenant');
+const tenant = tenantStr ? JSON.parse(tenantStr) : null;
+
+// API 호출 시 owner 파라미터 전달
+const response = await fetch(`/api/knowledge?owner=${tenant.owner}`);
+```
+
+### 27.9 구현 파일 목록
+
+**Backend:**
+- `src/ai_voicebot/knowledge/organization_info.py` - VectorDB 기반 OrganizationInfoManager
+- `src/ai_voicebot/langgraph/state.py` - ConversationState에 `_owner` 추가
+- `src/ai_voicebot/langgraph/agent.py` - owner 주입
+- `src/ai_voicebot/langgraph/nodes/adaptive_rag.py` - owner_filter 적용
+- `src/ai_voicebot/langgraph/nodes/step_back_prompt.py` - owner_filter 적용
+- `src/ai_voicebot/pipecat/processors/rag_processor.py` - owner 파라미터
+- `src/ai_voicebot/pipecat/pipeline_builder.py` - callee→owner 추출, 동적 OIM 생성
+- `src/sip_core/call_manager.py` - org_manager=None (PipelineBuilder에서 생성)
+- `src/services/knowledge_service.py` - owner 필터 지원
+- `src/services/seed_data.py` - 초기 테넌트 시딩 + legacy 정리
+- `src/api/routers/tenants.py` - 테넌트 CRUD API
+- `src/api/routers/call_history.py` - callee 필터 추가
+- `src/api/routers/extractions.py` - owner 필터 추가
+
+**Frontend:**
+- `frontend/app/login/page.tsx` - 내선번호 기반 로그인 (테넌트 자동 로드)
+- `frontend/app/dashboard/page.tsx` - 테넌트별 대시보드
+- `frontend/app/knowledge/page.tsx` - 테넌트별 지식 관리
+- `frontend/app/ai-services/page.tsx` - 테넌트별 AI 서비스 관리
+- `frontend/app/call-history/page.tsx` - 테넌트별 통화 이력
+- `frontend/app/extractions/page.tsx` - 테넌트별 추출 이력
+
+**삭제된 파일:**
+- `data/organization_info.json` - VectorDB로 완전 마이그레이션됨
 

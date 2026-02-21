@@ -1,0 +1,119 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-7.4.3, pluggy-1.6.0
+rootdir: C:\work\workspace_sippbx\sip-pbx
+configfile: pyproject.toml
+plugins: anyio-3.7.1, Faker-22.0.0, langsmith-0.4.31, asyncio-0.21.1, cov-4.1.0, mock-3.12.0, timeout-2.2.0, vcr-1.0.2
+asyncio: mode=Mode.AUTO
+collected 24 items
+
+tests_new\unit\test_sip_core\test_call_session.py ..............
+tests_new\unit\test_events\test_cdr.py ......2026-01-08 10:15:28 [info     ] cdr_writer_initialized         filename_pattern=cdr-%Y-%m-%d.jsonl output_dir=C:\Users\hak23\AppData\Local\Temp\tmpfe3zp1lp\cdr_logs
+.2026-01-08 10:15:28 [info     ] cdr_writer_initialized         filename_pattern=cdr-%Y-%m-%d.jsonl output_dir=C:\Users\hak23\AppData\Local\Temp\tmpmcrsg4vb
+2026-01-08 10:15:28 [info     ] cdr_written                    call_id=test-123 filepath=C:\Users\hak23\AppData\Local\Temp\tmpmcrsg4vb\cdr-2026-01-08.jsonl
+.2026-01-08 10:15:28 [info     ] cdr_writer_initialized         filename_pattern=cdr-%Y-%m-%d.jsonl output_dir=C:\Users\hak23\AppData\Local\Temp\tmpx5wdnikg
+2026-01-08 10:15:28 [info     ] cdr_written                    call_id=test-123 filepath=C:\Users\hak23\AppData\Local\Temp\tmpx5wdnikg\cdr-2026-01-08.jsonl
+2026-01-08 10:15:28 [info     ] cdr_written                    call_id=test-456 filepath=C:\Users\hak23\AppData\Local\Temp\tmpx5wdnikg\cdr-2026-01-08.jsonl
+..
+
+============================== warnings summary ===============================
+..\..\..\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_fields.py:149
+  C:\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_fields.py:149: UserWarning: Field "model_size" has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+..\..\..\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_fields.py:149
+  C:\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_fields.py:149: UserWarning: Field "model_korean" has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+..\..\..\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_fields.py:149
+  C:\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_fields.py:149: UserWarning: Field "model_english" has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+..\..\..\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_config.py:271
+  C:\Users\hak23\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pydantic\_internal\_config.py:271: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.5/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+
+---------- coverage: platform win32, python 3.11.9-final-0 -----------
+Name                                               Stmts   Miss   Cover   Missing
+---------------------------------------------------------------------------------
+src\__init__.py                                        2      0 100.00%
+src\ai_voicebot\__init__.py                            1      1   0.00%   7
+src\ai_voicebot\ai_pipeline\__init__.py                5      5   0.00%   7-12
+src\ai_voicebot\ai_pipeline\llm_client.py             95     95   0.00%   7-342
+src\ai_voicebot\ai_pipeline\rag_engine.py             94     94   0.00%   7-309
+src\ai_voicebot\ai_pipeline\stt_client.py             96     96   0.00%   7-211
+src\ai_voicebot\ai_pipeline\tts_client.py             66     66   0.00%   7-193
+src\ai_voicebot\audio_buffer.py                       96     96   0.00%   7-226
+src\ai_voicebot\factory.py                            92     92   0.00%   7-224
+src\ai_voicebot\knowledge\__init__.py                  5      5   0.00%   7-12
+src\ai_voicebot\knowledge\chromadb_client.py          88     88   0.00%   7-229
+src\ai_voicebot\knowledge\embedder.py                 67     67   0.00%   7-197
+src\ai_voicebot\knowledge\knowledge_extractor.py     103    103   0.00%   7-300
+src\ai_voicebot\knowledge\vector_db.py                33     33   0.00%   7-114
+src\ai_voicebot\models\__init__.py                     4      4   0.00%   5-9
+src\ai_voicebot\models\conversation.py                43     43   0.00%   5-82
+src\ai_voicebot\models\knowledge.py                   36     36   0.00%   5-87
+src\ai_voicebot\models\recording.py                   36     36   0.00%   5-86
+src\ai_voicebot\orchestrator.py                      235    235   0.00%   7-585
+src\ai_voicebot\recording\__init__.py                  2      2   0.00%   7-9
+src\ai_voicebot\recording\recorder.py                102    102   0.00%   7-295
+src\ai_voicebot\vad_detector.py                       94     94   0.00%   7-244
+src\api\__init__.py                                    0      0 100.00%
+src\api\main.py                                       29     29   0.00%   2-68
+src\api\models.py                                     80     80   0.00%   2-112
+src\api\routers\__init__.py                            2      2   0.00%   3-5
+src\api\routers\ai_insights.py                       143    143   0.00%   7-391
+src\api\routers\auth.py                               20     20   0.00%   2-55
+src\api\routers\call_history.py                      143    143   0.00%   7-398
+src\api\routers\calls.py                              15     15   0.00%   2-65
+src\api\routers\hitl.py                               21     21   0.00%   2-67
+src\api\routers\knowledge.py                          42     42   0.00%   2-117
+src\api\routers\metrics.py                             8      8   0.00%   2-20
+src\api\routers\operator.py                           71     71   0.00%   7-196
+src\api\routers\recordings.py                         92     92   0.00%   7-278
+src\common\logger.py                                  29     16  44.83%   20-21, 33-58, 71-78, 111
+src\config\models.py                                 129      3  97.67%   62-64
+src\events\__init__.py                                 0      0 100.00%
+src\events\cdr.py                                    158     67  57.59%   174-179, 183, 198-214, 234-253, 261-274, 289-313, 333-346, 359-375, 386-387, 391-392, 396-397
+src\events\event_store.py                            120    120   0.00%   6-340
+src\events\statistics.py                             127    127   0.00%   6-327
+src\events\webhook.py                                 72     72   0.00%   6-232
+src\main.py                                          120    120   0.00%   6-296
+src\media\__init__.py                                  0      0 100.00%
+src\media\background_cleaner.py                       49     49   0.00%   6-112
+src\media\codec\__init__.py                            4      4   0.00%   6-10
+src\media\codec\decoder.py                            40     40   0.00%   6-112
+src\media\codec\g711.py                               33     33   0.00%   6-124
+src\media\codec\jitter_buffer.py                     100    100   0.00%   6-258
+src\media\codec\opus.py                               82     82   0.00%   6-236
+src\media\media_session.py                            64     64   0.00%   6-139
+src\media\performance.py                             158    158   0.00%   6-313
+src\media\port_pool.py                                79     79   0.00%   6-220
+src\media\rtp_packet.py                               58     58   0.00%   7-162
+src\media\rtp_reflector.py                           152    152   0.00%   6-434
+src\media\rtp_relay.py                               149    149   0.00%   6-411
+src\media\sdp_models.py                               47     47   0.00%   6-100
+src\media\sdp_parser.py                              158    158   0.00%   6-388
+src\media\session_cleaner.py                          44     44   0.00%   6-123
+src\media\session_manager.py                          78     78   0.00%   6-247
+src\monitoring\__init__.py                             0      0 100.00%
+src\monitoring\metrics.py                             75     75   0.00%   6-314
+src\services\__init__.py                               0      0 100.00%
+src\services\hitl.py                                 152    152   0.00%   2-449
+src\services\knowledge_service.py                     73     73   0.00%   6-304
+src\sip_core\models\call_session.py                   50      0 100.00%
+src\sip_core\models\enums.py                          55      0 100.00%
+src\websocket\__init__.py                              0      0 100.00%
+src\websocket\manager.py                               2      2   0.00%   2-15
+src\websocket\server.py                              107    107   0.00%   2-301
+---------------------------------------------------------------------------------
+TOTAL                                               4625   4288   7.29%
+
+======================= 24 passed, 4 warnings in 5.22s ========================

@@ -56,6 +56,24 @@ AI 컴포넌트 구현 가이드 Part 2
 
 ---
 
+## 🏢 멀티테넌트 RAG 및 대시보드
+
+### [multi-tenant-rag-and-dashboard.md](multi-tenant-rag-and-dashboard.md)
+착신번호 기반 멀티테넌트 RAG 및 대시보드 실제 구현 설계
+- **멀티테넌트 아키텍처**: 착신번호(1003/1004)별 데이터 격리
+- **VectorDB 단일 소스**: organization_info.json → VectorDB 이전
+- **프론트엔드 실제 구현**: Mock → API 연동 전환
+- **로그인 시스템**: 착신번호 선택 기반 (패스워드 불필요)
+
+**내용**:
+- 시드 데이터 (1003=이탈리안 비스트로, 1004=기상청)
+- 백엔드 API 변경 (owner 필터, 테넌트 API)
+- 프론트엔드 전면 개편 (로그인, 대시보드, 지식관리)
+- 대화 기반 지식 축적 흐름
+- 구현 Phase 계획
+
+---
+
 ## 📁 파일 목록
 
 | 파일 | 라인 수 | 설명 |
@@ -63,8 +81,9 @@ AI 컴포넌트 구현 가이드 Part 2
 | `ai-implementation-guide.md` | ~1,500 | AI 구현 가이드 Part 1 (8개 컴포넌트) |
 | `ai-implementation-guide-part2.md` | ~1,200 | AI 구현 가이드 Part 2 (7개 컴포넌트) |
 | `OPERATOR-AWAY-MODE-DESIGN.md` | ~800 | 운영자 부재중 모드 설계 |
+| `multi-tenant-rag-and-dashboard.md` | ~500 | 멀티테넌트 RAG + 대시보드 실제 구현 |
 
-**총 라인 수**: ~3,500 lines
+**총 라인 수**: ~4,000 lines
 
 ---
 

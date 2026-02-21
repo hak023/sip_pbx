@@ -33,7 +33,7 @@ class LLMClient:
         """
         Args:
             config: LLM 설정
-                - model: "gemini-pro"
+                - model: "gemini-2.5-flash"
                 - temperature: 0.7
                 - max_tokens: 200
             api_key: Google API 키
@@ -44,7 +44,7 @@ class LLMClient:
         genai.configure(api_key=api_key)
         
         self.model = genai.GenerativeModel(
-            model_name=config.get("model", "gemini-pro")
+            model_name=config.get("model", "gemini-2.5-flash")
         )
         
         self.generation_config = genai.types.GenerationConfig(
@@ -271,7 +271,7 @@ async def example_usage():
     import os
     
     config = {
-        "model": "gemini-pro",
+        "model": "gemini-2.5-flash",
         "temperature": 0.7,
         "max_tokens": 200
     }

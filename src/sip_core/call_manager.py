@@ -13,6 +13,7 @@ from src.media.session_manager import MediaSessionManager
 from src.media.sdp_parser import SDPManipulator
 from src.common.logger import get_logger
 from src.common.exceptions import InvalidSIPMessageError, PortPoolExhaustedError
+from src.events.cdr import CDR, CDRWriter
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,12 @@ class CallManager:
         b2bua_ip: str = "127.0.0.1",
         ai_orchestrator = None,  # AI Orchestrator (optional)
         no_answer_timeout: int = 10,  # AI 활성화 타임아웃 (초)
+        recording_enabled: bool = True,  # 통화 녹음 활성화 여부
+        recording_dir: str = "./recordings",  # 녹음 파일 저장 디렉토리
+        knowledge_extractor = None,  # Knowledge Extractor (optional, 신규)
+        gcp_credentials_path: Optional[str] = None,  # GCP 인증 파일 경로 (STT용)
+        enable_post_stt: bool = True,  # 후처리 STT 활성화
+        stt_language: str = "ko-KR",  # STT 언어
     ):
         """초기화
         
@@ -40,6 +47,12 @@ class CallManager:
             b2bua_ip: B2BUA IP 주소 (SDP에 사용)
             ai_orchestrator: AI Orchestrator (None이면 AI 기능 비활성화)
             no_answer_timeout: 부재중 타임아웃 시간 (초)
+            recording_enabled: 통화 녹음 활성화 여부
+            recording_dir: 녹음 파일 저장 디렉토리
+            knowledge_extractor: 지식 추출기 (일반 통화 지식 추출용, 선택)
+            gcp_credentials_path: GCP 인증 파일 경로 (STT용)
+            enable_post_stt: 후처리 STT 활성화 여부
+            stt_language: STT 언어 코드
         """
         self.call_repository = call_repository
         self.media_session_manager = media_session_manager
@@ -50,12 +63,120 @@ class CallManager:
         self.no_answer_timeout = no_answer_timeout
         self.ai_enabled_calls = set()  # AI 모드가 활성화된 통화 ID 집합
         
+        # Pipecat Pipeline Builder (Phase 1)
+        self.pipecat_builder = None
+        
+        # 통화 녹음 지원 (신규)
+        self.recording_enabled = recording_enabled
+        self.sip_recorder = None
+        if recording_enabled:
+            from .sip_call_recorder import SIPCallRecorder
+            self.sip_recorder = SIPCallRecorder(
+                output_dir=recording_dir,
+                gcp_credentials_path=gcp_credentials_path,
+                enable_post_stt=enable_post_stt,
+                stt_language=stt_language
+            )
+            logger.info("SIP call recording enabled", recording_dir=recording_dir)
+        
+        # 지식 추출 지원 (신규)
+        self.knowledge_extractor = knowledge_extractor
+        if knowledge_extractor:
+            logger.info("Knowledge extraction enabled for regular calls")
+        
+        # CDR Writer 초기화 (통화 이력 기록)
+        self.cdr_writer = CDRWriter(output_dir="./cdr")
+        logger.info("CDR writer enabled", output_dir="./cdr")
+        
         logger.info("call_manager_initialized",
                    media_enabled=media_session_manager is not None,
                    b2bua_ip=b2bua_ip,
                    ai_enabled=ai_orchestrator is not None,
+                   recording_enabled=recording_enabled,
+                   knowledge_extraction_enabled=knowledge_extractor is not None,
+                   cdr_enabled=True,
                    no_answer_timeout=no_answer_timeout)
     
+    def set_ai_orchestrator(self, ai_orchestrator) -> None:
+        """AI Orchestrator 동적 주입 (백그라운드 초기화 완료 후)
+        
+        Args:
+            ai_orchestrator: AI Orchestrator 인스턴스
+        """
+        self.ai_orchestrator = ai_orchestrator
+        
+        # ★ TransferManager를 AI Orchestrator에 연결
+        if ai_orchestrator and self._sip_endpoint:
+            transfer_manager = getattr(self._sip_endpoint, '_transfer_manager', None)
+            if transfer_manager and hasattr(ai_orchestrator, 'set_transfer_manager'):
+                ai_orchestrator.set_transfer_manager(transfer_manager)
+                # speak_to_caller 콜백 설정
+                async def _speak_to_caller(call_id, text, allow_barge_in=True):
+                    if ai_orchestrator.call_id == call_id:
+                        await ai_orchestrator.speak(text)
+                
+                transfer_manager.set_callbacks(
+                    speak_to_caller=_speak_to_caller,
+                )
+                logger.info("✅ [Transfer] TransferManager connected to AI Orchestrator")
+        
+            # ★ OutboundCallManager를 AI Orchestrator에 연결
+            outbound_manager = getattr(self._sip_endpoint, '_outbound_manager', None)
+            if outbound_manager:
+                # start_ai 콜백: 아웃바운드 200 OK 시 AI 시작
+                async def _start_outbound_ai(call_id, outbound_context):
+                    if ai_orchestrator:
+                        await ai_orchestrator.handle_outbound_call(call_id, outbound_context)
+                
+                # stop_ai 콜백: 부분 결과 수집
+                async def _stop_outbound_ai(call_id):
+                    if ai_orchestrator and ai_orchestrator.call_id == call_id:
+                        result = await ai_orchestrator.get_partial_outbound_result()
+                        await ai_orchestrator.end_call()
+                        return result
+                    return None
+                
+                outbound_manager.set_callbacks(
+                    start_ai=_start_outbound_ai,
+                    stop_ai=_stop_outbound_ai,
+                )
+                
+                # 아웃바운드 완료 콜백 (AI → OutboundManager)
+                ai_orchestrator.set_outbound_complete_callback(outbound_manager.on_task_completed)
+                
+                logger.info("✅ [Outbound] OutboundCallManager connected to AI Orchestrator")
+        
+        logger.info("✅ [AI Injection] AI Orchestrator injected into CallManager",
+                   ai_available=ai_orchestrator is not None)
+    
+    def set_pipecat_builder(self, builder) -> None:
+        """Pipecat Pipeline Builder 동적 주입 (Phase 1)
+        
+        Args:
+            builder: VoiceAIPipelineBuilder 인스턴스
+        """
+        self.pipecat_builder = builder
+        logger.info("✅ [Pipecat] Pipeline Builder injected into CallManager",
+                   pipecat_available=builder is not None)
+    
+    def set_sip_endpoint(self, sip_endpoint) -> None:
+        """SIP Endpoint 참조 설정 (Pipecat에서 RTP Worker 접근용)"""
+        self._sip_endpoint = sip_endpoint
+
+    async def request_hangup(self, call_id: str) -> bool:
+        """
+        해당 통화를 서버에서 종료 (발신자에게 BYE 전송).
+        HITL timeout 등에서 호출.
+        """
+        if not getattr(self, '_sip_endpoint', None):
+            logger.warning("request_hangup_no_sip_endpoint", call_id=call_id)
+            return False
+        try:
+            return await self._sip_endpoint.send_bye_to_caller(call_id)
+        except Exception as e:
+            logger.error("request_hangup_error", call_id=call_id, error=str(e))
+            return False
+
     def handle_incoming_invite(
         self,
         from_uri: str,
@@ -116,6 +237,7 @@ class CallManager:
                     caller_sdp=sdp,
                 )
                 logger.info("media_session_created_for_invite",
+                           progress="call",
                            call_id=call_session.call_id,
                            caller_ports=media_session.caller_leg.allocated_ports)
             except PortPoolExhaustedError as e:
@@ -129,6 +251,7 @@ class CallManager:
         self.call_repository.add(call_session)
         
         logger.info("invite_received",
+                   progress="call",
                    call_id=call_session.call_id,
                    sip_call_id=call_id_header,
                    from_uri=from_uri,
@@ -167,7 +290,45 @@ class CallManager:
             활성 통화 개수
         """
         return self.call_repository.count_active()
-    
+
+    def register_b2bua_call(self, call_id: str, from_uri: str, to_uri: str) -> None:
+        """B2BUA 경로에서 수신한 통화를 Repository에 등록 (대시보드 실시간 통화 목록용)
+        
+        sip_endpoint가 INVITE 수신 시 _active_calls만 채우고 handle_incoming_invite를 호출하지
+        않으므로, API의 get_active_sessions()가 비어 있던 문제를 해결하기 위해 호출한다.
+        
+        Args:
+            call_id: SIP Call-ID (원본 통화 ID)
+            from_uri: 발신자 URI (예: sip:1003@10.0.0.1)
+            to_uri: 수신자 URI (예: sip:1004@10.0.0.1)
+        """
+        incoming_leg = Leg(
+            direction=Direction.INCOMING,
+            call_id_header=call_id,
+            from_uri=from_uri,
+            to_uri=to_uri,
+        )
+        session = CallSession(
+            call_id=call_id,
+            state=CallState.PROCEEDING,
+            incoming_leg=incoming_leg,
+        )
+        self.call_repository.add(session)
+        logger.debug("b2bua_call_registered", call_id=call_id, to_uri=to_uri)
+
+    def mark_b2bua_established(self, call_id: str) -> None:
+        """B2BUA 통화 연결(200 OK) 시 세션 상태를 ESTABLISHED로 갱신"""
+        session = self.call_repository.get(call_id)
+        if session:
+            session.mark_established()
+            self.call_repository.update(session)
+            logger.debug("b2bua_call_established", call_id=call_id)
+
+    def remove_b2bua_call(self, call_id: str) -> None:
+        """B2BUA 통화 종료 시 Repository에서 제거"""
+        self.call_repository.remove(call_id)
+        logger.debug("b2bua_call_removed", call_id=call_id)
+
     def create_outgoing_invite(
         self,
         call_session: CallSession,
@@ -211,24 +372,35 @@ class CallManager:
             media_session = self.media_session_manager.get_session(call_session.call_id)
             
             if media_session:
-                # B2BUA IP로 Connection 변경
-                modified_sdp = SDPManipulator.replace_connection_ip(modified_sdp, self.b2bua_ip)
+                from src.media.media_session import MediaMode
                 
-                # Callee leg의 할당된 포트로 변경
-                audio_port = media_session.callee_leg.get_audio_rtp_port()
-                video_port = media_session.callee_leg.get_video_rtp_port()
-                
-                modified_sdp = SDPManipulator.replace_multiple_ports(
-                    modified_sdp,
-                    audio_port=audio_port,
-                    video_port=video_port,
-                )
-                
-                logger.info("sdp_modified_for_outgoing_invite",
-                           call_id=call_session.call_id,
-                           b2bua_ip=self.b2bua_ip,
-                           audio_port=audio_port,
-                           video_port=video_port)
+                # Direct 모드가 아닐 때만 SDP 수정
+                if media_session.mode != MediaMode.DIRECT:
+                    # B2BUA IP로 Origin 변경 (o= 라인)
+                    modified_sdp = SDPManipulator.replace_origin_ip(modified_sdp, self.b2bua_ip)
+                    
+                    # B2BUA IP로 Connection 변경 (c= 라인)
+                    modified_sdp = SDPManipulator.replace_connection_ip(modified_sdp, self.b2bua_ip)
+                    
+                    # Callee leg의 할당된 포트로 변경
+                    audio_port = media_session.callee_leg.get_audio_rtp_port()
+                    video_port = media_session.callee_leg.get_video_rtp_port()
+                    
+                    modified_sdp = SDPManipulator.replace_multiple_ports(
+                        modified_sdp,
+                        audio_port=audio_port,
+                        video_port=video_port,
+                    )
+                    
+                    logger.info("sdp_modified_for_outgoing_invite",
+                               call_id=call_session.call_id,
+                               b2bua_ip=self.b2bua_ip,
+                               audio_port=audio_port,
+                               video_port=video_port)
+                else:
+                    logger.info("sdp_not_modified_direct_mode",
+                               call_id=call_session.call_id,
+                               mode="direct")
         
         outgoing_leg.sdp_raw = modified_sdp
         
@@ -272,6 +444,129 @@ class CallManager:
                    response_code=response_code,
                    reason=reason,
                    state=call_session.state.value)
+    
+    async def handle_no_answer_timeout(
+        self,
+        call_id: str,
+        callee_username: str
+    ) -> None:
+        """부재중 타임아웃 처리 (AI 응대 모드 전환)
+        
+        Args:
+            call_id: 호 ID
+            callee_username: 착신자 사용자명
+        """
+        import asyncio
+        try:
+            logger.warning("no_answer_timeout_activating_ai",
+                          call_id=call_id,
+                          callee=callee_username,
+                          timeout=self.no_answer_timeout)
+            
+            # AI Orchestrator가 있으면 AI 모드로 전환
+            if self.ai_orchestrator:
+                logger.info("activating_ai_voicebot_for_no_answer",
+                           progress="call",
+                           call_id=call_id,
+                           callee=callee_username)
+                
+                # AI 활성화 통화로 등록
+                self.ai_enabled_calls.add(call_id)
+                
+                # Pipecat Pipeline Builder가 있으면 Pipecat 모드로 실행
+                if self.pipecat_builder:
+                    logger.info("🚀 [Pipecat] Starting Pipecat pipeline for AI call",
+                               call_id=call_id,
+                               callee=callee_username)
+                    
+                    call_context = {
+                        "call_id": call_id,
+                        "caller": callee_username,
+                        "callee": callee_username,
+                        "system_prompt": "",
+                    }
+                    
+                    # RTP Worker 가져오기
+                    rtp_worker = None
+                    if hasattr(self, '_sip_endpoint') and self._sip_endpoint:
+                        rtp_worker = self._sip_endpoint._rtp_workers.get(call_id)
+                    
+                    if rtp_worker:
+                        # Pipecat 파이프라인 실행 (백그라운드)
+                        # Phase 2: embedder/vector_db 전달 (LangGraph Semantic Cache용)
+                        _rag = getattr(self.ai_orchestrator, 'rag', None)
+                        asyncio.create_task(
+                            self.pipecat_builder.build_and_run(
+                                rtp_worker=rtp_worker,
+                                call_context=call_context,
+                                llm_client=getattr(self.ai_orchestrator, 'llm', None),
+                                rag_engine=_rag,
+                                # org_manager는 pipeline_builder 내부에서 callee 기반으로 VectorDB에서 로드
+                                org_manager=None,
+                                embedder=getattr(_rag, 'embedder', None) if _rag else None,
+                                vector_db=getattr(_rag, 'vector_db', None) if _rag else None,
+                            )
+                        )
+                        
+                        logger.info("✅ [Pipecat] Pipeline task started",
+                                   call_id=call_id)
+                        logger.info("ai_voicebot_pipecat_activated",
+                                   progress="call",
+                                   callee=callee_username,
+                                   engine="pipecat")
+                    else:
+                        logger.warning("pipecat_no_rtp_worker",
+                                      call_id=call_id,
+                                      message="RTP worker not found, falling back to legacy")
+                        # Fallback to legacy orchestrator
+                        await self.ai_orchestrator.handle_call(
+                            call_id=call_id,
+                            caller=f"sip:{callee_username}@unknown",
+                            callee=callee_username,
+                        )
+                        logger.info("ai_voicebot_legacy_activated",
+                                   callee=callee_username,
+                                   engine="legacy")
+                else:
+                    # Legacy orchestrator 경로
+                    logger.info("🔄 [AI Takeover] Starting legacy AI call takeover",
+                               call_id=call_id,
+                               callee=callee_username)
+                    
+                    await self.ai_orchestrator.handle_call(
+                        call_id=call_id,
+                        caller=f"sip:{callee_username}@unknown",
+                        callee=callee_username,
+                    )
+                    
+                    logger.info("ai_voicebot_activated",
+                               progress="call",
+                               callee=callee_username,
+                               engine="legacy")
+                
+                logger.info("ai_mode_activated",
+                           call_id=call_id,
+                           callee=callee_username,
+                           pipeline_engine="pipecat" if self.pipecat_builder else "legacy",
+                           ai_enabled_calls=len(self.ai_enabled_calls))
+                
+                logger.info("✅ [AI Takeover] AI call handling started successfully",
+                           call_id=call_id)
+            else:
+                logger.warning("ai_orchestrator_not_available",
+                              call_id=call_id,
+                              callee=callee_username,
+                              message="AI Orchestrator is None - cannot activate AI mode")
+                
+                logger.warning("ai_orchestrator_not_available_for_activation",
+                              callee=callee_username,
+                              message="Cannot activate AI mode")
+                
+        except Exception as e:
+            logger.error("no_answer_timeout_error",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True)
     
     def handle_invite_timeout(
         self,
@@ -365,6 +660,7 @@ class CallManager:
             call_session.outgoing_leg.sdp_raw = sdp
             
             logger.info("200_ok_received_from_outgoing",
+                       progress="call",
                        call_id=call_session.call_id,
                        outgoing_call_id=call_session.outgoing_leg.call_id_header)
             
@@ -380,7 +676,10 @@ class CallManager:
             if self.media_session_manager:
                 media_session = self.media_session_manager.get_session(call_session.call_id)
                 if media_session:
-                    # B2BUA IP로 Connection 변경
+                    # B2BUA IP로 Origin 변경 (o= 라인)
+                    modified_sdp = SDPManipulator.replace_origin_ip(modified_sdp, self.b2bua_ip)
+                    
+                    # B2BUA IP로 Connection 변경 (c= 라인)
                     modified_sdp = SDPManipulator.replace_connection_ip(modified_sdp, self.b2bua_ip)
                     
                     # Caller leg의 할당된 포트로 변경
@@ -409,6 +708,7 @@ class CallManager:
             call_session.incoming_leg.sdp_raw = sdp
             
             logger.info("200_ok_received_from_incoming",
+                       progress="call",
                        call_id=call_session.call_id)
             
             return sdp
@@ -429,14 +729,52 @@ class CallManager:
             # 통화 연결 상태로 전환
             call_session.mark_established()
             
+            # SIP 통화 녹음 시작 (신규)
+            if self.sip_recorder and not call_session.call_id in self.ai_enabled_calls:
+                try:
+                    import asyncio
+                    asyncio.create_task(
+                        self.sip_recorder.start_recording(
+                            call_id=call_session.call_id,
+                            caller_id=call_session.get_caller_uri(),
+                            callee_id=call_session.get_callee_uri()
+                        )
+                    )
+                    logger.info("sip_recording_started",
+                               call_id=call_session.call_id,
+                               caller=call_session.get_caller_uri(),
+                               callee=call_session.get_callee_uri())
+                except Exception as e:
+                    logger.error("sip_recording_start_error",
+                               call_id=call_session.call_id,
+                               error=str(e))
+            
             logger.info("ack_received_from_incoming",
+                       progress="call",
                        call_id=call_session.call_id,
                        state=call_session.state.value,
                        answer_time=call_session.answer_time.isoformat() if call_session.answer_time else None)
+            
+            # WebSocket: 통화 시작 이벤트 발송
+            try:
+                from src.websocket import manager as ws_manager
+                import asyncio
+                asyncio.create_task(ws_manager.emit_call_started(
+                    call_id=call_session.call_id,
+                    call_data={
+                        'caller': call_session.get_caller_uri(),
+                        'callee': call_session.get_callee_uri(),
+                        'is_ai_handled': call_session.call_id in self.ai_enabled_calls,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                ))
+            except Exception as e:
+                logger.warning("call_started_event_failed", call_id=call_session.call_id, error=str(e))
         
         # Outgoing leg에서 ACK 수신 (re-INVITE 시나리오)
         else:
             logger.info("ack_received_from_outgoing",
+                       progress="call",
                        call_id=call_session.call_id)
         
         # Repository 업데이트
@@ -461,10 +799,12 @@ class CallManager:
         # 1. BYE 방향 로깅
         if from_direction == Direction.INCOMING:
             logger.info("bye_received_from_incoming",
+                       progress="call",
                        call_id=call_session.call_id,
                        reason=reason)
         else:
             logger.info("bye_received_from_outgoing",
+                       progress="call",
                        call_id=call_session.call_id,
                        reason=reason)
         
@@ -475,10 +815,21 @@ class CallManager:
         self.call_repository.update(call_session)
         
         logger.info("call_terminated",
+                   progress="call",
                    call_id=call_session.call_id,
                    duration_seconds=call_session.get_duration_seconds(),
                    reason=reason,
                    state=call_session.state.value)
+        
+        # WebSocket: 통화 종료 이벤트 발송
+        try:
+            from src.websocket import manager as ws_manager
+            import asyncio
+            asyncio.create_task(ws_manager.emit_call_ended(
+                call_id=call_session.call_id
+            ))
+        except Exception as e:
+            logger.warning("call_ended_event_failed", call_id=call_session.call_id, error=str(e))
         
         # 4. 200 OK 반환
         return SIPResponseCode.OK
@@ -492,49 +843,152 @@ class CallManager:
         Returns:
             CDR 데이터 딕셔너리
         """
+        # SIP 통화 녹음 종료 (신규)
+        recording_dir_name = None
+        if self.sip_recorder and self.sip_recorder.is_recording(call_session.call_id):
+            try:
+                import asyncio
+                # 녹음 디렉토리 정보를 미리 가져오기 (stop_recording 전에)
+                recording = self.sip_recorder.active_recordings.get(call_session.call_id)
+                if recording:
+                    recording_dir_name = recording.get("dir_name")
+                
+                # 녹음 종료 (비동기, 백그라운드 실행)
+                asyncio.create_task(self.sip_recorder.stop_recording(call_session.call_id))
+                logger.info("sip_recording_stopped", 
+                           call_id=call_session.call_id,
+                           directory=recording_dir_name)
+            except Exception as e:
+                logger.error("sip_recording_stop_error",
+                           call_id=call_session.call_id,
+                           error=str(e))
+        
         # AI 통화 종료 처리
-        if call_session.call_id in self.ai_enabled_calls:
+        is_ai_call = call_session.call_id in self.ai_enabled_calls
+        if is_ai_call:
             if self.ai_orchestrator:
                 try:
                     import asyncio
                     asyncio.create_task(self.ai_orchestrator.end_call())
-                    logger.info("ai_call_ended", call_id=call_session.call_id)
+                    logger.info("ai_call_ended", progress="call", call_id=call_session.call_id)
                 except Exception as e:
                     logger.error("ai_end_call_error",
                                call_id=call_session.call_id,
                                error=str(e))
             
             self.ai_enabled_calls.discard(call_session.call_id)
+        else:
+            # 일반 SIP 통화 지식 추출 (신규)
+            if self.knowledge_extractor and self.recording_enabled and recording_dir_name:
+                try:
+                    import asyncio
+                    from pathlib import Path
+                    
+                    transcript_path = Path(f"./recordings/{recording_dir_name}/transcript.txt")
+                    
+                    # 착신자 ID 추출 (to_uri에서)
+                    callee_id = call_session.get_callee_uri()
+                    
+                    logger.info("🚀 [Knowledge Flow] Scheduling knowledge extraction for regular SIP call",
+                               call_id=call_session.call_id,
+                               callee_id=callee_id,
+                               recording_dir=recording_dir_name,
+                               transcript_path=str(transcript_path))
+                    
+                    # STT 완료를 기다린 후 지식 추출 실행 (5초 delay)
+                    async def delayed_extraction():
+                        await asyncio.sleep(5)  # STT 완료 대기
+                        
+                        if not transcript_path.exists():
+                            logger.warning("⚠️ [Knowledge Flow] Transcript file not found after delay",
+                                         call_id=call_session.call_id,
+                                         path=str(transcript_path))
+                            return
+                        
+                        logger.info("🚀 [Knowledge Flow] Starting knowledge extraction",
+                                   call_id=call_session.call_id)
+                        
+                        await self.knowledge_extractor.extract_from_call(
+                            call_id=call_session.call_id,
+                            transcript_path=str(transcript_path),
+                            owner_id=callee_id,
+                            speaker="callee"  # 착신자 발화만 추출
+                        )
+                    
+                    asyncio.create_task(delayed_extraction())
+                    
+                    logger.info("✅ [Knowledge Flow] Knowledge extraction task scheduled (5s delay for STT)",
+                               call_id=call_session.call_id,
+                               callee=callee_id)
+                except Exception as e:
+                    logger.error("❌ [Knowledge Flow] Knowledge extraction scheduling error",
+                               call_id=call_session.call_id,
+                               error=str(e),
+                               exc_info=True)
+    
+    async def trigger_knowledge_extraction(
+        self,
+        call_id: str,
+        recording_dir_name: str,
+        callee_username: str
+    ) -> None:
+        """Knowledge Extraction 트리거 (SIP Endpoint에서 호출)
         
-        # CDR 데이터 준비 (실제 CDR 생성은 Story 4.12)
-        cdr_data = {
-            "call_id": call_session.call_id,
-            "caller_uri": call_session.get_caller_uri(),
-            "callee_uri": call_session.get_callee_uri(),
-            "start_time": call_session.start_time.isoformat() if call_session.start_time else None,
-            "answer_time": call_session.answer_time.isoformat() if call_session.answer_time else None,
-            "end_time": call_session.end_time.isoformat() if call_session.end_time else None,
-            "duration_seconds": call_session.get_duration_seconds(),
-            "termination_reason": call_session.termination_reason,
-            "state": call_session.state.value,
-            "is_ai_handled": call_session.call_id in self.ai_enabled_calls,
-        }
+        Args:
+            call_id: 호 ID
+            recording_dir_name: 녹음 디렉토리명
+            callee_username: 착신자 사용자명
+        """
+        if not self.knowledge_extractor or not self.recording_enabled:
+            logger.debug("knowledge_extraction_disabled_or_not_configured",
+                        call_id=call_id,
+                        has_extractor=self.knowledge_extractor is not None,
+                        recording_enabled=self.recording_enabled)
+            return
         
-        # 미디어 세션 정리 (포트 반환)
-        if self.media_session_manager:
-            destroyed = self.media_session_manager.destroy_session(call_session.call_id)
-            if destroyed:
-                logger.info("media_session_destroyed_on_cleanup",
-                           call_id=call_session.call_id)
-        
-        # Repository에서 제거
-        self.call_repository.remove(call_session.call_id)
-        
-        logger.info("call_cleanup_completed",
-                   call_id=call_session.call_id,
-                   duration=cdr_data["duration_seconds"])
-        
-        return cdr_data
+        try:
+            import asyncio
+            from pathlib import Path
+            
+            transcript_path = Path(f"./recordings/{recording_dir_name}/transcript.txt")
+            callee_id = f"sip:{callee_username}@unknown"  # URI 형식
+            
+            logger.info("🚀 [Knowledge Flow] Scheduling knowledge extraction for regular SIP call",
+                       call_id=call_id,
+                       callee_id=callee_id,
+                       recording_dir=recording_dir_name,
+                       transcript_path=str(transcript_path))
+            
+            # STT 완료를 기다린 후 지식 추출 실행 (5초 delay)
+            async def delayed_extraction():
+                await asyncio.sleep(5)  # STT 완료 대기
+                
+                if not transcript_path.exists():
+                    logger.warning("⚠️ [Knowledge Flow] Transcript file not found after delay",
+                                 call_id=call_id,
+                                 path=str(transcript_path))
+                    return
+                
+                logger.info("🚀 [Knowledge Flow] Starting knowledge extraction",
+                           call_id=call_id)
+                
+                await self.knowledge_extractor.extract_from_call(
+                    call_id=call_id,
+                    transcript_path=str(transcript_path),
+                    owner_id=callee_id,
+                    speaker="both"  # ✅ 발신자+착신자 모두 추출 (대화 전체)
+                )
+            
+            asyncio.create_task(delayed_extraction())
+            
+            logger.info("✅ [Knowledge Flow] Knowledge extraction task scheduled (5s delay for STT)",
+                       call_id=call_id,
+                       callee=callee_id)
+        except Exception as e:
+            logger.error("❌ [Knowledge Flow] Knowledge extraction scheduling error",
+                       call_id=call_id,
+                       error=str(e),
+                       exc_info=True)
     
     def parse_sdp_info(self, sdp: str) -> Dict[str, Any]:
         """SDP 기본 정보 파싱 (간단한 버전)

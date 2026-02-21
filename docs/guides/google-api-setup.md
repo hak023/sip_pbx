@@ -19,7 +19,7 @@ ai_voicebot:
       speaking_rate: 1.0
     
     gemini:
-      model: "gemini-pro"
+      model: "gemini-2.5-flash"
       temperature: 0.7
 ```
 
@@ -186,7 +186,7 @@ except Exception as e:
 # Gemini 테스트
 try:
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    model = genai.GenerativeModel("gemini-pro")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     print("✅ Gemini 인증 성공")
 except Exception as e:
     print(f"❌ Gemini 인증 실패: {e}")

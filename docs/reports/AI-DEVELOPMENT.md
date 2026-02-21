@@ -224,7 +224,7 @@ ai_voicebot:
       speaking_rate: 1.0
     
     gemini:
-      model: "gemini-pro"
+      model: "gemini-2.5-flash"
       temperature: 0.7
       max_tokens: 200
   

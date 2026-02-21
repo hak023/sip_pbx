@@ -62,7 +62,9 @@ class RAGEngine:
     async def search(
         self, 
         query: str, 
-        owner_filter: Optional[str] = None
+        owner_filter: Optional[str] = None,
+        call_id: Optional[str] = None,  # DB 로깅용
+        top_k_override: Optional[int] = None,
     ) -> List[Document]:
         """
         질문에 대한 관련 문서 검색
@@ -70,19 +72,24 @@ class RAGEngine:
         Args:
             query: 검색 질문
             owner_filter: 사용자 ID 필터 (착신자 전용 지식)
+            call_id: 통화 ID (DB 로깅용, 선택)
             
         Returns:
             관련 문서 리스트 (상위 top_k개)
         """
+        import time
+        start_time = time.time()
+        
         try:
             # 1. 질문 임베딩
             query_embedding = await self.embedder.embed(query)
             
             # 2. Vector DB 검색
+            effective_top_k = top_k_override if top_k_override else self.top_k
             filter_dict = {"owner": owner_filter} if owner_filter else None
             search_results = await self.vector_db.search(
                 vector=query_embedding,
-                top_k=self.top_k * 2,  # 재순위화를 위해 더 많이 검색
+                top_k=effective_top_k * 2,  # 재순위화를 위해 더 많이 검색
                 filter=filter_dict
             )
             
@@ -108,20 +115,84 @@ class RAGEngine:
                 documents = await self._rerank(query, documents)
             
             # 6. Top-K 반환
-            documents = documents[:self.top_k]
+            documents = documents[:effective_top_k]
             
             self.total_searches += 1
             self.total_results += len(documents)
             
-            logger.info("RAG search completed",
+            # 검색 시간 계산
+            search_latency_ms = int((time.time() - start_time) * 1000)
+            top_k_used = top_k_override if top_k_override else self.top_k
+            top_score = documents[0].score if documents else 0.0
+            top_text_preview = (documents[0].text[:150] + "...") if documents and len(documents[0].text) > 150 else (documents[0].text if documents else "")
+
+            logger.info("rag_search_completed",
+                       call=True,
+                       call_id=call_id or "",
+                       category="rag",
+                       progress="rag",
+                       query=query,
                        query_length=len(query),
                        results_count=len(documents),
-                       owner_filter=owner_filter)
+                       top_k=top_k_used,
+                       similarity_threshold=self.similarity_threshold,
+                       reranking=self.reranking_enabled,
+                       owner_filter=owner_filter,
+                       latency_ms=search_latency_ms,
+                       top_score=round(top_score, 4),
+                       top_doc_preview=top_text_preview,
+                       note="Vector 검색 완료, call_id로 통화별 필터")
+            
+            # DB 로깅 (신규)
+            if call_id:
+                try:
+                    from ..logging.ai_logger import log_rag_search_sync
+                    
+                    # 검색 결과를 직렬화 가능한 형태로 변환
+                    search_results_dict = [
+                        {
+                            "id": doc.id,
+                            "text": doc.text[:200],  # 최대 200자
+                            "score": doc.score
+                        }
+                        for doc in documents
+                    ]
+                    
+                    # RAG 컨텍스트 (실제 사용된 문서)
+                    rag_context = "\n\n".join([doc.text for doc in documents])
+                    
+                    # 최고 점수
+                    top_score = documents[0].score if documents else 0.0
+                    
+                    # 비동기 로깅
+                    log_rag_search_sync(
+                        call_id=call_id,
+                        user_question=query,
+                        search_results=search_results_dict,
+                        top_score=top_score,
+                        rag_context_used=rag_context[:1000],  # 최대 1000자
+                        search_latency_ms=search_latency_ms
+                    )
+                    
+                    # 지식 매칭 로깅 (각 문서마다)
+                    from ..logging.ai_logger import log_knowledge_match_sync
+                    for doc in documents:
+                        log_knowledge_match_sync(
+                            call_id=call_id,
+                            matched_knowledge_id=doc.id,
+                            similarity_score=doc.score,
+                            knowledge_text=doc.text,
+                            category=doc.metadata.get("category", "unknown")
+                        )
+                except ImportError:
+                    logger.debug("AI logger not available, skipping DB logging")
+                except Exception as e:
+                    logger.error("rag_db_log_failed", call=True, category="rag", error=str(e))
             
             return documents
             
         except Exception as e:
-            logger.error("RAG search error", error=str(e), exc_info=True)
+            logger.error("rag_search_error", call=True, category="rag", error=str(e), exc_info=True)
             return []
     
     async def _rerank(
@@ -167,11 +238,11 @@ class RAGEngine:
             # 재정렬
             documents.sort(key=lambda d: d.score, reverse=True)
             
-            logger.debug("Reranking completed", count=len(documents))
+            logger.debug("rag_reranking_completed", category="rag", count=len(documents))
             return documents
             
         except Exception as e:
-            logger.error("Reranking error", error=str(e))
+            logger.error("rag_reranking_error", category="rag", error=str(e))
             return documents
     
     async def search_with_expansion(

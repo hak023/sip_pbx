@@ -1,0 +1,21 @@
+{
+  "call_id": "ZDKCSe5tPx",
+  "directory": "20260221_044410_1003_to_1004",
+  "caller_id": "1003",
+  "callee_id": "1004",
+  "start_time": "2026-02-21T04:44:10.160806",
+  "end_time": "2026-02-21T04:48:06.375050",
+  "duration": 236.214244,
+  "type": "sip_call",
+  "sample_rate": 8000,
+  "channels": 1,
+  "caller_frames": 11298,
+  "callee_frames": 11685,
+  "has_transcript": true,
+  "files": {
+    "caller": "20260221_044410_1003_to_1004\\caller.wav",
+    "callee": "20260221_044410_1003_to_1004\\callee.wav",
+    "mixed": "20260221_044410_1003_to_1004\\mixed.wav",
+    "transcript": "20260221_044410_1003_to_1004\\transcript.txt"
+  }
+}

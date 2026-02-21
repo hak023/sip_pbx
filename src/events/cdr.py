@@ -56,6 +56,12 @@ class CDR:
     # 종료 정보
     termination_reason: TerminationReason = TerminationReason.NORMAL
     
+    # 녹음 정보 (신규)
+    has_recording: bool = False
+    recording_path: Optional[str] = None
+    recording_duration: Optional[float] = None
+    recording_type: Optional[str] = None  # "sip_call" or "ai_call"
+    
     # 추가 메타데이터
     metadata: Dict[str, Any] = field(default_factory=dict)
     

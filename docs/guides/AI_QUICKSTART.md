@@ -2,7 +2,7 @@
 
 ## 📋 개요
 
-이 가이드는 **Gemini 1.5 Flash** 기반 AI 보이스봇을 빠르게 설정하고 실행하는 방법을 안내합니다.
+이 가이드는 **Gemini 2.5 Flash** 기반 AI 보이스봇을 빠르게 설정하고 실행하는 방법을 안내합니다.
 
 **예상 소요 시간**: 15~20분
 
@@ -61,7 +61,7 @@ pip install -r requirements.txt
    - API 키 복사 (예: `AIzaSyAaBbCcDdEeFfGgHhIiJjKk...`)
 
 3. **무료 할당량 확인**
-   - Gemini 1.5 Flash: 일 1,500 요청 무료
+   - Gemini 2.5 Flash: 일 1,500 요청 무료
    - 소규모 서비스는 무료로 충분!
 
 ### 2-2. Google Cloud Console에서 Service Account 생성
@@ -152,7 +152,7 @@ ai_voicebot:
   
   google_cloud:
     gemini:
-      model: "gemini-1.5-flash"  # ⚡ Flash 모델 (빠르고 저렴)
+      model: "gemini-2.5-flash"  # ⚡ 최신 Flash 모델 (빠르고 저렴)
       temperature: 0.5
       max_output_tokens: 150  # 1~2문장 답변
 ```

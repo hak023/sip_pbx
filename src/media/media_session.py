@@ -14,7 +14,8 @@ from src.sip_core.models.enums import Direction
 
 class MediaMode(str, Enum):
     """미디어 처리 모드"""
-    BYPASS = "bypass"        # 직접 전달 (처리 없음)
+    DIRECT = "direct"          # 단말간 직접 통신 (SDP 수정 없음, 테스트용)
+    BYPASS = "bypass"          # B2BUA가 RTP 중계 (녹음/분석 가능)
     REFLECTING = "reflecting"  # 반사 (AI 분석용)
 
 
@@ -31,6 +32,7 @@ class MediaLeg:
     original_sdp: Optional[SDPSession] = None  # SDP 파싱된 객체
     original_ip: Optional[str] = None
     original_audio_port: Optional[int] = None
+    original_audio_rtcp_port: Optional[int] = None  # RTCP 포트 (명시적 지정 또는 RTP+1)
     original_video_port: Optional[int] = None
     
     # B2BUA 할당 포트 (양쪽 leg 각각 4개)

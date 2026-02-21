@@ -11,6 +11,9 @@ from datetime import datetime
 from enum import Enum
 import structlog
 
+# SIP PBX와 연동
+from src.sip_core.operator_status import get_operator_status_manager, OperatorStatus as SIPOperatorStatus
+
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/operator", tags=["operator"])
@@ -112,6 +115,23 @@ async def update_operator_status(
                 """
             )
             unresolved_count = result["cnt"] if result else 0
+        
+        # SIP PBX에 상태 전달 (부재중 설정 시 즉시 AI 응대 모드 활성화)
+        try:
+            status_manager = get_operator_status_manager()
+            sip_status = SIPOperatorStatus(update.status.value)
+            status_manager.set_status(
+                user_id=operator_id,
+                status=sip_status,
+                away_message=update.away_message
+            )
+            logger.info("SIP PBX status synced",
+                       operator_id=operator_id,
+                       status=update.status)
+        except Exception as sync_err:
+            logger.error("Failed to sync status to SIP PBX",
+                        operator_id=operator_id,
+                        error=str(sync_err))
         
         logger.info("Operator status updated",
                    operator_id=operator_id,

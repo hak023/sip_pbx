@@ -66,12 +66,23 @@ export default function CallHistoryPage() {
   const fetchCallHistory = async (filter: string) => {
     setIsLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('access_token');
+      // 로그인된 테넌트의 착신번호(owner)로 필터링
+      let callee: string | undefined;
+      try {
+        const tenantStr = localStorage.getItem('tenant');
+        if (tenantStr) {
+          const tenant = JSON.parse(tenantStr);
+          callee = tenant.owner;
+        }
+      } catch {}
+      
       const response = await axios.get(`${API_URL}/api/call-history`, {
         params: {
           page: 1,
           limit: 50,
           unresolved_hitl: filter === 'all' ? undefined : filter,
+          callee,
         },
         headers: {
           Authorization: `Bearer ${token}`,
@@ -94,7 +105,7 @@ export default function CallHistoryPage() {
 
   const showCallDetailDialog = async (callId: string) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('access_token');
       const response = await axios.get(`${API_URL}/api/call-history/${callId}`, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -118,7 +129,7 @@ export default function CallHistoryPage() {
     }
 
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('access_token');
       await axios.post(
         `${API_URL}/api/call-history/${selectedCall.call_info.call_id}/note`,
         {
@@ -146,7 +157,7 @@ export default function CallHistoryPage() {
     if (!selectedCall) return;
 
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('access_token');
       await axios.put(
         `${API_URL}/api/call-history/${selectedCall.call_info.call_id}/resolve`,
         {},

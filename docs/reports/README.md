@@ -93,15 +93,48 @@ AI 개발 관련 메모 및 진행 사항
 
 ## 📁 파일 목록
 
-| 파일 | 유형 | 설명 |
-|------|------|------|
-| `B2BUA_STATUS.md` | 상태 추적 | SIP B2BUA 구현 상태 및 지원 메서드 |
-| `IMPLEMENTATION_STATUS.md` | 상태 추적 | Frontend/HITL 구현 상태 |
-| `AI-COMPLETION-CHECKLIST.md` | 체크리스트 | AI 기능별 완료 여부 |
-| `WEEK2_COMPLETION_REPORT.md` | 주간 보고서 | Week 2 완료 내역 |
-| `AI-DEVELOPMENT.md` | 개발 노트 | 기술적 결정 및 이슈 |
+### 상태 추적
+| 파일 | 설명 |
+|------|------|
+| `B2BUA_STATUS.md` | SIP B2BUA 구현 상태 및 지원 메서드 |
+| `IMPLEMENTATION_STATUS.md` | Frontend/HITL 구현 상태 |
+| `FRONTEND_IMPLEMENTATION_CHECK.md` | 프론트엔드 기능 구현 점검 |
 
-**총 문서 수**: 5개
+### 체크리스트
+| 파일 | 설명 |
+|------|------|
+| `AI-COMPLETION-CHECKLIST.md` | AI 기능별 완료 여부 |
+
+### 완료 보고서
+| 파일 | 설명 |
+|------|------|
+| `IMPLEMENTATION_COMPLETE.md` | 전체 구현 완료 보고서 |
+| `KNOWLEDGE_BASE_UI_COMPLETED.md` | 지식 베이스 UI 완료 |
+| `RECORDING_PLAYBACK_INTEGRATION_COMPLETE.md` | 녹음 재생 통합 완료 |
+| `PHASE3_COMPLETE.md` | Phase 3 완료 보고서 |
+| `PHASE3_WEEK1_COMPLETE.md` | Phase 3 Week 1 완료 |
+| `PHASE3_WEEK1_PROGRESS.md` | Phase 3 Week 1 진행 상황 |
+| `WEEK2_COMPLETION_REPORT.md` | Week 2 완료 내역 |
+
+### 분석 보고서
+| 파일 | 설명 |
+|------|------|
+| `KNOWLEDGE_EXTRACTION_ANALYSIS.md` | 일반 통화 지식 추출 분석 |
+| `POST_PROCESSING_STT_IMPLEMENTATION.md` | 후처리 STT 구현 상세 |
+| `POST_STT_COMPLETION_SUMMARY.md` | 후처리 STT 완료 요약 |
+
+### 문제 해결
+| 파일 | 설명 |
+|------|------|
+| `INSTALLATION_SUCCESS.md` | 설치 성공 보고서 |
+| `RESOLVED_START_ALL_ISSUES.md` | Start All 이슈 해결 |
+
+### 개발 노트
+| 파일 | 설명 |
+|------|------|
+| `AI-DEVELOPMENT.md` | 기술적 결정 및 이슈 |
+
+**총 문서 수**: 17개
 
 ---
 
@@ -141,5 +174,5 @@ AI 개발 관련 메모 및 진행 사항
 ---
 
 **상위 문서 인덱스**: [../INDEX.md](../INDEX.md)  
-**최종 업데이트**: 2026-01-06
+**최종 업데이트**: 2026-01-08
 

@@ -104,9 +104,11 @@ class PortPoolManager:
                 )
             
             # 4개의 짝수 포트 할당 (각각 +1하여 RTCP 포트로 사용)
+            # 🔧 가장 작은 포트부터 순차적으로 할당 (테스트/디버깅 용이)
             allocated_base_ports = []
             for _ in range(self.PORTS_PER_CALL // 2):
-                port = self._available_ports.pop()
+                port = min(self._available_ports)  # 가장 작은 포트 선택
+                self._available_ports.remove(port)
                 allocated_base_ports.append(port)
             
             # RTP/RTCP 쌍으로 확장

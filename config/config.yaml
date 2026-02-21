@@ -6,13 +6,47 @@ sip:
   listen_port: 5060
   transport: "udp"  # udp, tcp, tls
   max_concurrent_calls: 100
+  
+  # B2BUA 외부 IP (SDP c= 라인에 사용)
+  # 0.0.0.0으로 바인딩하되, SDP에는 실제 접근 가능한 IP를 넣어야 함
+  # advertised_ip를 주석 처리하면 자동으로 감지됩니다 (테더링 환경에 최적)
+  # advertised_ip: "192.168.208.233"  # 수동 설정 (비활성화)
+  
+  # SIP 타이머 설정 (RFC 3261)
+  timers:
+    # 트랜잭션 타이머
+    t1: 0.5               # RTT Estimate (초) - UDP 재전송 기본 간격
+    t2: 4.0               # 최대 재전송 간격 (초)
+    t4: 5.0               # 최대 메시지 수명 (초)
+    
+    # 세션 타이머
+    invite_timeout: 30    # INVITE 응답 대기 시간 (초)
+    bye_timeout: 32       # BYE 응답 대기 시간 (초)
+    register_expires: 3600  # REGISTER 만료 시간 (초, 1시간)
+    
+    # Session-Expires (RFC 4028)
+    session_expires: 1800  # 세션 만료 시간 (초, 30분)
+    min_se: 90            # 최소 세션 갱신 간격 (초)
+    session_refresher: "uas"  # 세션 갱신 주체 (uac/uas)
+    
+    # 부재중 타임아웃 (AI 활성화)
+    no_answer_timeout: 10  # 착신자 무응답 시 AI 활성화 (초)
 
 # 미디어 처리 설정
 media:
-  mode: "bypass"  # bypass | reflecting
+  mode: "bypass"  # direct | bypass | reflecting
+                  # - direct: SDP 수정하지 않음, 단말간 직접 RTP 통신 (테스트용)
+                  # - bypass: B2BUA가 RTP 중계 (녹음/분석 가능)
+                  # - reflecting: B2BUA가 RTP 중계 + AI 분석
+  
+  # RTP 소켓 bind IP
+  # - 특정 IP: 해당 IP에만 bind (보안 강화)
+  # - "0.0.0.0": 모든 인터페이스에서 수신 (호환성 최대화)
+  rtp_bind_ip: "0.0.0.0"  # 단말 네트워크 문제 시 0.0.0.0 권장
+  
   port_pool:
-    start: 10000
-    end: 20000
+    start: 10000 
+    end: 10100    # 🧪 테스트: 충분한 포트 범위
   rtp_timeout: 60  # seconds without RTP → auto-terminate
   codec_priority:
     - "opus"
@@ -56,7 +90,7 @@ ai_voicebot:
   no_answer_timeout: 10  # 초 (착신자가 이 시간 동안 응답 없으면 AI 활성화)
   
   # 고정 인사말
-  greeting_message: "안녕하세요, AI 비서입니다. 무엇을 도와드릤까요?"
+  greeting_message: "안녕하세요, AI 비서입니다. 무엇을 도와드릴까요?"
   
   # ⭐ Google Cloud 설정 - 여기에 API 정보 입력! ⭐
   google_cloud:
@@ -79,7 +113,8 @@ ai_voicebot:
     
     # TTS (Text-to-Speech) 설정
     tts:
-      voice_name: "ko-KR-Neural2-A"  # 여성 목소리 (A, B, C 중 선택)
+      voice_name: "ko-KR-Chirp3-HD-Kore"  # Chirp3 HD 여성 목소리 (Streaming TTS 지원)
+      language_code: "ko"  # 음성 언어 코드 (ko | en) - voice_name의 언어와 일치해야 함
       speaking_rate: 1.0  # 0.25 - 4.0 (1.0 = 보통 속도)
       pitch: 0.0  # -20.0 - 20.0 (0 = 보통 음높이)
     
@@ -103,10 +138,14 @@ ai_voicebot:
       
       # ⭐ Gemini API 키 (필수)
       # 발급: https://aistudio.google.com/app/apikey
-      api_key: "AIzaSyBhQpIGB4iCRxCE0k_g2DW4s4MYOO9Laac"
+      api_key: "AIzaSyCVg4n1vYhudl9Y78r_MkX82k4liUQ9Yss"
       
       temperature: 0.5  # 0.0 - 1.0 (낮을수록 일관적이고 빠름, 0.5 권장)
-      max_output_tokens: 150  # 최대 출력 토큰 (1~2문장, 150 토큰 권장)
+      max_output_tokens: 500  # 대화 생성 등 기본 최대 출력 토큰
+      # 통화 지식 정제(judge_usefulness) JSON 출력용. 설계 권장: 1024 이상, 잘림 발생 시 2048
+      judgment_max_output_tokens: 1024
+      # 지식 정제 시 LLM에 넣는 전사 문자 상한 (긴 통화 처리). 설계서 2.2a
+      judgment_max_input_chars: 6000
       
       # 시스템 프롬프트 (간결한 응답 유도)
       system_prompt: |
@@ -129,6 +168,12 @@ ai_voicebot:
       failure_threshold: 5  # 실패 임계값 (5회 실패 시 open)
       timeout_seconds: 60  # Open 상태 유지 시간
       half_open_max_calls: 3  # Half-open 상태 테스트 호출 수
+
+  # HITL (Human-in-the-Loop) - RAG 부족 시 담당자 문의, timeout 시 안내 후 종료
+  hitl:
+    timeout_seconds: 15  # 담당자 응답 대기 시간 (초)
+    timeout_message: "확인이 지연되고 있습니다. 확인되는 대로 연락 드리겠습니다."  # timeout 시 고객에게 TTS 재생 후 통화 종료
+    away_message: "죄송합니다. 해당 부분은 잘 모르는 내용이라 확인 후 별도로 안내드리겠습니다."  # 운영자 부재중 시 fallback
   
   # Vector DB 설정
   vector_db:
@@ -157,6 +202,16 @@ ai_voicebot:
     similarity_threshold: 0.7  # 유사도 임계값 (0.0 - 1.0)
     reranking_enabled: false  # 재순위화 활성화
   
+  # Knowledge Extraction 설정
+  knowledge_extractor:
+    min_text_length: 10  # 최소 텍스트 길이 (문자 수)
+    min_confidence: 0.7  # 최소 신뢰도 (LLM 판단)
+    chunk_size: 500  # 청크 크기
+    chunk_overlap: 50  # 청크 오버랩
+    # §7 PII 파이프라인: contains_pii인 항목을 VectorDB에 바로 넣지 않고 검토 대기열에 적재
+    pii_review_queue_enabled: false  # true 시 PII 포함 추출은 pending 검토 후 반영
+    extraction_pending_file: "data/extraction_pending_review.jsonl"  # 검토 대기열 파일 경로
+  
   # 녹음 설정
   recording:
     enabled: true
@@ -164,12 +219,48 @@ ai_voicebot:
     format: "wav"
     sample_rate: 16000
     
+    # 후처리 STT (Speech-to-Text)
+    post_processing_stt:
+      enabled: true  # ✅ 활성화 (Google Cloud 인증 정보 설정 후)
+      language: "ko-KR"  # ko-KR | en-US | ja-JP 등
+      enable_diarization: true  # 화자 분리 (caller/callee)
+      model: "telephony"  # Google STT 모델 (전화 통화 최적화)
+      enable_automatic_punctuation: true  # 자동 구두점
+      enable_word_time_offsets: true  # 단어별 타임스탬프
+    
     # 지식 추출
     knowledge_extraction:
       enabled: true
-      min_confidence: 0.7  # LLM 판단 최소 신뢰도
-      chunk_size: 500  # 문자
-      chunk_overlap: 50  # 문자
+      version: "v2"                    # v1 (기존 단일 LLM) | v2 (멀티스텝 파이프라인)
+      
+      # 추출 스텝 설정
+      steps:
+        summarize: true                # Step 1: 대화 요약
+        qa_extract: true               # Step 2: QA 쌍 추출
+        entity_extract: true           # Step 3: 엔티티 추출
+      
+      # 품질 검증
+      quality:
+        min_confidence: 0.7            # 최소 신뢰도
+        hallucination_check: true      # 환각 검증 활성화
+        deduplication: true            # 중복 검증 활성화
+        dedup_threshold: 0.92          # 중복 판정 코사인 유사도
+        near_dedup_threshold: 0.85     # 병합 후보 코사인 유사도
+      
+      # 자동 승인
+      auto_approve:
+        enabled: true
+        min_confidence: 0.9            # 자동 승인 최소 신뢰도
+        require_hallucination_pass: true
+      
+      # 청킹
+      chunk_size: 500                  # 문자
+      chunk_overlap: 50                # 문자
+      min_text_length: 10
+      
+      # 비용 제어
+      max_llm_calls_per_extraction: 6  # 추출당 최대 LLM 호출 수
+      skip_short_calls_seconds: 30     # 30초 미만 통화 스킵
   
   # VAD (Voice Activity Detection)
   vad:
@@ -177,11 +268,84 @@ ai_voicebot:
     mode: 3  # 0-3 (3이 가장 민감)
     frame_duration_ms: 30  # 10 | 20 | 30
   
-  # Barge-in 설정
+  # Barge-in 설정 (Phase 3: Smart Barge-in)
   barge_in:
     enabled: true
     vad_threshold: 0.5  # 음성 감지 임계값
     speech_frame_count: 3  # 연속 음성 프레임 수
+    min_words: 3  # LLM 판단 기준 최소 단어 수
+    # keywords: null  # 커스텀 즉시중단 키워드 (null이면 기본값 사용)
+  
+  # Streaming TTS 설정 (Phase 3)
+  streaming_tts:
+    enabled: true
+    min_chunk_chars: 15  # TTS 최소 전송 문자 수
+    max_buffer_chars: 200  # 강제 플러시 문자 수
+    flush_timeout: 1.0  # 무입력 시 플러시 타임아웃 (초)
+  
+  # Silero VAD (Pipecat 파이프라인 — 발화 시작/종료 감지)
+  # STT 단편화 방지: 발화자·수신자가 같은 공간이면 양쪽 음성이 한 스트림에 섞여,
+  # 침묵이 짧게 끊기므로 stop_secs를 넉넉히 주어 문장 단위로 인식되도록 함.
+  # 너무 짧으면 "마디마디마다 짧게 끊김"; 1.0~1.2초 권장.
+  silero_vad:
+    stop_secs: 1.0   # 침묵 이 길어져야 "발화 종료" (0.7→1.0: 문장 단위 유도, 1.2도 가능)
+    start_secs: 0.3  # 음성 시작으로 인정할 최소 구간 (0.25→0.3: 짧은 노이즈 억제)
+    confidence: 0.5   # 음성 판별 최소 신뢰도 (0.6→0.5: 양쪽 음성 혼합 시 단절 완화)
+    min_volume: 0.5   # 최소 볼륨 (0~1)
+  
+  # Smart Turn 설정 (발화 종료 감지)
+  # VAD 침묵 후 문법/억양으로 "진짜 끝"인지 판단. max_hold_secs를 늘리면 짧은 멈춤에서 덜 잘림.
+  smart_turn:
+    enabled: true  # Smart Turn v3.2 활성화 (false면 Silero VAD stop_secs 침묵만 사용)
+    # model_path: null  # 커스텀 ONNX 모델 경로 (null이면 Pipecat 번들 사용)
+    max_hold_secs: 2.5  # 발화 미완 판단 시 최대 대기 시간 (2.0→2.5: 문장 완성까지 대기)
+  
+  # 호 전환(Transfer) 설정
+  transfer:
+    enabled: true
+    ring_timeout: 30              # 착신 대기 시간 (초)
+    announcement_mode: "template" # template | llm
+    announcement_template: >
+      {department}로 전화 연결하겠습니다.
+      연결되는 전화번호는 {phone}입니다.
+      연결되는 동안 잠시만 기다려주세요.
+    waiting_message: "연결 중입니다. 잠시만 기다려주세요."
+    retry_enabled: true
+    max_retries: 2
+    min_similarity_threshold: 0.75  # 전환 의도 감지 최소 유사도
+    hold_music_file: null           # null이면 TTS 대기 안내 사용
+  
+  # AI 아웃바운드 콜 설정
+  outbound:
+    enabled: true
+    # SIP Gateway 설정 (외부 발신용)
+    # 미설정 시 등록된 유저로만 발신 가능
+    # default_gateway: "sip:gateway.example.com:5060"
+    max_concurrent_calls: 5        # 동시 아웃바운드 콜 최대 수
+    ring_timeout: 30               # 링 타임아웃 (초)
+    max_call_duration: 300         # 최대 통화 시간 (초, 기본 5분)
+    retry:
+      enabled: true
+      max_retries: 2               # 최대 재시도 횟수
+      retry_interval: 300          # 재시도 간격 (초, 기본 5분)
+      retry_on:
+        - "no_answer"
+        - "busy"
+    ai:
+      greeting_template: >
+        안녕하세요, {display_name} AI 비서입니다.
+        {purpose} 관련하여 연락드렸습니다.
+      closing_template: "확인 감사합니다. 좋은 하루 되세요."
+      max_turns: 20                # 최대 대화 턴 수 (무한 루프 방지)
+      task_completion_check: true
+    result:
+      save_transcript: true
+      save_recording: true
+      generate_summary: true
+
+  # Pipeline Engine 설정 (Phase 1+)
+  # legacy: 기존 Orchestrator, pipecat: Pipecat 파이프라인
+  pipeline_engine: "pipecat"
   
   # 오디오 버퍼
   audio_buffer:
@@ -194,6 +358,8 @@ ai_voicebot:
     log_conversations: true  # 대화 내용 로깅
     log_audio: true  # 오디오 데이터 로깅 (디버그용)
     log_level: "INFO"  # DEBUG | INFO | WARNING | ERROR
+    # DB 로깅 (RAG/LLM/지식매칭): 설정 시 asyncpg로 해당 테이블에 INSERT. 미설정 시 스킵.
+    # db_url: "postgresql://user:pass@localhost:5432/your_db"  # docs/guides/AI_DB_LOGGING_SETUP.md
 
 # 이벤트 및 알림 설정
 events:

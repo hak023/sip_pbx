@@ -1,0 +1,21 @@
+{
+  "call_id": "4dygr-fHd4",
+  "directory": "20260221_042017_1004_to_1003",
+  "caller_id": "1004",
+  "callee_id": "1003",
+  "start_time": "2026-02-21T04:20:17.746748",
+  "end_time": "2026-02-21T04:21:09.901761",
+  "duration": 52.155013,
+  "type": "sip_call",
+  "sample_rate": 8000,
+  "channels": 1,
+  "caller_frames": 2088,
+  "callee_frames": 891,
+  "has_transcript": true,
+  "files": {
+    "caller": "20260221_042017_1004_to_1003\\caller.wav",
+    "callee": "20260221_042017_1004_to_1003\\callee.wav",
+    "mixed": "20260221_042017_1004_to_1003\\mixed.wav",
+    "transcript": "20260221_042017_1004_to_1003\\transcript.txt"
+  }
+}

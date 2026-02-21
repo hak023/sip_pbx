@@ -1,13 +1,34 @@
-"""Human-in-the-Loop Service"""
+"""Human-in-the-Loop Service.
+
+Knowledge extraction from HITL: when operators submit a response in the frontend
+with save_to_kb=True, submit_response() calls knowledge_service.add_from_hitl()
+to store the Q&A in the vector DB. This is the only knowledge ingestion path for
+AI-handled calls (human-to-human and HITL results only; AI-to-caller transcripts
+are excluded from extraction in sip_endpoint._cleanup_call).
+
+설계 (TTS_RTP_AND_HITL_DESIGN.md):
+- RAG 부족 시: "해당 내용은 확인이 필요합니다. 잠시만 기다려 주세요." + HITL 요청
+- HITL timeout 시: timeout_message TTS 재생 후 통화 종료, frontend에 hitl_timeout 피드백
+- HITL 응답 수신 시: LLM으로 고객용 문장 정리 후 TTS (RAG 프로세서에서 처리)
+"""
 import asyncio
 import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable, Awaitable
 from datetime import datetime, timedelta
 from uuid import uuid4
 from enum import Enum
 import structlog
 
+# 설계 문서 2.2: HITL timeout 시 재생 문구
+DEFAULT_TIMEOUT_MESSAGE = "확인이 지연되고 있습니다. 확인되는 대로 연락 드리겠습니다."
+HITL_TIMEOUT_TTS_DELAY_SEC = 8  # timeout 메시지 TTS 재생 후 통화 종료까지 대기
+
+from .knowledge_service import get_knowledge_service
+
 logger = structlog.get_logger(__name__)
+
+# call_id -> asyncio.Queue: 운영자 응답 텍스트를 해당 통화 파이프라인(TTS)으로 전달
+_hitl_response_queues: Dict[str, asyncio.Queue] = {}
 
 
 class OperatorStatus(str, Enum):
@@ -30,21 +51,80 @@ class HITLService:
     - 운영자 상태 관리 (부재중 모드)
     """
     
-    def __init__(self, redis_client=None, websocket_manager=None, db=None):
+    def __init__(
+        self,
+        redis_client=None,
+        websocket_manager=None,
+        db=None,
+        timeout_seconds: int = 60,
+        timeout_message: Optional[str] = None,
+    ):
         """
         Args:
             redis_client: Redis 클라이언트
             websocket_manager: WebSocket 관리자
             db: Database 클라이언트 (PostgreSQL)
+            timeout_seconds: HITL 응답 대기 시간 (초)
+            timeout_message: timeout 시 고객에게 TTS로 재생할 문구
         """
         self.redis_client = redis_client
         self.websocket_manager = websocket_manager
         self.db = db
-        
+        self._timeout_seconds = timeout_seconds
+        self._timeout_message = timeout_message or DEFAULT_TIMEOUT_MESSAGE
+
         # Mock 저장소 (Redis 대체)
         self.hitl_requests: Dict[str, Dict[str, Any]] = {}
-        
-        logger.info("HITLService initialized")
+        # 운영자 응답을 해당 통화 파이프라인으로 전달하기 위한 큐 등록 (전역 사용)
+        self._response_queues = _hitl_response_queues
+        # HITL timeout 시 통화 종료 콜백 (call_id) -> None
+        self._on_hitl_timeout: Optional[Callable[[str], Awaitable[None]]] = None
+
+        logger.info("HITLService initialized", timeout_seconds=self._timeout_seconds)
+
+    def register_hitl_response_queue(self, call_id: str, queue: asyncio.Queue) -> None:
+        """해당 통화의 운영자 응답을 TTS로 넣기 위한 큐 등록 (파이프라인 시작 시 호출)"""
+        self._response_queues[call_id] = queue
+        logger.debug("hitl_response_queue_registered", call_id=call_id)
+
+    def unregister_hitl_response_queue(self, call_id: str) -> None:
+        """통화 종료 시 큐 해제"""
+        self._response_queues.pop(call_id, None)
+        logger.debug("hitl_response_queue_unregistered", call_id=call_id)
+
+    def register_on_hitl_timeout(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        """HITL timeout 시 통화 종료를 위해 호출할 콜백 등록 (예: call_manager.request_hangup)."""
+        self._on_hitl_timeout = callback
+        logger.debug("hitl_timeout_callback_registered")
+
+    def set_config(
+        self,
+        timeout_seconds: Optional[int] = None,
+        timeout_message: Optional[str] = None,
+    ) -> None:
+        """설정 갱신 (main 등에서 config 로드 후 호출)."""
+        if timeout_seconds is not None:
+            self._timeout_seconds = timeout_seconds
+        if timeout_message is not None:
+            self._timeout_message = timeout_message
+        logger.debug("hitl_config_updated", timeout_seconds=self._timeout_seconds)
+
+    def push_operator_response(self, call_id: str, text: str) -> bool:
+        """
+        운영자가 입력한 응답 텍스트를 해당 통화 파이프라인의 TTS로 전달.
+        submit_response()에서 호출.
+        """
+        queue = self._response_queues.get(call_id)
+        if not queue:
+            logger.warning("hitl_response_queue_not_found", call_id=call_id)
+            return False
+        try:
+            queue.put_nowait(text)
+            logger.info("hitl_operator_response_pushed", call_id=call_id, text_len=len(text))
+            return True
+        except Exception as e:
+            logger.error("hitl_operator_response_push_failed", call_id=call_id, error=str(e))
+            return False
     
     async def request_human_help(
         self,
@@ -52,7 +132,7 @@ class HITLService:
         question: str,
         context: Dict[str, Any],
         urgency: str = 'medium',
-        timeout_seconds: int = 300  # 5분
+        timeout_seconds: Optional[int] = None,
     ) -> bool:
         """
         AI가 사람의 도움을 요청
@@ -62,12 +142,14 @@ class HITLService:
             question: 사용자 질문
             context: 대화 컨텍스트 (이전 메시지, RAG 결과, 발신자 정보)
             urgency: 긴급도 (high/medium/low)
-            timeout_seconds: 타임아웃 (초)
+            timeout_seconds: 타임아웃 (초). None이면 서비스 초기화 시 설정값 사용.
             
         Returns:
             True: HITL 요청 성공 (운영자 대기 중)
             False: HITL 요청 거절 (운영자 부재중/오프라인)
         """
+        if timeout_seconds is None:
+            timeout_seconds = self._timeout_seconds
         # 1. 운영자 상태 확인 (신규)
         operator_status = await self._get_operator_status()
         
@@ -135,7 +217,8 @@ class HITLService:
         # 타임아웃 태스크 스케줄링
         asyncio.create_task(self._handle_timeout(call_id, timeout_seconds))
         
-        logger.info("HITL request created", 
+        logger.info("HITL request created",
+                   call=True,
                    call_id=call_id,
                    question=question,
                    urgency=urgency,
@@ -145,30 +228,63 @@ class HITLService:
     
     async def _handle_timeout(self, call_id: str, timeout_seconds: int):
         """
-        HITL 타임아웃 처리
-        
-        타임아웃 시간 후에도 답변이 없으면 기본 응답 반환
+        HITL 타임아웃 처리 (설계 2.2).
+        타임아웃 시: (1) timeout_message를 큐에 넣어 TTS 재생 (2) frontend에 hitl_timeout (3) TTS 재생 후 통화 종료 콜백 호출.
         """
         await asyncio.sleep(timeout_seconds)
         
-        # 아직 답변되지 않았는지 확인
+        # Redis에서 pending 여부 확인 (submit_response에서 이미 삭제됐을 수 있음)
+        still_pending = False
         if call_id in self.hitl_requests:
             request = self.hitl_requests[call_id]
             if request.get('status') == 'pending':
-                logger.warning("HITL request timed out", call_id=call_id)
-                
-                # Frontend에 타임아웃 알림
-                if self.websocket_manager:
-                    await self.websocket_manager.broadcast_global('hitl_timeout', {
-                        'call_id': call_id,
-                        'timestamp': datetime.now().isoformat()
-                    })
-                
-                # TODO: AI Orchestrator에 타임아웃 알림
-                # await orchestrator.handle_hitl_timeout(call_id)
-                
-                # 요청 삭제
+                still_pending = True
                 del self.hitl_requests[call_id]
+        if self.redis_client:
+            try:
+                data = await self.redis_client.get(f"hitl:{call_id}")
+                if data:
+                    still_pending = True
+                    await self.redis_client.delete(f"hitl:{call_id}")
+            except Exception as e:
+                logger.debug("hitl_timeout_redis_check", call_id=call_id, error=str(e))
+
+        if not still_pending:
+            return
+
+        logger.warning("HITL request timed out", call_id=call_id)
+
+        # (1) 고객에게 timeout 메시지 TTS 재생 (큐에 문구 넣기)
+        queue = self._response_queues.get(call_id)
+        if queue:
+            try:
+                queue.put_nowait(self._timeout_message)
+                logger.info("hitl_timeout_message_queued", call_id=call_id)
+            except Exception as e:
+                logger.warning("hitl_timeout_queue_failed", call_id=call_id, error=str(e))
+
+        # (2) Frontend에 타임아웃 피드백
+        if self.websocket_manager:
+            try:
+                await self.websocket_manager.broadcast_global('hitl_timeout', {
+                    'call_id': call_id,
+                    'timestamp': datetime.now().isoformat(),
+                })
+            except Exception as e:
+                logger.warning("hitl_timeout_ws_failed", call_id=call_id, error=str(e))
+
+        # (3) TTS 재생 후 통화 종료 (설계: 확인되는 대로 연락 드리겠습니다 후 종료)
+        if self._on_hitl_timeout:
+            async def _delayed_hangup():
+                await asyncio.sleep(HITL_TIMEOUT_TTS_DELAY_SEC)
+                try:
+                    if asyncio.iscoroutinefunction(self._on_hitl_timeout):
+                        await self._on_hitl_timeout(call_id)
+                    else:
+                        self._on_hitl_timeout(call_id)
+                except Exception as e:
+                    logger.error("hitl_timeout_callback_error", call_id=call_id, error=str(e))
+            asyncio.create_task(_delayed_hangup())
     
     async def submit_response(
         self,
@@ -234,11 +350,31 @@ class HITLService:
             logger.info("Saving HITL response to knowledge base",
                        call_id=call_id,
                        category=category)
-            # await knowledge_service.add_from_hitl(
-            #     question=request['question'],
-            #     answer=response_text,
-            #     category=category or 'faq'
-            # )
+            
+            # Knowledge Service를 통해 Vector DB에 저장
+            knowledge_service = get_knowledge_service()
+            if knowledge_service:
+                # 착신자 ID (owner) 추출 - 착신자별 지식으로 저장
+                owner_id = request.get('context', {}).get('callee_id')
+                
+                save_result = await knowledge_service.add_from_hitl(
+                    question=request['question'],
+                    answer=response_text,
+                    call_id=call_id,
+                    operator_id=operator_id,
+                    category=category or 'faq',
+                    owner_id=owner_id
+                )
+                
+                if save_result['success']:
+                    logger.info("HITL knowledge saved successfully",
+                               doc_id=save_result['doc_id'],
+                               category=save_result['category'])
+                else:
+                    logger.error("Failed to save HITL knowledge",
+                                error=save_result.get('error'))
+            else:
+                logger.warning("KnowledgeService not initialized, HITL knowledge not saved")
         
         # Redis에서 요청 삭제
         if self.redis_client:
@@ -249,6 +385,9 @@ class HITLService:
         
         if call_id in self.hitl_requests:
             del self.hitl_requests[call_id]
+
+        # 해당 통화 파이프라인에 운영자 응답을 TTS로 주입 (Pipecat 경로)
+        self.push_operator_response(call_id, response_text)
         
         # Frontend에 해결 알림
         if self.websocket_manager:
@@ -416,13 +555,21 @@ def get_hitl_service() -> HITLService:
     return _hitl_service_instance
 
 
-def initialize_hitl_service(redis_client=None, websocket_manager=None, db=None):
+def initialize_hitl_service(
+    redis_client=None,
+    websocket_manager=None,
+    db=None,
+    timeout_seconds: int = 60,
+    timeout_message: Optional[str] = None,
+):
     """HITL Service 초기화"""
     global _hitl_service_instance
     _hitl_service_instance = HITLService(
         redis_client=redis_client,
         websocket_manager=websocket_manager,
-        db=db
+        db=db,
+        timeout_seconds=timeout_seconds,
+        timeout_message=timeout_message,
     )
     return _hitl_service_instance
 

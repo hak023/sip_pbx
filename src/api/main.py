@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 import structlog
 
-from .routers import auth, calls, knowledge, hitl, metrics, operator, call_history
+from .routers import auth, calls, knowledge, hitl, metrics, operator, call_history, recordings, ai_insights, capabilities, extractions, transfers, outbound, tenants
 from .models import User
 
 logger = structlog.get_logger(__name__)
@@ -39,6 +39,28 @@ app.include_router(hitl.router, prefix="/api/hitl", tags=["HITL"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(operator.router, tags=["Operator"])  # 신규: 운영자 상태 관리
 app.include_router(call_history.router, tags=["Call History"])  # 신규: 통화 이력
+app.include_router(recordings.router, tags=["Recordings"])  # 신규: 녹음 파일 제공
+app.include_router(ai_insights.router, tags=["AI Insights"])  # 신규: AI 처리 과정 조회
+app.include_router(capabilities.router, prefix="/api/capabilities", tags=["Capabilities"])  # 신규: AI 서비스 관리
+app.include_router(extractions.router, prefix="/api/extractions", tags=["Extractions"])  # 신규: 지식 추출 리뷰
+app.include_router(transfers.router, prefix="/api/transfers", tags=["Transfers"])  # 신규: 호 전환 관리
+app.include_router(outbound.router, prefix="/api/outbound", tags=["Outbound"])  # 신규: AI 아웃바운드 콜
+app.include_router(tenants.router, prefix="/api/tenants", tags=["Tenants"])  # 신규: 멀티테넌트 관리
+
+
+# Startup 이벤트
+@app.on_event("startup")
+async def startup_event():
+    """서버 시작 시 초기화"""
+    logger.info("API Gateway starting up...")
+    
+    # 멀티테넌트 시드 데이터 투입 (1003, 1004)
+    from src.services.seed_data import seed_initial_data
+    from src.services.knowledge_service import get_knowledge_service
+    knowledge_service = get_knowledge_service()
+    await seed_initial_data(knowledge_service)
+    
+    logger.info("API Gateway startup complete")
 
 
 @app.get("/")

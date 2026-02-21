@@ -1,8 +1,3 @@
-# SIP Stack (Optional - Windows에서 빌드 실패 시 mock으로 동작)
-# pjsua2==2.12  # PJSIP Python 바인딩 (선택사항)
-# 설치가 필요한 경우: pip install pjsua2
-# Windows에서는 pre-built wheel이 필요하거나 PJSIP 소스 빌드 필요
-
 # Async & Web Framework
 aiohttp==3.9.1
 aiodns==3.1.0
@@ -27,7 +22,8 @@ python-json-logger==2.0.7
 
 # Utilities
 python-dotenv==1.0.0
-python-jose[cryptography]==3.3.0  # JWT authentication
+PyJWT>=2.8.0                     # JWT encode/decode (auth_utils, WebSocket)
+python-jose[cryptography]==3.3.0  # JWT authentication (legacy)
 passlib[bcrypt]==1.7.4            # Password hashing
 redis==5.0.1                      # Redis client for caching/pub-sub
 asyncpg==0.29.0                   # PostgreSQL async driver

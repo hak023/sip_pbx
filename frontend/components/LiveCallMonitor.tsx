@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { wsClient } from '@/lib/websocket';
 import type { ConversationMessage } from '@/types';
 
@@ -13,10 +13,24 @@ export function LiveCallMonitor({ callId }: LiveCallMonitorProps) {
   const [currentInterim, setCurrentInterim] = useState<string>('');
   const [isAISpeaking, setIsAISpeaking] = useState(false);
   const [currentState, setCurrentState] = useState<string>('listening');
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    // 통화 구독
-    wsClient.subscribeToCall(callId);
+    setSubscribeError(null);
+    setIsSubscribed(false);
+
+    // 통화 구독 (실패 시 UI에 표시)
+    wsClient.subscribeToCall(callId, (result) => {
+      if (result.success) {
+        setIsSubscribed(true);
+        setSubscribeError(null);
+      } else {
+        setIsSubscribed(false);
+        setSubscribeError(result.error ?? '실시간 구독 실패');
+      }
+    });
 
     // STT 트랜스크립트 이벤트 리스너
     const handleSTT = (data: any) => {
@@ -72,6 +86,11 @@ export function LiveCallMonitor({ callId }: LiveCallMonitorProps) {
     };
   }, [callId]);
 
+  // 긴 대화 시 새 메시지마다 맨 아래로 스크롤 (계속 모니터링 가능)
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, currentInterim]);
+
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="flex items-center justify-between mb-4">
@@ -92,10 +111,18 @@ export function LiveCallMonitor({ callId }: LiveCallMonitorProps) {
       </div>
 
       {/* 대화 내역 */}
-      <div className="space-y-4 max-h-96 overflow-y-auto mb-4">
-        {messages.length === 0 && !currentInterim && (
+      {subscribeError && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm">
+          <p className="font-medium">실시간 대화를 불러올 수 없습니다</p>
+          <p>{subscribeError}</p>
+          <p className="mt-1 text-xs">권한(착신자 일치) 또는 통화 상태를 확인하세요. WebSocket(8001) 연결 여부를 확인하려면 서버를 <code className="bg-amber-100 px-1">python -m src.main</code>으로 실행하세요.</p>
+        </div>
+      )}
+
+      <div className="space-y-4 max-h-[28rem] overflow-y-auto overflow-x-hidden mb-4 scroll-smooth">
+        {messages.length === 0 && !currentInterim && !subscribeError && (
           <p className="text-gray-500 text-center py-8">
-            대화가 시작되면 여기에 표시됩니다
+            {isSubscribed ? '대화가 시작되면 여기에 표시됩니다' : '구독 중…'}
           </p>
         )}
 
@@ -138,6 +165,7 @@ export function LiveCallMonitor({ callId }: LiveCallMonitorProps) {
             </div>
           </div>
         )}
+        <div ref={messagesEndRef} />
       </div>
 
       {/* 통화 정보 */}

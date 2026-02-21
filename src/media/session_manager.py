@@ -71,6 +71,7 @@ class MediaSessionManager:
                 original_sdp=caller_sdp_obj,
                 original_ip=caller_sdp_obj.get_audio_connection_ip(),
                 original_audio_port=caller_sdp_obj.get_audio_port(),
+                original_audio_rtcp_port=caller_sdp_obj.get_audio_rtcp_port(),
                 original_video_port=caller_sdp_obj.get_video_port(),
                 allocated_ports=allocated_ports[:4],  # 앞 4개
             )
@@ -122,12 +123,14 @@ class MediaSessionManager:
             session.callee_leg.original_sdp = callee_sdp_obj
             session.callee_leg.original_ip = callee_sdp_obj.get_audio_connection_ip()
             session.callee_leg.original_audio_port = callee_sdp_obj.get_audio_port()
+            session.callee_leg.original_audio_rtcp_port = callee_sdp_obj.get_audio_rtcp_port()
             session.callee_leg.original_video_port = callee_sdp_obj.get_video_port()
             
             logger.info("callee_sdp_updated",
                        call_id=call_id,
                        callee_ip=callee_sdp_obj.get_audio_connection_ip(),
-                       audio_port=callee_sdp_obj.get_audio_port())
+                       audio_port=callee_sdp_obj.get_audio_port(),
+                       audio_rtcp_port=callee_sdp_obj.get_audio_rtcp_port())
     
     def get_session(self, call_id: str) -> Optional[MediaSession]:
         """세션 조회

@@ -125,14 +125,12 @@ class STTClient:
     async def _streaming_recognize(self):
         """스트리밍 인식 메인 루프"""
         try:
-            # 요청 생성기
+            # 요청 생성기 (오디오만 포함)
             requests = self._request_generator()
             
             # gRPC 스트리밍 호출
-            responses = self.client.streaming_recognize(
-                self.streaming_config,
-                requests
-            )
+            # ✅ streaming_config와 requests를 별도 파라미터로 전달 (Google API 공식 사용법)
+            responses = self.client.streaming_recognize(self.streaming_config, requests)
             
             # 응답 처리
             for response in responses:
@@ -175,13 +173,10 @@ class STTClient:
         STT 요청 생성기 (동기 generator)
         
         Google Cloud STT는 동기 generator를 요구합니다.
+        streaming_config는 streaming_recognize() 호출 시 별도 파라미터로 전달되므로
+        여기서는 오디오 데이터만 포함합니다.
         """
-        # 첫 번째 요청: 설정
-        yield speech.StreamingRecognizeRequest(
-            streaming_config=self.streaming_config
-        )
-        
-        # 이후 요청: 오디오 데이터
+        # 오디오 데이터만 스트리밍 (첫 번째 요청에 config 포함하지 않음)
         while self._running:
             try:
                 # asyncio.Queue를 동기적으로 사용

@@ -24,21 +24,47 @@ protobuf==4.25.1                     # Protocol buffers
 # -----------------------------------------------------------------------------
 # Vector Database & Embeddings
 # -----------------------------------------------------------------------------
-chromadb==0.4.22                     # Vector DB for development
+chromadb>=0.4.24,<0.5.0              # Vector DB for development (0.4.x latest, telemetry fix)
 # pinecone-client==3.0.0             # Vector DB for production (uncomment when ready)
-sentence-transformers==2.2.2         # Text embeddings (multilingual support)
-torch==2.1.2                         # PyTorch for sentence-transformers
-torchvision==0.16.2                  # Vision utilities (required by torch)
-torchaudio==2.1.2                    # Audio utilities (required by torch)
-numpy==1.26.3                        # Numerical computing
+
+# Transformers & Embeddings (PyTorch 2.1 compatible versions)
+transformers==4.36.0                 # HuggingFace Transformers - PyTorch 2.1 compatible
+sentence-transformers==2.3.1         # Text embeddings (multilingual support) - PyTorch 2.1 compatible
+# 이전 버전: sentence-transformers==2.2.2 (PyTorch 2.1과 호환성 문제)
+# 이전 버전: transformers==4.35.x (PyTorch 2.1과 호환성 문제)
+
+# PyTorch with CUDA support (GPU acceleration)
+# Windows/Linux with CUDA 11.8:
+#   pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+# 
+# CPU only (기본):
+torch==2.1.2                         # PyTorch for sentence-transformers (CPU)
+# 
+# GPU 사용 시 위 torch 라인 주석 처리하고 아래 명령어 실행:
+#   pip uninstall torch -y
+#   pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+#
+numpy>=1.26.3,<2                     # Numerical computing (torch 2.1.x는 numpy<2 필요)
 scikit-learn==1.4.0                  # ML utilities for embeddings
+
+# -----------------------------------------------------------------------------
+# Pipecat AI Framework (Phase 1)
+# -----------------------------------------------------------------------------
+pipecat-ai[google,silero]>=0.0.85    # Voice AI pipeline framework
+                                      # Includes: Silero VAD, Google STT/TTS/Gemini
+
+# -----------------------------------------------------------------------------
+# LangGraph Agentic RAG (Phase 2)
+# -----------------------------------------------------------------------------
+langgraph>=0.1.0                     # Agent workflow orchestration
+langchain-core>=0.2.0                # LangGraph core dependency
 
 # -----------------------------------------------------------------------------
 # Audio Processing
 # -----------------------------------------------------------------------------
 pydub==0.25.1                        # Audio manipulation
 ffmpeg-python==0.2.0                 # FFmpeg wrapper for audio conversion
-webrtcvad==2.0.10                    # Voice Activity Detection
+webrtcvad==2.0.10                    # Voice Activity Detection (legacy, kept for fallback)
 # pyaudio==0.2.14                    # Audio I/O (optional, may need system deps)
 # audioop and wave are built-in modules in Python 3.11+
 

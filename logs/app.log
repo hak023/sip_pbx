@@ -1,24 +1,373 @@
-{"event": "\ud83d\udd27 [TIMING] SIP Endpoint creation starting...", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
-{"message": "Creating SIP endpoint", "event": "creating_sip_endpoint", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
-{"start_port": 10000, "end_port": 10100, "total_ports": 50, "max_concurrent_calls": 12, "event": "port_pool_manager_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
-{"default_mode": "bypass", "event": "media_session_manager_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
-{"event": "call_state_repository_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.992+09:00"}
-{"output_dir": "recordings", "sample_rate": 8000, "enable_post_stt": false, "enable_diarization": true, "event": "SIPCallRecorder initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.994+09:00"}
-{"recording_dir": "./recordings", "event": "SIP call recording enabled", "level": "info", "timestamp": "2026-01-26T20:15:28.994+09:00"}
-{"output_dir": "cdr", "filename_pattern": "cdr-%Y-%m-%d.jsonl", "event": "cdr_writer_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"output_dir": "./cdr", "event": "CDR writer enabled", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"media_enabled": true, "b2bua_ip": "0.0.0.0", "ai_enabled": false, "recording_enabled": true, "knowledge_extraction_enabled": false, "cdr_enabled": true, "no_answer_timeout": 10, "event": "call_manager_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"session_expires": 1800, "min_se": 90, "default_refresher": "uas", "event": "SessionTimer initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"t1": 0.5, "t2": 4.0, "t4": 5.0, "event": "TransactionTimer initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"output_dir": "cdr", "filename_pattern": "cdr-%Y-%m-%d.jsonl", "event": "cdr_writer_initialized", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"output_dir": "./cdr", "event": "CDR writer initialized for SIP Endpoint", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"log_file": "logs\\sip_traffic_20260126.log", "event": "sip_traffic_log_opened", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"message": "SIP B2BUA endpoint initialized (signaling + media relay)", "timers": {"session_expires": 1800, "t1": 0.5, "bye_timeout": 32}, "event": "sip_endpoint_created", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"event": "\ud83d\udd27 [TIMING] SIP Endpoint created in 0.00s", "level": "info", "timestamp": "2026-01-26T20:15:28.995+09:00"}
-{"event": "\ud83d\udd27 [TIMING] SIP Server starting...", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
-{"message": "Starting SIP server", "event": "starting_sip_server", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
-{"listen_ip": "0.0.0.0", "listen_port": 5060, "event": "mock_sip_server_started", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
-{"event": "\ud83d\udd27 [TIMING] SIP Server started in 0.00s", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
-{"event": "\ud83d\udd27 [TIMING] \u2b50 TOTAL STARTUP TIME: 0.00s", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
-{"message": "SIP PBX is ready to accept calls", "sip_port": 5060, "health_check_port": 8080, "ai_voicebot_enabled": false, "startup_time": "0.00s", "event": "server_ready", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
-{"listen_ip": "0.0.0.0", "listen_port": 5060, "bind_time": "0.000s", "event": "mock_udp_socket_bound", "level": "info", "timestamp": "2026-01-26T20:15:28.997+09:00"}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "🔍 [DEBUG] ai_voicebot_config check", "config_type": "AIVoicebotConfig", "enabled": true, "has_config": true}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "🚀 [MAIN] Starting AI Voicebot background initialization..."}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "sip_endpoint_creation_starting", "message": "SIP Endpoint 생성 시작"}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "creating_sip_endpoint", "message": "Creating SIP endpoint"}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "port_pool_manager_initialized", "end_port": 10100, "max_concurrent_calls": 12, "start_port": 10000, "total_ports": 50}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "media_session_manager_initialized", "default_mode": "bypass"}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "call_state_repository_initialized"}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "config_debug_step1", "has_ai_voicebot": true}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "config_debug_step2", "has_recording": true}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "config_debug_step3", "gcp_path": "config/gcp-key.json"}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "config_debug_step4", "has_post_stt": true}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "stt_config_loaded", "enable_post_stt": true, "has_gcp_credentials": true, "stt_language": "ko-KR"}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "🔧 [Knowledge Extraction] Config check", "enabled": true, "has_config": true}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "🔧 [Knowledge Extraction] Starting initialization..."}
+{"timestamp": "2026-02-21T15:11:52.337", "level": "info", "event": "🔄 [Knowledge Import] Step 1/4: Importing KnowledgeExtractor..."}
+{"timestamp": "2026-02-21T15:13:41.953", "level": "info", "event": "🔄 [ChromaDB Module] Importing chromadb package..."}
+{"timestamp": "2026-02-21T15:13:53.286", "level": "info", "event": "✅ [ChromaDB Module] chromadb package imported", "elapsed": "11.333s"}
+{"timestamp": "2026-02-21T15:13:53.669", "level": "info", "event": "✅ [Knowledge Import] Step 1/4 completed (121.333s)"}
+{"timestamp": "2026-02-21T15:13:53.669", "level": "info", "event": "🔄 [Knowledge Import] Step 2/4: Importing LLMClient..."}
+{"timestamp": "2026-02-21T15:14:24.066", "level": "info", "event": "🔄 [LLM Module] Importing google.generativeai..."}
+{"timestamp": "2026-02-21T15:14:26.939", "level": "info", "event": "✅ [LLM Module] google.generativeai imported", "elapsed": "2.873s"}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "✅ [Knowledge Import] Step 2/4 completed (33.308s)"}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "🔄 [Knowledge Import] Step 3/4: Importing TextEmbedder..."}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "✅ [Knowledge Import] Step 3/4 completed (0.000s)"}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "🔄 [Knowledge Import] Step 4/4: Importing get_chromadb_client..."}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "✅ [Knowledge Import] Step 4/4 completed (0.000s)"}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "🔧 [Knowledge Extraction] Modules imported successfully", "total_time": "154.640s"}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "🔧 [Knowledge Extraction] Initializing LLM client..."}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "LLMClient initialized", "model": "gemini-2.5-flash", "temperature": 0.5}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "🔧 [Knowledge Extraction] LLM client initialized", "model": "gemini-2.5-flash"}
+{"timestamp": "2026-02-21T15:14:26.977", "level": "info", "event": "🔧 [Knowledge Extraction] Initializing Embedder..."}
+{"timestamp": "2026-02-21T15:14:27.005", "level": "info", "event": "🎮 [GPU] CUDA available! Using GPU acceleration", "device": "cuda", "gpu_memory_gb": "8.00GB", "gpu_name": "NVIDIA GeForce RTX 4060 Laptop GPU"}
+{"timestamp": "2026-02-21T15:14:27.005", "level": "info", "event": "Loading embedding model", "device": "cuda", "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:27.005", "level": "info", "event": "🔧 [DEBUG] Disabling HuggingFace Hub transfer..."}
+{"timestamp": "2026-02-21T15:14:27.005", "level": "info", "event": "✅ [DEBUG] HuggingFace Hub transfer disabled"}
+{"timestamp": "2026-02-21T15:14:27.005", "level": "info", "event": "🔄 [DEBUG] Starting SentenceTransformer initialization..."}
+{"timestamp": "2026-02-21T15:14:27.005", "level": "info", "event": "🔄 [DEBUG] Model name: paraphrase-multilingual-mpnet-base-v2, Device: cuda, Auth: False"}
+{"timestamp": "2026-02-21T15:14:27.005", "level": "info", "event": "🔄 [DEBUG] Calling SentenceTransformer()..."}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "✅ [DEBUG] SentenceTransformer loaded successfully in 11.69 seconds"}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "✅ [GPU] Model loaded on GPU", "cuda_device": 0, "device": "cuda", "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "TextEmbedder initialized", "device": "cuda", "dimension": 768, "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "🔧 [Knowledge Extraction] Embedder initialized"}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "🔧 [Knowledge Extraction] Initializing ChromaDB..."}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "🔄 [ChromaDB Init] Using single ChromaDB client (get_chromadb_client)...", "persist_directory": "./data/chromadb"}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "🔄 [ChromaDB] Starting ChromaDB client initialization...", "client_mode": "local", "persist_directory": "data\\chromadb"}
+{"timestamp": "2026-02-21T15:14:38.692", "level": "info", "event": "🔄 [ChromaDB] Creating Settings...", "telemetry": false}
+{"timestamp": "2026-02-21T15:14:38.694", "level": "info", "event": "✅ [ChromaDB] Settings created", "elapsed": "0.002s"}
+{"timestamp": "2026-02-21T15:14:38.694", "level": "info", "event": "🔄 [ChromaDB] Creating PersistentClient...", "path": "data\\chromadb"}
+{"timestamp": "2026-02-21T15:14:40.238", "level": "info", "event": "✅ [ChromaDB] PersistentClient created", "elapsed": "1.544s"}
+{"timestamp": "2026-02-21T15:14:40.238", "level": "info", "event": "🔄 [ChromaDB] Getting or creating collection...", "collection_name": "knowledge_base"}
+{"timestamp": "2026-02-21T15:14:40.287", "level": "info", "event": "✅ [ChromaDB] Collection ready", "collection": "knowledge_base", "document_count": 40, "elapsed": "0.005s"}
+{"timestamp": "2026-02-21T15:14:40.287", "level": "info", "event": "ChromaDBClient initialized", "collection": "knowledge_base", "count": 40, "mode": "local"}
+{"timestamp": "2026-02-21T15:14:40.287", "level": "info", "event": "✅ [Knowledge Extraction] ChromaDB initialized", "elapsed": "1.594s"}
+{"timestamp": "2026-02-21T15:14:40.287", "level": "info", "event": "🔧 [Knowledge Extraction] Creating Pipeline v2..."}
+{"timestamp": "2026-02-21T15:14:40.287", "level": "info", "event": "ExtractionPipeline v2 initialized", "quality": {"min_confidence": 0.7, "hallucination_check": true, "deduplication": true, "dedup_threshold": 0.92, "near_dedup_threshold": 0.85}, "steps": {"summarize": true, "qa_extract": true, "entity_extract": true}}
+{"timestamp": "2026-02-21T15:14:40.287", "level": "info", "event": "✅ Knowledge Extraction Pipeline v2 initialized"}
+{"timestamp": "2026-02-21T15:14:40.964", "level": "info", "event": "Google Speech-to-Text client initialized"}
+{"timestamp": "2026-02-21T15:14:40.964", "level": "info", "event": "SIPCallRecorder initialized", "enable_diarization": true, "enable_post_stt": true, "output_dir": "recordings", "sample_rate": 8000}
+{"timestamp": "2026-02-21T15:14:40.964", "level": "info", "event": "SIP call recording enabled", "recording_dir": "./recordings"}
+{"timestamp": "2026-02-21T15:14:40.964", "level": "info", "event": "Knowledge extraction enabled for regular calls"}
+{"timestamp": "2026-02-21T15:14:40.966", "level": "info", "event": "cdr_writer_initialized", "filename_pattern": "cdr-%Y-%m-%d.jsonl", "output_dir": "cdr"}
+{"timestamp": "2026-02-21T15:14:40.966", "level": "info", "event": "CDR writer enabled", "output_dir": "./cdr"}
+{"timestamp": "2026-02-21T15:14:40.966", "level": "info", "event": "call_manager_initialized", "ai_enabled": false, "b2bua_ip": "0.0.0.0", "cdr_enabled": true, "knowledge_extraction_enabled": true, "media_enabled": true, "no_answer_timeout": 10, "recording_enabled": true}
+{"timestamp": "2026-02-21T15:14:41.031", "level": "info", "event": "transfer_manager_initialized"}
+{"timestamp": "2026-02-21T15:14:41.102", "level": "info", "event": "outbound_manager_initialized"}
+{"timestamp": "2026-02-21T15:14:41.102", "level": "info", "event": "SessionTimer initialized", "default_refresher": "uas", "min_se": 90, "session_expires": 1800}
+{"timestamp": "2026-02-21T15:14:41.102", "level": "info", "event": "TransactionTimer initialized", "t1": 0.5, "t2": 4.0, "t4": 5.0}
+{"timestamp": "2026-02-21T15:14:41.102", "level": "info", "event": "cdr_writer_initialized", "filename_pattern": "cdr-%Y-%m-%d.jsonl", "output_dir": "cdr"}
+{"timestamp": "2026-02-21T15:14:41.102", "level": "info", "event": "CDR writer initialized for SIP Endpoint", "output_dir": "./cdr"}
+{"timestamp": "2026-02-21T15:14:41.104", "level": "info", "event": "sip_traffic_log_opened", "log_file": "logs\\sip_traffic_20260221.log"}
+{"timestamp": "2026-02-21T15:14:41.104", "level": "info", "event": "sip_endpoint_created", "message": "SIP B2BUA endpoint initialized (signaling + media relay)", "timers": {"session_expires": 1800, "t1": 0.5, "bye_timeout": 32}}
+{"timestamp": "2026-02-21T15:14:41.104", "level": "info", "event": "sip_endpoint_created", "elapsed": "168.768s", "message": "SIP Endpoint 생성 완료"}
+{"timestamp": "2026-02-21T15:14:41.104", "level": "info", "event": "sip_server_starting", "message": "UDP 소켓 바인딩 시작"}
+{"timestamp": "2026-02-21T15:14:41.104", "level": "info", "event": "starting_sip_server", "message": "Starting SIP server"}
+{"timestamp": "2026-02-21T15:14:41.104", "level": "info", "event": "sip_server_started", "listen_ip": "0.0.0.0", "listen_port": 5060}
+{"timestamp": "2026-02-21T15:14:41.104", "level": "info", "event": "sip_server_started", "elapsed": "0.000s", "message": "UDP 소켓 바인딩 완료"}
+{"timestamp": "2026-02-21T15:14:41.804", "level": "info", "event": "🎮 [GPU] CUDA available! Using GPU acceleration", "device": "cuda", "gpu_memory_gb": "8.00GB", "gpu_name": "NVIDIA GeForce RTX 4060 Laptop GPU"}
+{"timestamp": "2026-02-21T15:14:41.804", "level": "info", "event": "Loading embedding model", "device": "cuda", "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:41.804", "level": "info", "event": "🔧 [DEBUG] Disabling HuggingFace Hub transfer..."}
+{"timestamp": "2026-02-21T15:14:41.804", "level": "info", "event": "✅ [DEBUG] HuggingFace Hub transfer disabled"}
+{"timestamp": "2026-02-21T15:14:41.804", "level": "info", "event": "🔄 [DEBUG] Starting SentenceTransformer initialization..."}
+{"timestamp": "2026-02-21T15:14:41.804", "level": "info", "event": "🔄 [DEBUG] Model name: paraphrase-multilingual-mpnet-base-v2, Device: cuda, Auth: False"}
+{"timestamp": "2026-02-21T15:14:41.804", "level": "info", "event": "🔄 [DEBUG] Calling SentenceTransformer()..."}
+{"timestamp": "2026-02-21T15:14:45.771", "level": "info", "event": "✅ [DEBUG] SentenceTransformer loaded successfully in 3.97 seconds"}
+{"timestamp": "2026-02-21T15:14:45.771", "level": "info", "event": "✅ [GPU] Model loaded on GPU", "cuda_device": 0, "device": "cuda", "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:45.771", "level": "info", "event": "TextEmbedder initialized", "device": "cuda", "dimension": 768, "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:45.771", "level": "info", "event": "KnowledgeService created"}
+{"timestamp": "2026-02-21T15:14:50.412", "level": "info", "event": "call_manager_injected_for_api_and_ws"}
+{"timestamp": "2026-02-21T15:14:50.446", "level": "info", "event": "HITLService initialized", "timeout_seconds": 60}
+{"timestamp": "2026-02-21T15:14:50.446", "level": "info", "event": "hitl_timeout_callback_registered"}
+{"timestamp": "2026-02-21T15:14:50.446", "level": "info", "event": "KnowledgeService initialized"}
+{"timestamp": "2026-02-21T15:14:50.448", "level": "info", "event": "ai_voicebot_background_init_starting", "message": "AI Voicebot 백그라운드 초기화 시작", "note": "서버는 즉시 시작되며, AI는 백그라운드에서 로딩됩니다"}
+{"timestamp": "2026-02-21T15:14:52.457", "level": "info", "event": "ai_background_factory_calling", "config_keys": ["enabled", "no_answer_timeout", "greeting_message", "google_cloud", "resilience", "vector_db", "embedding", "rag", "knowledge_extractor", "recording", "transfer", "outbound", "vad", "barge_in", "audio_buffer", "logging", "hitl", "streaming_tts", "silero_vad", "smart_turn", "pipeline_engine"]}
+{"timestamp": "2026-02-21T15:14:52.457", "level": "info", "event": "🔧 [FACTORY] Initializing AI Voicebot components..."}
+{"timestamp": "2026-02-21T15:14:52.457", "level": "info", "event": "Initializing AI Voicebot components..."}
+{"timestamp": "2026-02-21T15:14:52.457", "level": "info", "event": "Audio Buffer initialized"}
+{"timestamp": "2026-02-21T15:14:52.457", "level": "info", "event": "VADDetector initialized", "frame_duration_ms": 30, "frame_size": 960, "mode": 3, "sample_rate": 16000}
+{"timestamp": "2026-02-21T15:14:52.457", "level": "info", "event": "VAD Detector initialized (WebRTC)"}
+{"timestamp": "2026-02-21T15:14:52.457", "level": "info", "event": "🔧 [FACTORY] Setting up Google Cloud credentials..."}
+{"timestamp": "2026-02-21T15:14:52.459", "level": "info", "event": "Google Cloud credentials set", "path": "config/gcp-key.json"}
+{"timestamp": "2026-02-21T15:14:52.459", "level": "info", "event": "🔧 [FACTORY] Credentials setup: 0.002s"}
+{"timestamp": "2026-02-21T15:14:52.459", "level": "info", "event": "🔧 [FACTORY] Importing STT Client..."}
+{"timestamp": "2026-02-21T15:14:52.459", "level": "info", "event": "🔧 [FACTORY] STT import: 0.000s"}
+{"timestamp": "2026-02-21T15:14:52.489", "level": "info", "event": "STTClient initialized", "language": "ko-KR", "model": "telephony", "sample_rate": 16000}
+{"timestamp": "2026-02-21T15:14:52.489", "level": "info", "event": "STT Client initialized (0.030s)"}
+{"timestamp": "2026-02-21T15:14:52.489", "level": "info", "event": "🔧 [FACTORY] Importing TTS Client..."}
+{"timestamp": "2026-02-21T15:14:52.489", "level": "info", "event": "🔧 [FACTORY] TTS import: 0.000s"}
+{"timestamp": "2026-02-21T15:14:52.514", "level": "info", "event": "TTSClient initialized", "language": "ko", "speaking_rate": 1.0, "voice": "ko-KR-Chirp3-HD-Kore"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "TTS Client initialized (0.027s)"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "🔧 [FACTORY] Importing LLM Client..."}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "🔧 [FACTORY] LLM import: 0.000s"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "Gemini API key loaded", "key": "AIzaSyCVg4...9Yss", "source": "config"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "LLMClient initialized", "model": "gemini-2.5-flash", "temperature": 0.5}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "LLM Client initialized (0.000s)"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "🎮 [GPU] CUDA available! Using GPU acceleration", "device": "cuda", "gpu_memory_gb": "8.00GB", "gpu_name": "NVIDIA GeForce RTX 4060 Laptop GPU"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "Loading embedding model", "device": "cuda", "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "🔧 [DEBUG] Disabling HuggingFace Hub transfer..."}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "✅ [DEBUG] HuggingFace Hub transfer disabled"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "🔄 [DEBUG] Starting SentenceTransformer initialization..."}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "🔄 [DEBUG] Model name: paraphrase-multilingual-mpnet-base-v2, Device: cuda, Auth: False"}
+{"timestamp": "2026-02-21T15:14:52.516", "level": "info", "event": "🔄 [DEBUG] Calling SentenceTransformer()..."}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "✅ [DEBUG] SentenceTransformer loaded successfully in 3.86 seconds"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "✅ [GPU] Model loaded on GPU", "cuda_device": 0, "device": "cuda", "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "TextEmbedder initialized", "device": "cuda", "dimension": 768, "model": "paraphrase-multilingual-mpnet-base-v2"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "Text Embedder initialized"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "🔄 [FACTORY] Step 8/12: Initializing Vector DB..."}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "🔄 [ChromaDB] Using single ChromaDB client (get_chromadb_client)...", "persist_directory": "./data/chromadb"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "🔄 [ChromaDB] Calling initialize()..."}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "✅ [FACTORY] ChromaDB initialized successfully"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "RAGEngine initialized", "reranking": false, "threshold": 0.7, "top_k": 3}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "RAG Engine initialized"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "CallRecorder initialized", "output_dir": "recordings", "sample_rate": 16000}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "Call Recorder initialized"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "KnowledgeExtractor initialized", "chunk_size": 500, "min_confidence": 0.7, "pii_review_queue_enabled": false}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "Knowledge Extractor initialized"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "KnowledgeService created"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "Knowledge Service singleton set"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "Knowledge Service initialized and set globally"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "🔧 [FACTORY] Creating AI Orchestrator..."}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "warning", "event": "get_organization_manager_deprecated", "message": "create_org_manager(owner, knowledge_service)를 사용하세요"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "BargeInController initialized", "silence_threshold": 2.0}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "AIOrchestrator created", "hitl_enabled": false}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "AIOrchestrator initialized with all components"}
+{"timestamp": "2026-02-21T15:14:56.380", "level": "info", "event": "🔧 [FACTORY] Orchestrator created: 0.000s"}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "🔧 [FACTORY] ⭐ TOTAL FACTORY TIME: 3.92s"}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "AI Orchestrator initialized successfully"}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "✅ AI Voicebot initialization completed"}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "TransferManager configured", "call_id": null}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "✅ [Transfer] TransferManager connected to AI Orchestrator"}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "✅ [Outbound] OutboundCallManager connected to AI Orchestrator"}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "✅ [AI Injection] AI Orchestrator injected into CallManager", "ai_available": true}
+{"timestamp": "2026-02-21T15:14:56.382", "level": "info", "event": "ai_orchestrator_connected_to_call_manager"}
+{"timestamp": "2026-02-21T15:15:36.066", "level": "info", "event": "langgraph_conversation_graph_compiled", "compile_time": "6.847s", "edges": "conditional+linear", "nodes": 9}
+{"timestamp": "2026-02-21T15:15:36.066", "level": "info", "event": "✅ [Pipecat] LangGraph pre-compiled", "elapsed": "7.200s"}
+{"timestamp": "2026-02-21T15:15:36.066", "level": "info", "event": "✅ Pipecat Pipeline Builder created successfully"}
+{"timestamp": "2026-02-21T15:15:36.066", "level": "info", "event": "✅ [Pipecat] Pipeline Builder injected into CallManager", "pipecat_available": true}
+{"timestamp": "2026-02-21T15:15:36.066", "level": "info", "event": "pipecat_builder_connected_to_call_manager", "engine": "pipecat"}
+{"timestamp": "2026-02-21T15:15:36.066", "level": "info", "event": "ai_voicebot_ready", "ai_ready": true, "elapsed": "5.93s", "features": ["AI 통화 기능", "VectorDB 지식 베이스", "실시간 STT/TTS"], "pipeline_engine": "pipecat"}
+{"timestamp": "2026-02-21T15:15:36.066", "level": "info", "event": "udp_socket_bound", "bind_time": "0.000s", "listen_ip": "0.0.0.0", "listen_port": 5060}
+{"timestamp": "2026-02-21T15:15:36.068", "level": "info", "event": "seed_data_skip_existing_tenant", "owner": "1003", "tenant_name": "이탈리안 비스트로"}
+{"timestamp": "2026-02-21T15:15:36.070", "level": "info", "event": "seed_data_skip_existing_tenant", "owner": "1004", "tenant_name": "기상청"}
+{"timestamp": "2026-02-21T15:15:36.072", "level": "info", "event": "seed_data_already_exists", "message": "모든 테넌트 데이터가 이미 존재합니다"}
+{"timestamp": "2026-02-21T15:15:36.072", "level": "info", "event": "seed_data_run_from_main"}
+{"timestamp": "2026-02-21T15:15:36.072", "level": "info", "event": "api_server_started_in_process", "port": 8000}
+{"timestamp": "2026-02-21T15:15:36.074", "level": "info", "event": "websocket_server_started_in_process", "port": 8001}
+{"timestamp": "2026-02-21T15:15:36.076", "level": "info", "event": "WebSocket server started on ws://0.0.0.0:8001"}
+{"timestamp": "2026-02-21T15:15:36.076", "level": "info", "event": "🔧 [TIMING] ⭐ TOTAL STARTUP TIME: 223.74s"}
+{"timestamp": "2026-02-21T15:15:36.076", "level": "info", "event": "server_ready", "ai_voicebot_enabled": true, "health_check_port": 8080, "message": "SIP PBX is ready to accept calls", "sip_port": 5060, "startup_time": "223.74s"}
+{"timestamp": "2026-02-21T15:15:38.395", "level": "info", "event": "API Gateway starting up..."}
+{"timestamp": "2026-02-21T15:15:38.395", "level": "info", "event": "KnowledgeService initialized"}
+{"timestamp": "2026-02-21T15:15:38.402", "level": "info", "event": "seed_data_skip_existing_tenant", "owner": "1003", "tenant_name": "이탈리안 비스트로"}
+{"timestamp": "2026-02-21T15:15:38.403", "level": "info", "event": "seed_data_skip_existing_tenant", "owner": "1004", "tenant_name": "기상청"}
+{"timestamp": "2026-02-21T15:15:38.403", "level": "info", "event": "seed_data_already_exists", "message": "모든 테넌트 데이터가 이미 존재합니다"}
+{"timestamp": "2026-02-21T15:15:38.403", "level": "info", "event": "API Gateway startup complete"}
+{"timestamp": "2026-02-21T15:16:33.811", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:17:33.492", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:18:33.808", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:19:33.488", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:20:33.501", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:21:33.794", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:22:33.495", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:23:33.489", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:24:33.810", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:25:33.504", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:26:33.796", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:27:33.494", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:28:33.507", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:29:33.824", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:30:33.507", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:31:33.825", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:32:33.508", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:33:33.836", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:34:17.928", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "REGISTER", "from_addr": "172.30.1.93:40253", "size": 602}
+{"timestamp": "2026-02-21T15:34:17.928", "level": "info", "event": "user_registered", "addr": "172.30.1.93:40253", "registered_users": ["1004"], "total_users": 1, "username": "1004"}
+{"timestamp": "2026-02-21T15:34:17.928", "level": "info", "event": "sip_send", "direction": "SEND", "method": "REGISTER", "status_code": "200", "to_addr": "172.30.1.93:40253", "size": 391}
+{"timestamp": "2026-02-21T15:34:18.022", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "REGISTER", "from_addr": "172.30.1.93:40253", "size": 602}
+{"timestamp": "2026-02-21T15:34:18.022", "level": "info", "event": "user_registered", "addr": "172.30.1.93:40253", "registered_users": ["1004"], "total_users": 1, "username": "1004"}
+{"timestamp": "2026-02-21T15:34:18.022", "level": "info", "event": "sip_send", "direction": "SEND", "method": "REGISTER", "status_code": "200", "to_addr": "172.30.1.93:40253", "size": 391}
+{"timestamp": "2026-02-21T15:34:31.345", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "REGISTER", "from_addr": "172.30.1.12:50757", "size": 589}
+{"timestamp": "2026-02-21T15:34:31.345", "level": "info", "event": "user_registered", "addr": "172.30.1.12:50757", "registered_users": ["1004", "1003"], "total_users": 2, "username": "1003"}
+{"timestamp": "2026-02-21T15:34:31.345", "level": "info", "event": "sip_send", "direction": "SEND", "method": "REGISTER", "status_code": "200", "to_addr": "172.30.1.12:50757", "size": 391}
+{"timestamp": "2026-02-21T15:34:33.806", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:34:42.362", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "REGISTER", "from_addr": "172.30.1.93:40253", "size": 602}
+{"timestamp": "2026-02-21T15:34:42.362", "level": "info", "event": "user_registered", "addr": "172.30.1.93:40253", "registered_users": ["1004", "1003"], "total_users": 2, "username": "1004"}
+{"timestamp": "2026-02-21T15:34:42.363", "level": "info", "event": "sip_send", "direction": "SEND", "method": "REGISTER", "status_code": "200", "to_addr": "172.30.1.93:40253", "size": 391}
+{"timestamp": "2026-02-21T15:34:43.040", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "REGISTER", "from_addr": "172.30.1.93:40253", "size": 602}
+{"timestamp": "2026-02-21T15:34:43.040", "level": "info", "event": "user_registered", "addr": "172.30.1.93:40253", "registered_users": ["1004", "1003"], "total_users": 2, "username": "1004"}
+{"timestamp": "2026-02-21T15:34:43.040", "level": "info", "event": "sip_send", "direction": "SEND", "method": "REGISTER", "status_code": "200", "to_addr": "172.30.1.93:40253", "size": 391}
+{"timestamp": "2026-02-21T15:35:33.507", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:36:33.502", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:37:33.514", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:38:33.820", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:39:33.504", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:40:33.835", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:41:33.510", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:41:48.589", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "INVITE", "from_addr": "172.30.1.12:50757", "size": 930}
+{"timestamp": "2026-02-21T15:41:48.589", "level": "info", "event": "b2bua_invite_received", "call_id": "oseYOEru9V", "caller": "1003", "callee": "1004"}
+{"timestamp": "2026-02-21T15:41:48.590", "level": "info", "event": "OperatorStatusManager initialized"}
+{"timestamp": "2026-02-21T15:41:48.590", "level": "info", "event": "call_session_added", "call_id": "oseYOEru9V", "state": "proceeding"}
+{"timestamp": "2026-02-21T15:41:48.590", "level": "info", "event": "b2bua_call_setup", "caller": "1003", "callee": "1004", "new_call_id": "b2bua-322856-oseYOEru", "original_call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:41:48.590", "level": "info", "event": "ports_allocated", "call_id": "oseYOEru9V", "available_pairs": 46, "ports": [10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007], "utilization": 0.08}
+{"timestamp": "2026-02-21T15:41:48.591", "level": "info", "event": "media_session_created", "call_id": "oseYOEru9V", "callee_ports": [10004, 10005, 10006, 10007], "caller_ports": [10000, 10001, 10002, 10003], "has_audio": true, "has_video": false, "mode": "bypass"}
+{"timestamp": "2026-02-21T15:41:48.591", "level": "info", "event": "media_session_created", "call_id": "oseYOEru9V", "callee_allocated_ports": [10004, 10005, 10006, 10007], "callee_audio_port": 10004, "caller_allocated_ports": [10000, 10001, 10002, 10003], "caller_audio_port": 10000, "caller_original_ip": "172.30.1.12", "caller_original_port": 47210}
+{"timestamp": "2026-02-21T15:41:48.591", "level": "info", "event": "sip_send", "direction": "SEND", "method": "INVITE", "status_code": "100", "to_addr": "172.30.1.12:50757", "size": 216}
+{"timestamp": "2026-02-21T15:41:48.592", "level": "info", "event": "sdp_rewrite_original", "call_id": "oseYOEru9V", "has_rtcp_fb": true, "original_length": 294, "original_lines": 12}
+{"timestamp": "2026-02-21T15:41:48.592", "level": "info", "event": "sdp_after_vendor_removal", "call_id": "oseYOEru9V", "has_rtcp_fb": true, "length": 294}
+{"timestamp": "2026-02-21T15:41:48.592", "level": "info", "event": "sdp_after_origin_replacement", "call_id": "oseYOEru9V", "has_rtcp_fb": true, "length": 294}
+{"timestamp": "2026-02-21T15:41:48.592", "level": "info", "event": "sdp_after_connection_replacement", "call_id": "oseYOEru9V", "has_rtcp_fb": true, "length": 294}
+{"timestamp": "2026-02-21T15:41:48.592", "level": "info", "event": "sdp_after_media_port_replacement", "call_id": "oseYOEru9V", "c": "172.30.1.50", "has_rtcp_fb": true, "length": 294, "m_audio": 10004, "o": "172.30.1.50"}
+{"timestamp": "2026-02-21T15:41:48.593", "level": "info", "event": "sdp_after_rtcp_replacement", "call_id": "oseYOEru9V", "has_rtcp_fb": true, "length": 294, "rtcp_port": 10005}
+{"timestamp": "2026-02-21T15:41:48.593", "level": "info", "event": "sip_send", "direction": "SEND", "method": "INVITE", "to_addr": "172.30.1.93:40253", "size": 655}
+{"timestamp": "2026-02-21T15:41:48.593", "level": "info", "event": "early_bind_starting", "call_id": "oseYOEru9V", "action": "before_200_ok"}
+{"timestamp": "2026-02-21T15:41:48.594", "level": "info", "event": "early_bind_mode_using_dummy_callee", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:41:48.594", "level": "info", "event": "rtp_bind_ip_selected", "call_id": "oseYOEru9V", "bind_ip": "0.0.0.0", "source": "config"}
+{"timestamp": "2026-02-21T15:41:48.594", "level": "info", "event": "rtp_relay_worker_created", "call_id": "oseYOEru9V", "caller": "172.30.1.12:47210", "callee": "0.0.0.0:0", "ai_enabled": false, "recording_enabled": true}
+{"timestamp": "2026-02-21T15:41:48.594", "level": "info", "event": "rtp_socket_bound", "call_id": "oseYOEru9V", "bind_ip": "0.0.0.0", "port": 10000, "type": "caller_audio_rtp"}
+{"timestamp": "2026-02-21T15:41:48.595", "level": "info", "event": "rtp_socket_bound", "call_id": "oseYOEru9V", "bind_ip": "0.0.0.0", "port": 10001, "type": "caller_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:48.595", "level": "info", "event": "rtp_socket_bound", "call_id": "oseYOEru9V", "bind_ip": "0.0.0.0", "port": 10004, "type": "callee_audio_rtp"}
+{"timestamp": "2026-02-21T15:41:48.596", "level": "info", "event": "rtp_socket_bound", "call_id": "oseYOEru9V", "bind_ip": "0.0.0.0", "port": 10005, "type": "callee_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:48.596", "level": "info", "event": "rtp_relay_started", "call_id": "oseYOEru9V", "sockets_bound": 4}
+{"timestamp": "2026-02-21T15:41:48.596", "level": "info", "event": "rtp_worker_started_successfully", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:41:48.596", "level": "info", "event": "SIP call recording started", "call_id": "oseYOEru9V", "caller": "1003", "callee": "1004"}
+{"timestamp": "2026-02-21T15:41:48.597", "level": "info", "event": "Recording directory created", "call_id": "oseYOEru9V", "directory": "recordings\\20260221_154148_1003_to_1004"}
+{"timestamp": "2026-02-21T15:41:48.597", "level": "info", "event": "recording_started", "call_id": "oseYOEru9V", "caller": "1003", "callee": "1004"}
+{"timestamp": "2026-02-21T15:41:48.597", "level": "info", "event": "rtp_relay_started", "call_id": "oseYOEru9V", "b2bua_ports_callee": [10004, 10005], "b2bua_ports_caller": [10000, 10001], "callee_endpoint": "0.0.0.0:0", "caller_endpoint": "172.30.1.12:47210"}
+{"timestamp": "2026-02-21T15:41:48.598", "level": "info", "event": "early_bind_success", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:41:48.598", "level": "info", "event": "INVITE transaction started", "transaction_id": "invite-b2bua-322856-oseYOEru", "timer_b_timeout": 32.0}
+{"timestamp": "2026-02-21T15:41:48.598", "level": "info", "event": "invite_transaction_started", "call_id": "oseYOEru9V", "transaction_id": "invite-b2bua-322856-oseYOEru", "new_call_id": "b2bua-322856-oseYOEru"}
+{"timestamp": "2026-02-21T15:41:48.598", "level": "info", "event": "no_answer_timer_started", "call_id": "oseYOEru9V", "timeout": 10}
+{"timestamp": "2026-02-21T15:41:48.598", "level": "info", "event": "b2bua_call_setup_in_progress", "call_id": "oseYOEru9V", "no_answer_timeout": "10s", "transaction_timeout": "32.0s"}
+{"timestamp": "2026-02-21T15:41:48.743", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "INVITE", "status_code": "100", "from_addr": "172.30.1.93:40253", "size": 197}
+{"timestamp": "2026-02-21T15:41:48.807", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "INVITE", "status_code": "180", "from_addr": "172.30.1.93:40253", "size": 369}
+{"timestamp": "2026-02-21T15:41:48.807", "level": "info", "event": "callee_tag_from_180", "call_id": "oseYOEru9V", "callee_tag": "4CCgdJ-"}
+{"timestamp": "2026-02-21T15:41:48.807", "level": "info", "event": "b2bua_ip_auto_detected", "method": "udp_connect", "ip": "172.30.1.50"}
+{"timestamp": "2026-02-21T15:41:48.807", "level": "info", "event": "sip_send", "direction": "SEND", "method": "INVITE", "status_code": "180", "to_addr": "172.30.1.12:50757", "size": 267}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "INVITE", "status_code": "200", "from_addr": "172.30.1.93:40253", "size": 930}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "relaying_200ok", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "no_answer_timer_cancelled_on_200ok", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "Transaction completed", "transaction_id": "invite-b2bua-322856-oseYOEru", "status_code": 200}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "invite_transaction_completed", "call_id": "oseYOEru9V", "transaction_id": "invite-b2bua-322856-oseYOEru"}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "Session timer started", "call_id": "oseYOEru9V", "expires": 1800, "refresh_interval": 900.0, "refresher": "uas"}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "session_timer_started", "call_id": "oseYOEru9V", "expires": 1800}
+{"timestamp": "2026-02-21T15:41:54.268", "level": "info", "event": "callee_sdp_updated", "call_id": "oseYOEru9V", "audio_port": 47735, "audio_rtcp_port": 41209, "callee_ip": "172.30.1.93"}
+{"timestamp": "2026-02-21T15:41:54.269", "level": "info", "event": "callee_endpoint_updated", "call_id": "oseYOEru9V", "callee_ip": "172.30.1.93", "callee_rtcp_port": 41209, "callee_rtp_port": 47735}
+{"timestamp": "2026-02-21T15:41:54.269", "level": "info", "event": "callee_endpoint_updated", "call_id": "oseYOEru9V", "callee_ip": "172.30.1.93", "callee_rtcp_port": 41209, "callee_rtp_port": 47735}
+{"timestamp": "2026-02-21T15:41:54.269", "level": "info", "event": "sip_send", "direction": "SEND", "method": "INVITE", "status_code": "200", "to_addr": "172.30.1.12:50757", "size": 663}
+{"timestamp": "2026-02-21T15:41:54.269", "level": "info", "event": "call_answered_waiting_ack", "call_id": "oseYOEru9V", "session_refresh_interval": "900.0s"}
+{"timestamp": "2026-02-21T15:41:54.293", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.93:47735", "socket_type": "callee_audio_rtp"}
+{"timestamp": "2026-02-21T15:41:54.293", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.93:41209", "socket_type": "callee_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:54.403", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.93:41209", "socket_type": "callee_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:54.451", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.12:47210", "socket_type": "caller_audio_rtp"}
+{"timestamp": "2026-02-21T15:41:54.451", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.12:47997", "socket_type": "caller_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:54.480", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.12:47210", "socket_type": "caller_audio_rtp"}
+{"timestamp": "2026-02-21T15:41:54.480", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.12:47997", "socket_type": "caller_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "ACK", "from_addr": "172.30.1.12:50757", "size": 332}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "ack_received_debug", "call_id": "oseYOEru9V", "from_addr": "172.30.1.12:50757", "active_calls": ["oseYOEru9V", "b2bua-322856-oseYOEru"]}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "ack_call_info", "call_id": "oseYOEru9V", "call_info_keys": ["original_call_id", "caller_username", "callee_username", "caller_addr", "callee_addr", "caller_tag", "callee_tag", "b2bua_from_tag", "b2bua_call_id", "original_from", "original_to", "original_via", "original_via_branch", "original_cseq", "sdp", "state", "start_time", "answer_time", "b2bua_via", "b2bua_from", "b2bua_to", "b2bua_cseq", "transaction_id", "invite_message", "callee_addr_for_retransmit"], "has_b2bua_call_id": true, "has_callee_addr": true}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "ack_relay_start", "call_id": "oseYOEru9V", "callee_addr": "172.30.1.93:40253", "new_call_id": "b2bua-322856-oseYOEru"}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "ack_sdp_check", "call_id": "oseYOEru9V", "has_sdp": false}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "ack_sending", "call_id": "oseYOEru9V", "to_addr": "172.30.1.93:40253", "has_sdp": false}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "sip_send", "direction": "SEND", "method": "ACK", "to_addr": "172.30.1.93:40253", "size": 265}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "ack_sent", "call_id": "oseYOEru9V", "to_addr": "172.30.1.93:40253"}
+{"timestamp": "2026-02-21T15:41:54.551", "level": "info", "event": "call_established", "call_id": "oseYOEru9V", "caller": "1003", "callee": "1004"}
+{"timestamp": "2026-02-21T15:41:54.900", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.93:41209", "socket_type": "callee_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:54.978", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.12:47997", "socket_type": "caller_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:55.412", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.93:41209", "socket_type": "callee_audio_rtcp"}
+{"timestamp": "2026-02-21T15:41:55.913", "level": "info", "event": "stun_binding_request_relaying", "call_id": "oseYOEru9V", "from_addr": "172.30.1.93:41209", "socket_type": "callee_audio_rtcp"}
+{"timestamp": "2026-02-21T15:42:25.839", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "BYE", "from_addr": "172.30.1.12:50757", "size": 332}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "bye_received", "call_id": "oseYOEru9V", "from_addr": "172.30.1.12:50757"}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "bye_received", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "sip_send", "direction": "SEND", "method": "BYE", "status_code": "200", "to_addr": "172.30.1.12:50757", "size": 223}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "bye_response_sent", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "sip_send", "direction": "SEND", "method": "BYE", "to_addr": "172.30.1.93:40253", "size": 265}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "bye_forwarded", "to_addr": "172.30.1.93:40253", "other_call_id": "b2bua-322856-oseYOEru", "to": "1004"}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "BYE transaction started", "transaction_id": "bye-b2bua-322856-oseYOEru", "timeout": 32}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "bye_transaction_started", "transaction_id": "bye-b2bua-322856-oseYOEru", "timeout": 32}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "bye_cleanup_triggered", "call_id": "oseYOEru9V", "reason": "BYE received, initiating cleanup"}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "cleanup_call_start", "call_id": "oseYOEru9V", "b2bua_call_id": "b2bua-322856-oseYOEru", "original_call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:25.840", "level": "info", "event": "call_session_removed", "call_id": "oseYOEru9V", "duration": null}
+{"timestamp": "2026-02-21T15:42:25.847", "level": "info", "event": "Mixing caller and callee audio", "callee_frames": 1554, "callee_size": 496976, "caller_frames": 1559, "caller_size": 498272}
+{"timestamp": "2026-02-21T15:42:25.907", "level": "info", "event": "Mixed WAV file saved", "duration_sec": 31.142, "path": "recordings\\20260221_154148_1003_to_1004\\mixed.wav", "size": 498272}
+{"timestamp": "2026-02-21T15:42:25.907", "level": "info", "event": "stt_post_process_start", "progress": "stt", "call_id": "oseYOEru9V", "audio_file": "recordings\\20260221_154148_1003_to_1004\\mixed.wav", "category": "stt", "diarization_enabled": true}
+{"timestamp": "2026-02-21T15:42:25.907", "level": "info", "event": "🎯 [STT Flow] Using separate caller/callee STT (more accurate)", "callee_path": "recordings\\20260221_154148_1003_to_1004\\callee.wav", "caller_path": "recordings\\20260221_154148_1003_to_1004\\caller.wav"}
+{"timestamp": "2026-02-21T15:42:25.907", "level": "info", "event": "📞 [STT Flow] Transcribing caller audio", "path": "recordings\\20260221_154148_1003_to_1004\\caller.wav"}
+{"timestamp": "2026-02-21T15:42:25.907", "level": "info", "event": "📊 [STT] Audio file info", "audio_path": "recordings\\20260221_154148_1003_to_1004\\caller.wav", "duration_sec": 31.14, "file_size": 498316}
+{"timestamp": "2026-02-21T15:42:25.938", "level": "info", "event": "sip_recv", "direction": "RECV", "method": "BYE", "status_code": "200", "from_addr": "172.30.1.93:40253", "size": 361}
+{"timestamp": "2026-02-21T15:42:29.678", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:29.774", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:30.771", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:31.773", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:32.776", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:33.770", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:34.770", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:35.777", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:36.570", "level": "info", "event": "✅ [CALLER] STT completed", "audio_path": "recordings\\20260221_154148_1003_to_1004\\caller.wav", "words_count": 12}
+{"timestamp": "2026-02-21T15:42:36.570", "level": "info", "event": "📞 [STT Flow] Transcribing callee audio", "path": "recordings\\20260221_154148_1003_to_1004\\callee.wav"}
+{"timestamp": "2026-02-21T15:42:36.570", "level": "info", "event": "📊 [STT] Audio file info", "audio_path": "recordings\\20260221_154148_1003_to_1004\\callee.wav", "duration_sec": 31.06, "file_size": 497020}
+{"timestamp": "2026-02-21T15:42:36.695", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:36.997", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:36.997", "level": "warning", "event": "ws_connection_rejected_jwt_error", "progress": "realtime", "error": "Token has expired", "sid": "KRy0aS0wYjTMYiTHAAAB"}
+{"timestamp": "2026-02-21T15:42:37.702", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:38.710", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:39.708", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:40.607", "level": "info", "event": "✅ [CALLEE] STT completed", "audio_path": "recordings\\20260221_154148_1003_to_1004\\callee.wav", "words_count": 41}
+{"timestamp": "2026-02-21T15:42:40.607", "level": "info", "event": "✅ [STT Flow] Separate channel transcription completed", "callee_words": 41, "caller_words": 12, "speaker_distribution": {"1": 12, "2": 41}, "total_words": 53}
+{"timestamp": "2026-02-21T15:42:40.607", "level": "info", "event": "stt_post_process_completed", "progress": "stt", "call_id": "oseYOEru9V", "category": "stt", "has_speakers": true, "has_words": true, "word_count": 53}
+{"timestamp": "2026-02-21T15:42:40.607", "level": "info", "event": "stt_diarization_format", "call_id": "oseYOEru9V", "category": "stt"}
+{"timestamp": "2026-02-21T15:42:40.607", "level": "info", "call": "stt_transcript_saved", "call_id": "oseYOEru9V", "category": "stt", "file_path": "recordings\\20260221_154148_1003_to_1004\\transcript.txt", "preview": "발신자: 안녕하세요.\n착신자: 안녕하세요. 네\n발신자: 네 오늘의\n착신자: 오늘의 날씨\n발신자: 날씨 를\n착신자: 를\n발신자: 입어\n착신자: 물어보\n발신자: 보\n착신자: 려고 하는...", "transcript_length": 264}
+{"timestamp": "2026-02-21T15:42:40.609", "level": "info", "event": "SIP call recording stopped", "call_id": "oseYOEru9V", "callee_frames": 1554, "caller_frames": 1559, "duration": 37.243309, "has_transcript": true}
+{"timestamp": "2026-02-21T15:42:40.609", "level": "info", "event": "recording_stopped", "call_id": "oseYOEru9V", "duration": 37.243309, "recording_file": "20260221_154148_1003_to_1004\\mixed.wav"}
+{"timestamp": "2026-02-21T15:42:40.609", "level": "info", "event": "Session timer cancelled", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:40.609", "level": "info", "event": "session_timer_cancelled", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:40.609", "level": "info", "event": "cdr_flow_step_1_writing_cdr", "call_id": "oseYOEru9V", "caller": "sip:1003@172.30.1.12", "callee": "sip:1004@172.30.1.93", "duration": 52.019046, "message": "[CDR Flow] Writing CDR from SIP Endpoint"}
+{"timestamp": "2026-02-21T15:42:40.611", "level": "info", "event": "cdr_written", "call_id": "oseYOEru9V", "filepath": "cdr\\cdr-2026-02-21.jsonl"}
+{"timestamp": "2026-02-21T15:42:40.611", "level": "info", "event": "cdr_flow_step_2_cdr_written_successfully", "call_id": "oseYOEru9V", "cdr_file": "./cdr/cdr-2026-02-21.jsonl", "duration": 52.019046, "message": "[CDR Flow] CDR written successfully"}
+{"timestamp": "2026-02-21T15:42:40.611", "level": "info", "event": "rtp_relay_stopped", "call_id": "oseYOEru9V", "stats": {"caller_audio_packets": 1571, "caller_video_packets": 0, "callee_audio_packets": 1584, "callee_video_packets": 0, "total_bytes_relayed": 541520, "ai_packets": 0, "recording_packets": 3115}}
+{"timestamp": "2026-02-21T15:42:40.611", "level": "info", "event": "🚀 [Knowledge Flow] Scheduling knowledge extraction for regular SIP call", "call_id": "oseYOEru9V", "callee_id": "sip:1004@unknown", "recording_dir": "20260221_154148_1003_to_1004", "transcript_path": "recordings\\20260221_154148_1003_to_1004\\transcript.txt"}
+{"timestamp": "2026-02-21T15:42:40.611", "level": "info", "event": "✅ [Knowledge Flow] Knowledge extraction task scheduled (5s delay for STT)", "call_id": "oseYOEru9V", "callee": "sip:1004@unknown"}
+{"timestamp": "2026-02-21T15:42:40.611", "level": "info", "event": "knowledge_extraction_triggered", "call_id": "oseYOEru9V", "recording_dir": "20260221_154148_1003_to_1004"}
+{"timestamp": "2026-02-21T15:42:40.611", "level": "info", "event": "call_cleaned_up", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:40.695", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:41.696", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:42.697", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:43.704", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:45.498", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:45.619", "level": "info", "event": "🚀 [Knowledge Flow] Starting knowledge extraction", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:45.619", "level": "info", "event": "📋 [Pipeline v2] Stage 1: 전처리", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:45.635", "level": "info", "event": "🔬 [Pipeline v2] Stage 2: 멀티스텝 추출", "call_id": "oseYOEru9V"}
+{"timestamp": "2026-02-21T15:42:45.780", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:46.695", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:47.708", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:48.703", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:48.874", "level": "info", "event": "conversation_summarized", "call_id": "oseYOEru9V", "topics": []}
+{"timestamp": "2026-02-21T15:42:49.702", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:50.128", "level": "info", "event": "qa_pairs_extracted", "call_id": "oseYOEru9V", "count": 0}
+{"timestamp": "2026-02-21T15:42:50.582", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:50.894", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:50.894", "level": "warning", "event": "ws_connection_rejected_jwt_error", "progress": "realtime", "error": "Token has expired", "sid": "nRlqbZLmgcuYc10bAAAD"}
+{"timestamp": "2026-02-21T15:42:51.587", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:52.586", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:53.313", "level": "info", "event": "entities_extracted", "call_id": "oseYOEru9V", "total": 0, "valid": 0}
+{"timestamp": "2026-02-21T15:42:53.315", "level": "info", "call": "llm_judgment_request", "progress": "extraction", "call_id": "oseYOEru9V", "category": "llm", "max_input_chars": 6000, "max_tokens": 1024, "note": "지식 정제 요청 (전체 대화 맥락, 저장은 착신자 발화만)", "prompt_length": 1898, "prompt_preview": "당신은 통화 기록에서 지식 베이스(VectorDB)에 저장할 지식 정보를 정제(추출·분류)하는 전문가입니다. 목적: AI 비서가 이후 통화에서 재사용할 수 있는 지식만 추출합니다.  **입력 형식:** 아래는 \"발신자:\", \"착신자:\"로 구분된 **전체 대화** 전사입니다. 발신자 질문/맥락을 참고하여 착신자 답변의 의미를 파악하세요.  **저장 대상:**...", "speaker": "both", "transcript_length": 264, "transcript_truncated": false}
+{"timestamp": "2026-02-21T15:42:53.584", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:54.593", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:55.582", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:56.585", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:57.583", "level": "warning", "event": "jwt_expired", "token_prefix": "eyJhbGciOiJIUzI1NiIs"}
+{"timestamp": "2026-02-21T15:42:58.677", "level": "info", "call": "llm_judgment_response", "progress": "extraction", "call_id": "oseYOEru9V", "category": "llm", "finish_reason": "MAX_TOKENS", "note": "유용성 판단 응답 (call 키로 필터)", "response_full": "```json\n{\n  \"is_useful\": true,\n  \"confidence\": 1.0,\n  \"reason\": \"오늘의 날씨에 대한 구체적인 정보 제공.", "response_length": 87}
+{"timestamp": "2026-02-21T15:42:58.677", "level": "warning", "call": "llm_judgment_truncated", "progress": "extraction", "call_id": "oseYOEru9V", "note": "응답이 max_output_tokens에서 잘림, JSON 복구 시도 (judgment_max_output_tokens 상향 권장)"}
+{"timestamp": "2026-02-21T15:42:58.677", "level": "warning", "call": "JSON parse failed, attempting cleanup", "call_id": "oseYOEru9V", "error": "Unterminated string starting at: line 4 column 13 (char 56)", "json_preview": "{\n  \"is_useful\": true,\n  \"confidence\": 1.0,\n  \"reason\": \"오늘의 날씨에 대한 구체적인 정보 제공."}
+{"timestamp": "2026-02-21T15:42:58.677", "level": "info", "call": "llm_judgment_completed", "progress": "extraction", "call_id": "oseYOEru9V", "category": "llm", "confidence": 1.0, "is_useful": true}
+{"timestamp": "2026-02-21T15:42:58.679", "level": "info", "event": "🔬 [Pipeline v2] Stage 2 완료", "call_id": "oseYOEru9V", "entity_count": 0, "knowledge_count": 0, "qa_count": 0, "total_items": 0}
+{"timestamp": "2026-02-21T15:42:58.679", "level": "info", "event": "pipeline_no_items", "call_id": "oseYOEru9V"}

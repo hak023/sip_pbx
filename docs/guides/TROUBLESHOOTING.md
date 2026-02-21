@@ -151,7 +151,7 @@ redis:
 
 ---
 
-#### 문제: `404 models/gemini-1.5-flash is not found`
+#### 문제: `404 models/gemini-2.5-flash is not found` 또는 모델 버전 에러
 
 **원인**: 잘못된 모델 이름 또는 API 키 문제
 

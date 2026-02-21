@@ -14,7 +14,7 @@ class MediaDescription:
     예: m=audio 5004 RTP/AVP 0 8 101
     """
     media_type: str          # audio, video, application
-    port: int                # 미디어 포트
+    port: int                # 미디어 RTP 포트
     protocol: str            # RTP/AVP, RTP/SAVP, etc.
     formats: List[str]       # payload types (코덱 리스트)
     
@@ -23,6 +23,9 @@ class MediaDescription:
     
     # Connection 정보 (c= line, 미디어별로 있을 수 있음)
     connection_ip: Optional[str] = None
+    
+    # RTCP 포트 (a=rtcp: 명시적 지정 시, 없으면 RTP+1 가정)
+    rtcp_port: Optional[int] = None
     
     def __repr__(self) -> str:
         return f"MediaDescription(type={self.media_type}, port={self.port}, formats={self.formats})"
@@ -73,9 +76,17 @@ class SDPSession:
         return self.get_media_by_type("video") is not None
     
     def get_audio_port(self) -> Optional[int]:
-        """오디오 포트 반환"""
+        """오디오 RTP 포트 반환"""
         audio = self.get_media_by_type("audio")
         return audio.port if audio else None
+    
+    def get_audio_rtcp_port(self) -> Optional[int]:
+        """오디오 RTCP 포트 반환 (명시적 지정 또는 RTP+1)"""
+        audio = self.get_media_by_type("audio")
+        if not audio:
+            return None
+        # a=rtcp: 명시적 지정이 있으면 사용, 없으면 RTP+1
+        return audio.rtcp_port if audio.rtcp_port else (audio.port + 1)
     
     def get_video_port(self) -> Optional[int]:
         """비디오 포트 반환"""

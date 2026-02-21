@@ -93,50 +93,29 @@ try {
     }
 
     # 3. 의존성 확인
-    Write-ColorOutput "`n[3/6] Checking dependencies..." "Yellow"
-    
-    if (Test-Path "requirements.txt") {
-        Write-ColorOutput "📦 Installing/Updating dependencies (this may take a while)..." "Yellow"
-        
-        # pip 업그레이드
-        python -m pip install --upgrade pip --quiet
-        
-        # 의존성 설치
-        pip install -r requirements.txt
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-ColorOutput "✅ Dependencies installed successfully" "Green"
-        } else {
-            Write-ColorOutput "⚠️  Some dependencies may have failed to install" "Yellow"
-            Write-ColorOutput "💡 Try: pip install -r requirements.txt" "Cyan"
-        }
-    } else {
-        Write-ColorOutput "⚠️  requirements.txt not found" "Yellow"
-    }
+    Write-ColorOutput "`n[3/7] Checking dependencies..." "Yellow"
     
     # 필수 패키지 확인
-    Write-ColorOutput "`n   Verifying critical packages..." "Yellow"
     $criticalPackages = @("yaml", "pydantic", "aiohttp", "structlog")
     $missingPackages = @()
     
     foreach ($package in $criticalPackages) {
         try {
             python -c "import $package" 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-ColorOutput "   ✓ $package" "Green"
-            } else {
+            if ($LASTEXITCODE -ne 0) {
                 $missingPackages += $package
-                Write-ColorOutput "   ✗ $package (missing)" "Red"
             }
         } catch {
             $missingPackages += $package
-            Write-ColorOutput "   ✗ $package (missing)" "Red"
         }
     }
     
     if ($missingPackages.Count -gt 0) {
-        Write-ColorOutput "`n⚠️  Missing packages detected!" "Yellow"
-        Write-ColorOutput "   Installing missing packages..." "Yellow"
+        Write-ColorOutput "⚠️  Missing packages detected: $($missingPackages -join ', ')" "Yellow"
+        Write-ColorOutput "📦 Installing missing dependencies..." "Yellow"
+        
+        # pip 업그레이드 (필요시에만)
+        python -m pip install --upgrade pip --quiet
         
         # PyYAML은 yaml로 import되므로 매핑
         $packageMap = @{
@@ -145,14 +124,23 @@ try {
         
         foreach ($package in $missingPackages) {
             $installName = if ($packageMap.ContainsKey($package)) { $packageMap[$package] } else { $package }
-            pip install $installName
+            Write-ColorOutput "   Installing $installName..." "Yellow"
+            pip install $installName --quiet
         }
         
         Write-ColorOutput "✅ Missing packages installed" "Green"
+    } else {
+        Write-ColorOutput "✅ All critical packages are already installed" "Green"
+    }
+    
+    # 전체 재설치 옵션 (환경 변수로 제어)
+    if ($env:FORCE_REINSTALL -eq "1") {
+        Write-ColorOutput "`n   Force reinstall requested..." "Yellow"
+        pip install -r requirements.txt
     }
 
     # 4. 설정 파일 확인
-    Write-ColorOutput "`n[4/6] Checking configuration..." "Yellow"
+    Write-ColorOutput "`n[4/7] Checking configuration..." "Yellow"
     
     if (-not (Test-Path $Config)) {
         Write-ColorOutput "❌ Configuration file not found: $Config" "Red"
@@ -171,7 +159,7 @@ try {
     }
 
     # 5. GPU 확인
-    Write-ColorOutput "`n[5/6] Checking GPU availability..." "Yellow"
+    Write-ColorOutput "`n[5/7] Checking GPU availability..." "Yellow"
     
     try {
         $gpuCheck = python -c "import torch; print('CUDA available:', torch.cuda.is_available())" 2>&1
@@ -184,8 +172,45 @@ try {
         Write-ColorOutput "ℹ️  PyTorch not installed, skipping GPU check" "Cyan"
     }
 
-    # 6. 서버 시작
-    Write-ColorOutput "`n[6/6] Starting SIP PBX Server..." "Yellow"
+    # 6. 기존 서버 프로세스 확인 및 종료
+    Write-ColorOutput "`n[6/7] Checking for existing server processes..." "Yellow"
+    
+    $existingProcesses = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    if (-not $existingProcesses) {
+        # TCP로 안 잡히면 UDP 확인
+        $netstatOutput = netstat -ano | Select-String ":$Port"
+        if ($netstatOutput) {
+            Write-ColorOutput "⚠️  Port $Port is already in use!" "Yellow"
+            $pids = $netstatOutput | ForEach-Object {
+                if ($_ -match '\s+(\d+)\s*$') {
+                    $matches[1]
+                }
+            } | Select-Object -Unique
+            
+            if ($pids) {
+                Write-ColorOutput "   Found processes: $($pids -join ', ')" "Yellow"
+                Write-ColorOutput "   Terminating existing processes..." "Yellow"
+                
+                foreach ($pid in $pids) {
+                    try {
+                        Stop-Process -Id $pid -Force -ErrorAction Stop
+                        Write-ColorOutput "   ✓ Stopped process $pid" "Green"
+                    } catch {
+                        Write-ColorOutput "   ✗ Failed to stop process $pid" "Red"
+                    }
+                }
+                
+                # 포트가 해제될 때까지 잠시 대기
+                Start-Sleep -Seconds 1
+                Write-ColorOutput "✅ Port $Port is now free" "Green"
+            }
+        } else {
+            Write-ColorOutput "✅ Port $Port is free" "Green"
+        }
+    }
+
+    # 7. 서버 시작
+    Write-ColorOutput "`n[7/7] Starting SIP PBX Server..." "Yellow"
     Write-Host ""
     Write-ColorOutput "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" "Cyan"
     Write-ColorOutput "🚀 Server Configuration:" "Cyan"

@@ -1,0 +1,21 @@
+{
+  "call_id": "HdE--bj676",
+  "directory": "20260221_010756_1003_to_1004",
+  "caller_id": "1003",
+  "callee_id": "1004",
+  "start_time": "2026-02-21T01:07:56.149173",
+  "end_time": "2026-02-21T01:09:00.452877",
+  "duration": 64.303704,
+  "type": "sip_call",
+  "sample_rate": 8000,
+  "channels": 1,
+  "caller_frames": 2694,
+  "callee_frames": 969,
+  "has_transcript": true,
+  "files": {
+    "caller": "20260221_010756_1003_to_1004\\caller.wav",
+    "callee": "20260221_010756_1003_to_1004\\callee.wav",
+    "mixed": "20260221_010756_1003_to_1004\\mixed.wav",
+    "transcript": "20260221_010756_1003_to_1004\\transcript.txt"
+  }
+}

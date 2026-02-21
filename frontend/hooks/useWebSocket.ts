@@ -6,14 +6,26 @@
 import { useEffect, useState } from 'react';
 import { wsClient } from '@/lib/websocket';
 
+/** JWT 형식 여부 (header.payload.signature). Mock/잘못된 토큰으로 WS 연결 방지 */
+function isJwtFormat(token: string | null): boolean {
+  if (!token || typeof token !== 'string') return false;
+  const parts = token.split('.');
+  return parts.length === 3 && parts.every((p) => p.length > 0);
+}
+
 export function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    // 토큰 가져오기 (로컬스토리지에서)
-    const token = localStorage.getItem('access_token');
-    
-    if (token && !wsClient.isConnected()) {
+    const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+    if (!token || !isJwtFormat(token)) {
+      if (token) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('token');
+      }
+      return;
+    }
+    if (!wsClient.isConnected()) {
       wsClient.connect(token);
     }
 
