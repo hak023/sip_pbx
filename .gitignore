@@ -71,7 +71,7 @@ Thumbs.db
 *.swo
 *~
 
-# Logs
+# Logs (커밋 제외)
 logs/
 *.log
 *.log.*
