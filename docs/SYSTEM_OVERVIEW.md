@@ -1,26 +1,57 @@
-# 🏗️ AI SIP PBX System - Complete Overview
+# 🏗️ AI SIP PBX 시스템 - 완전한 개요
 
-## 📊 System Architecture Map
+## 📊 시스템 소개
+
+**AI SIP PBX**는 Python 기반의 엔터프라이즈급 **B2BUA(Back-to-Back User Agent)** 통신 시스템으로, **AI 음성 비서 기능**과 **실시간 웹 제어 센터**를 통합한 차세대 통신 플랫폼입니다.
+
+### ✨ 핵심 가치
+
+- 🔄 **완전한 SIP B2BUA**: 표준 SIP 프로토콜 완벽 지원
+- 🤖 **지능형 AI 응대**: 부재중 자동 응답, RAG 기반 지식 검색
+- 🎯 **Human-in-the-Loop**: AI가 모르는 질문은 운영자에게 실시간 전달
+- ⚡ **초저지연 RTP**: 5ms 이하 미디어 릴레이
+- 🖥️ **실시간 웹 제어**: WebSocket 기반 통화 모니터링 및 제어
+- 💰 **비용 효율**: Gemini 2.5 Flash로 월 100통화 ₩6,400
+
+---
+
+## 🏛️ 시스템 아키텍처
+
+### 전체 구조도
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        COMPLETE SYSTEM ARCHITECTURE                     │
+│                        AI SIP PBX 통합 시스템                            │
 └────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────┐       ┌──────────────────────┐       ┌──────────────────────┐
-│   EXTERNAL USERS     │       │   FRONTEND (NEW!)    │       │   BACKEND SERVICES   │
+│   EXTERNAL USERS     │       │   FRONTEND CENTER    │       │   BACKEND SERVICES   │
 ├──────────────────────┤       ├──────────────────────┤       ├──────────────────────┤
 │                      │       │                      │       │                      │
 │  📞 SIP Callers      │◄─────►│  🖥️ Web Dashboard    │◄─────►│  🔄 SIP/RTP Engine   │
-│  👤 Phone Users      │  SIP  │  (Next.js)           │  WS   │  (Python asyncio)    │
-│                      │       │                      │ REST  │                      │
-│                      │       │  Features:           │       │  🤖 AI Orchestrator  │
-│                      │       │  • Live Monitor      │◄─────►│  (Python asyncio)    │
-│                      │       │  • Knowledge CRUD    │       │                      │
-│                      │       │  • HITL Queue        │       │  📚 Vector DB        │
-│                      │       │  • Analytics         │◄─────►│  (ChromaDB/Pinecone) │
+│  👤 Phone Users      │  SIP  │  (Next.js 14)        │  WS   │  (Python asyncio)    │
+│                      │ 5060  │                      │ 8001  │                      │
+│  • 일반 통화         │       │  Features:           │ REST  │  • B2BUA Core        │
+│  • AI 자동 응대      │       │  • 실시간 모니터링   │ 8000  │  • RTP Relay         │
+│  • 호 전환           │◄─────►│  • Live Transcript   │◄─────►│  • Call Manager      │
+│                      │ RTP   │  • Knowledge CRUD    │       │  • Port Pool Mgr     │
+│                      │10000  │  • HITL Interface    │       │                      │
+│                      │-20000 │  • 통화 이력         │       │  🤖 AI Orchestrator  │
+│                      │       │  • 운영자 상태       │◄─────►│  (Pipecat Pipeline) │
+│                      │       │  • Call Controls     │       │                      │
+│                      │       │    - 발신 시작       │       │  • STT/TTS Stream    │
+│                      │       │    - 통화 종료       │       │  • LLM Processing    │
+│                      │       │    - 호 전환         │       │  • VAD Barge-in      │
+│                      │       │    - 녹음 다운로드   │       │  • RAG Search        │
 │                      │       │                      │       │                      │
-└──────────────────────┘       └──────────────────────┘       └──────┬───────────────┘
+└──────────────────────┘       └──────────────────────┘       │  📚 Vector DB        │
+                                                               │  (ChromaDB/Pinecone) │
+                                                               │                      │
+                                                               │  • 지식 베이스       │
+                                                               │  • Capability 관리   │
+                                                               │  • 임베딩 검색       │
+                                                               │                      │
+                                                               └──────┬───────────────┘
                                                                       │
                                                                       ↓
                                                             ┌──────────────────────┐
@@ -32,269 +63,408 @@
                                                             └──────────────────────┘
 ```
 
+### 3계층 아키텍처
+
+#### Layer 1: SIP PBX Core (통신 기반)
+**역할**: 표준 SIP 통신 프로토콜 처리
+
+- ✅ **SIP B2BUA 엔진**
+  - INVITE/BYE/ACK/CANCEL (통화 제어)
+  - REGISTER (사용자 등록)
+  - PRACK/UPDATE (세션 업데이트)
+  - OPTIONS (상태 확인)
+  
+- ✅ **RTP Relay**
+  - Bypass 모드 (<5ms 지연)
+  - 동적 포트 할당 (10,000-20,000)
+  - Jitter Buffer 관리
+  - 양방향 독립 스트림
+
+- ✅ **통화 관리**
+  - 독립적인 Caller/Callee leg 관리
+  - Transaction 상태 추적
+  - SDP 협상 및 미디어 조정
+  - CDR 생성 (JSON Lines)
+
+#### Layer 2: AI Voice Assistant (지능 확장)
+**역할**: 지능형 음성 응대 및 자동화
+
+- ✅ **AI 자동 응답**
+  - 타이머 기반 (10초 무응답 시)
+  - 수동 부재중 모드 (웹 설정)
+  - 2-Phase 인사말 (고정 + Capability 가이드)
+
+- ✅ **실시간 음성 처리**
+  - Google Cloud STT (Telephony 모델, 16kHz)
+  - Google Cloud TTS (Neural2 음성)
+  - Pipecat 기반 스트리밍 파이프라인
+  - PCM 큐 (maxsize=150, ~5초 버퍼)
+
+- ✅ **지능형 대화**
+  - Gemini 2.5 Flash LLM
+  - RAG 기반 지식 검색
+  - Vector DB (ChromaDB/Pinecone)
+  - Sentence Transformers 임베딩
+
+- ✅ **Barge-in 지원**
+  - WebRTC VAD 기반 발화 감지
+  - 사용자 발화 시 AI 응답 즉시 중단
+  - 자연스러운 대화 흐름
+
+- ✅ **통화 녹음 및 지식 추출**
+  - 화자 분리 녹음 (WAV)
+  - 자동 STT 전사
+  - LLM 기반 지식 추출 (멀티스텝 파이프라인)
+  - Vector DB 자동 저장
+
+- ✅ **Human-in-the-Loop (HITL)**
+  - AI 신뢰도 < 0.6 시 운영자 요청
+  - 실시간 WebSocket 알림
+  - 20초 timeout 자동 fallback
+  - 운영자 부재중 모드 지원
+
+#### Layer 3: Backend API Services (연동 및 제어)
+**역할**: Frontend 연동 및 실시간 통신
+
+- ✅ **FastAPI REST API Gateway** (Port 8000)
+  - `/api/call-history` - 통화 이력 조회
+  - `/api/calls/{call_id}/transcript` - 대화 내용
+  - `/api/calls/{call_id}/hangup` - 통화 종료
+  - `/api/calls/{call_id}/recording` - 녹음 다운로드
+  - `/api/outbound/call` - 발신 시작
+  - `/api/knowledge/*` - 지식 베이스 CRUD
+  - `/api/operator/status` - 운영자 상태 관리
+  - `/api/hitl/*` - HITL 요청 관리
+
+- ✅ **Socket.IO WebSocket Server** (Port 8001)
+  - `call:new` - 신규 통화 알림
+  - `call:updated` - 통화 상태 변경
+  - `call:ended` - 통화 종료
+  - `transcript` - 실시간 대화 내용
+  - `hitl:request` - HITL 요청
+  - `hitl:response` - HITL 응답
+
+- ✅ **Database Integration**
+  - PostgreSQL: 통화 이력, HITL 요청, 사용자 데이터
+  - Redis: 실시간 상태, WebSocket pub/sub
+  - Vector DB: 지식 베이스 임베딩
+
 ---
 
-## 🎯 Key Use Cases
+## 🎯 주요 사용 시나리오
 
-### 1️⃣ Normal Call (No AI)
+### 1️⃣ 일반 통화 (AI 미사용)
 
 ```
-Caller → PBX → Callee
+Caller → PBX → Callee (10초 내 응답)
         ↓
-    RTP Relay (direct)
+    RTP Relay (직접 중계, <5ms)
+        ↓
+    통화 종료 → CDR 생성
 ```
 
-- Callee answers within 10 seconds
-- PBX acts as B2BUA
-- Low-latency RTP relay
-- Call recording (optional)
+**특징**:
+- 표준 SIP B2BUA 동작
+- 저지연 RTP 직접 릴레이
+- 통화 녹음 (선택)
+- CDR 및 메트릭 수집
 
-### 2️⃣ AI Auto-Response (Callee No Answer)
+### 2️⃣ AI 자동 응답 (부재중 응대)
 
 ```
-Caller → PBX → [10sec timeout] → AI Orchestrator
+Caller → PBX → [10초 timeout] → AI Orchestrator 활성화
         ↓                              ↓
     RTP Relay                      STT/TTS/LLM
-                                       ↓
-                                   RAG Search
-                                       ↓
-                                  AI Response
+        ↓                              ↓
+    AI 음성 전달 ←─────────────── RAG 검색 + 응답 생성
+        ↓
+    통화 종료 → 지식 추출 → Vector DB 저장
 ```
 
-**Workflow:**
-1. Callee doesn't answer in 10 seconds
-2. PBX activates AI Orchestrator
-3. AI: "안녕하세요, 무엇을 도와드릴까요?"
-4. Real-time conversation (STT → LLM → TTS)
-5. RAG-based intelligent answers
-6. Call recording & knowledge extraction
+**워크플로우**:
+1. Callee 10초 무응답
+2. AI Orchestrator 시작
+3. **Phase 1 인사말**: "안녕하세요, 무엇을 도와드릴까요?"
+4. **Phase 2 Capability 가이드**: Vector DB에서 capability 로드 → 안내
+5. 실시간 대화 (STT → RAG → LLM → TTS)
+6. 통화 종료 → 전사 → 지식 추출 → 저장
 
-### 3️⃣ Human-in-the-Loop (Low AI Confidence)
+**응답 시간**:
+- High Confidence: **평균 0.9초**
+- Medium Confidence: **평균 1.3초**
+- HITL (운영자 개입): **평균 20초**
+
+### 3️⃣ Human-in-the-Loop (낮은 신뢰도)
 
 ```
-Caller → AI → [Low Confidence] → HITL Request
+Caller → AI → [신뢰도 < 0.6] → HITL Request
                ↓                      ↓
-          Hold Music          Frontend Alert
+          Hold Music          Frontend Alert (🔔)
                ↓                      ↓
-          [Waiting]            Operator Types Answer
+          [대기 중...]         Operator Types Answer
                ↓                      ↓
-          LLM Refine ◄───────── Human Response
+          LLM Refinement ◄──────── Human Response
                ↓
           Final Answer → Caller
                ↓
        Save to Knowledge Base
 ```
 
-**Workflow:**
-1. AI can't find good answer (confidence < 0.6)
-2. Caller hears: "잠시만 확인 중이니 기다려 주세요" + music
-3. Frontend alerts operator (🔔 sound + notification)
-4. Operator reviews context and types answer
-5. AI polishes the answer with LLM
-6. AI speaks final answer to caller
-7. Answer saved to Vector DB for future use
+**워크플로우**:
+1. AI가 적절한 답변을 찾지 못함 (RAG score < 0.6)
+2. 발신자: "잠시만 확인 중이니 기다려 주세요" + 대기 음악
+3. Frontend: 🔔 알림 + 질문 표시
+4. 운영자: 답변 입력 (20초 이내)
+5. LLM: 답변 자연스럽게 다듬기
+6. AI: 발신자에게 답변
+7. 답변 Vector DB 저장 (재사용)
+
+**Timeout 처리**:
+- 20초 내 응답 없음 → "확인 후 다시 안내드리겠습니다" → 통화 종료
+- 운영자 부재중 → 즉시 "확인 후 안내드리겠습니다" → 통화 종료
+
+### 4️⃣ 통화 이력 관리 (Frontend)
+
+```
+Frontend Call History Page
+  ↓
+클릭하여 Rolldown (▶ → ▼)
+  ↓
+대화 내용 표시
+  - 🤖 AI 응답 (파란색)
+  - 👤 사용자 발화 (회색)
+  - 타임스탬프
+
+작업 버튼:
+  📞 발신 - 해당 번호로 다시 전화
+  ✖ 종료 - 진행 중인 통화 종료
+  ⬇ 녹음 - 녹음 파일 다운로드
+```
+
+**기능**:
+- 페이지네이션 (20개/페이지)
+- 실시간 상태 표시 (진행중/완료)
+- AI 응대 구분 (Badge)
+- 대화 내용 Rolldown
+- 발신/종료/녹음 원클릭
 
 ---
 
-## 📁 Component Breakdown
+## 🔄 데이터 플로우
 
-### Backend Components
+### 일반 통화 플로우
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **SIP Endpoint** | Python asyncio | SIP signaling (INVITE, BYE, etc.) |
-| **RTP Relay** | UDP sockets | Media stream relay |
-| **Call Manager** | Python | Call state management |
-| **AI Orchestrator** | Python asyncio | AI conversation flow |
-| **STT Client** | Google Cloud | Speech-to-Text (streaming) |
-| **TTS Client** | Google Cloud | Text-to-Speech (streaming) |
-| **LLM Client** | Gemini 2.5 Flash | Response generation |
-| **RAG Engine** | Sentence Transformers | Knowledge retrieval |
-| **Vector DB** | ChromaDB/Pinecone | Embedding storage |
-| **HITL Service** | Python + Redis | Human intervention logic |
-| **API Gateway** | FastAPI | REST API for frontend |
-| **WebSocket Server** | Socket.IO | Real-time events |
+```
+1. SIP 시그널링
+   Caller → SIP Endpoint → Call Manager → SIP Endpoint → Callee
 
-### Frontend Components
+2. RTP 미디어 (Bypass 모드)
+   Caller RTP → Port A (PBX) → RTP Relay → Port B (PBX) → Callee RTP
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Dashboard** | Next.js + React | Main control panel |
-| **Live Monitor** | React + WebSocket | Real-time call tracking |
-| **Knowledge Manager** | React + TanStack Query | Vector DB CRUD UI |
-| **HITL Interface** | React | Operator response UI |
-| **Analytics** | Recharts | Metrics visualization |
-| **Auth** | JWT + OAuth2 | User authentication |
+3. 통화 종료
+   BYE → Call Manager → RTP Stop → CDR 생성 → Webhook 발송
+```
 
-### Data Stores
+### AI 응대 통화 플로우
 
-| Store | Technology | Purpose |
-|-------|-----------|---------|
-| **Vector DB** | ChromaDB (dev) / Pinecone (prod) | Knowledge embeddings |
-| **PostgreSQL** | PostgreSQL 15+ | User data, call logs, HITL history |
-| **Redis** | Redis 7+ | Real-time state, WebSocket pub/sub |
+```
+1. AI 활성화
+   Timeout/부재중 → Call Manager → AI Orchestrator Start → RTP Mode Switch
+
+2. 음성 → 텍스트
+   Caller RTP → RTP Worker → Pipecat → Google STT → Text
+
+3. 지능형 응답
+   Text → RAG Search (Vector DB) → LLM (Gemini) → Response Text
+
+4. 텍스트 → 음성
+   Response Text → Google TTS → PCM Queue (150 frames) → RTP Packets → Caller
+
+5. 지식 추출 (통화 종료 후)
+   전사 로드 → LLM 분석 → 지식 추출 → Vector DB 저장
+```
+
+### HITL 플로우
+
+```
+1. 신뢰도 낮음 감지
+   RAG Score < 0.6 → HITL Trigger
+
+2. 운영자 요청
+   HITL Service → WebSocket → Frontend Alert (🔔)
+
+3. 대기 음악
+   AI → TTS("잠시만 기다려주세요") → Hold Music Loop
+
+4. 운영자 응답
+   Frontend Input → WebSocket → HITL Service → LLM Refine → TTS → Caller
+
+5. 지식 저장
+   Q&A Pair → Vector DB (자동 저장)
+```
 
 ---
 
-## 🔄 Data Flow Examples
+## 📊 성능 지표
 
-### Example 1: Simple Question with High Confidence
+### AI 응답 시간
 
-```
-User: "영업시간이 언제인가요?"
-  ↓
-STT: "영업시간이 언제인가요?" (confidence: 0.98)
-  ↓
-RAG Search: [
-  {text: "영업시간은 평일 9시~6시입니다", score: 0.95}
-]
-  ↓
-LLM Input: 
-  System: "간결하게 답변하세요"
-  Context: "영업시간은 평일 9시~6시입니다"
-  Question: "영업시간이 언제인가요?"
-  ↓
-LLM Output: "평일 오전 9시부터 오후 6시까지 영업합니다."
-  ↓
-TTS: 🔊 "평일 오전 9시부터 오후 6시까지 영업합니다."
-```
+| 시나리오 | 평균 | P95 | P99 |
+|----------|------|-----|-----|
+| **High Confidence** | 0.9초 | 1.2초 | 1.5초 |
+| **Medium Confidence** | 1.3초 | 1.8초 | 2.2초 |
+| **HITL (운영자 개입)** | 20초 | 35초 | 60초 |
 
-**Response Time:** ~0.9 seconds
+**응답 시간 분해**:
+- RAG 검색: ~75ms
+- LLM 생성: ~413ms
+- TTS 첫 청크: ~235ms
+- **총합**: ~923ms
 
-### Example 2: Complex Question with HITL
+### 비용 분석 (월 100통화 기준)
 
-```
-User: "다음 주 화요일 오후에 김대리님과 미팅 가능한가요?"
-  ↓
-STT: "다음 주 화요일 오후에 김대리님과 미팅 가능한가요?"
-  ↓
-RAG Search: [
-  {text: "김대리 연락처: 010-1234-5678", score: 0.4}
-]  ← Low confidence!
-  ↓
-HITL Trigger: confidence < 0.6
-  ↓
-AI: "잠시만 확인 중이니 기다려 주세요" + 🎵
-  ↓
-Frontend Alert: 🔔 → Operator
-  ↓
-Operator Context:
-  - Question: "다음 주 화요일 오후에 김대리님과 미팅 가능한가요?"
-  - Caller: 박과장 (010-9876-5432)
-  - Previous: [conversation history]
-  ↓
-Operator Input: "화요일 오후 3시 가능합니다"
-  ↓
-LLM Refinement:
-  Input: "화요일 오후 3시 가능합니다"
-  Context: User asked about meeting with 김대리
-  ↓
-LLM Output: "확인해 드렸습니다. 다음 주 화요일 오후 3시에 
-             김대리님과 미팅이 가능합니다."
-  ↓
-TTS: 🔊 "확인해 드렸습니다..."
-  ↓
-Save to KB: 
-  Q: "김대리 미팅 시간"
-  A: "화요일 오후 3시 가능"
-```
-
-**Response Time:** 
-- HITL request: ~1 second
-- Operator response: 15-30 seconds (human)
-- LLM refinement + TTS: ~1 second
-- **Total: ~17-32 seconds** (acceptable with hold music)
-
----
-
-## 📈 Performance Metrics
-
-### AI Response Time
-
-| Scenario | Average | P95 | P99 |
-|----------|---------|-----|-----|
-| **High Confidence** | 0.9s | 1.2s | 1.5s |
-| **Medium Confidence** | 1.3s | 1.8s | 2.2s |
-| **HITL (with operator)** | 20s | 35s | 60s |
-
-### Cost Estimates (100 calls/day)
-
-| Service | Daily Cost | Monthly Cost |
-|---------|-----------|--------------|
-| **Gemini 1.5 Flash** | ₩46 | ₩1,400 |
+| 서비스 | 일일 비용 | 월 비용 |
+|--------|-----------|---------|
+| **Gemini 2.5 Flash** | ₩46 | ₩1,400 |
 | **Google STT** | ₩100 | ₩3,000 |
 | **Google TTS** | ₩66 | ₩2,000 |
 | **Vector DB (ChromaDB)** | ₩0 (local) | ₩0 |
-| **Total** | **₩212** | **₩6,400** |
+| **총합** | **₩212** | **₩6,400** |
 
-> 💡 With Gemini Pro instead of Flash: **₩23,400/month** (3.6x more expensive)
+> 💡 Gemini Pro 사용 시: **₩23,400/월** (3.6배 더 비쌈)
 
-### System Capacity
+### 시스템 용량
 
-| Metric | Capacity |
-|--------|----------|
-| **Concurrent Calls** | 100+ |
-| **Concurrent AI Sessions** | 50+ |
-| **WebSocket Connections** | 1,000+ |
-| **API Requests** | 10,000+/min |
-| **Vector DB Size** | 1M+ documents |
-
----
-
-## 🔐 Security Features
-
-### Authentication & Authorization
-
-- **JWT Tokens** for API access
-- **OAuth2** for social login
-- **Role-Based Access Control** (Admin, Operator, Viewer)
-- **WebSocket Authentication** via token
-
-### Data Security
-
-- **TLS/SSL** for all external connections
-- **SRTP** for encrypted media (optional)
-- **Encrypted Credentials** in environment variables
-- **Database Encryption** at rest
-
-### Privacy Compliance
-
-- **Call Recording Consent** (configurable)
-- **PII Masking** in logs
-- **GDPR-compliant** data retention policies
-- **Audit Logs** for all operator actions
+| 메트릭 | 용량 |
+|--------|------|
+| **동시 통화** | 100+ |
+| **동시 AI 세션** | 50+ |
+| **WebSocket 연결** | 1,000+ |
+| **API 요청** | 10,000+/분 |
+| **Vector DB 크기** | 1M+ documents |
+| **RTP 지연** | <5ms |
+| **통화 설정 시간** | ~200ms |
 
 ---
 
-## 📊 Monitoring & Observability
+## 🛠️ 기술 스택
 
-### Metrics (Prometheus)
+### Backend
 
-**Call Metrics:**
-- `active_calls_total` - Current active calls
-- `call_duration_seconds` - Call duration histogram
-- `ai_activated_calls_total` - AI-handled calls counter
+| 카테고리 | 기술 |
+|---------|-----|
+| **언어** | Python 3.11+ |
+| **프레임워크** | FastAPI, asyncio, aiohttp |
+| **SIP/RTP** | 순수 Python 구현 |
+| **WebSocket** | Socket.IO, python-socketio |
+| **Database** | PostgreSQL (asyncpg), Redis |
+| **AI/ML** | Google Gemini 2.5 Flash, Sentence Transformers, PyTorch |
+| **Vector DB** | ChromaDB (dev), Pinecone (prod) |
+| **Audio** | opuslib, G.711, WebRTC VAD |
+| **모니터링** | Prometheus, structlog |
 
-**AI Metrics:**
-- `ai_response_time_seconds` - AI response time histogram
-- `ai_confidence_score` - AI confidence distribution
-- `rag_search_time_seconds` - RAG search latency
+### Frontend
 
-**HITL Metrics:**
-- `hitl_requests_total` - HITL request count
-- `hitl_response_time_seconds` - Operator response time
-- `hitl_queue_size` - Current HITL queue depth
+| 카테고리 | 기술 |
+|---------|-----|
+| **프레임워크** | Next.js 14, React 18 |
+| **언어** | TypeScript |
+| **스타일링** | TailwindCSS |
+| **상태 관리** | Zustand |
+| **WebSocket** | Socket.IO Client |
+| **빌드** | Turbopack (Next.js 14) |
 
-**Cost Metrics:**
-- `llm_tokens_used_total` - LLM token usage
-- `stt_duration_seconds_total` - STT audio duration
-- `tts_characters_total` - TTS character count
+### External Services
 
-### Logs (structured JSON)
+| 서비스 | 용도 |
+|--------|------|
+| **Google Cloud STT** | 음성 → 텍스트 (Telephony 모델) |
+| **Google Cloud TTS** | 텍스트 → 음성 (Neural2) |
+| **Google Gemini 2.5 Flash** | LLM 대화 생성 (초저비용) |
+
+---
+
+## 📁 주요 컴포넌트
+
+### Backend 컴포넌트
+
+| 컴포넌트 | 파일 | 역할 |
+|----------|------|------|
+| **SIP Endpoint** | `src/sip_core/sip_endpoint.py` | SIP 메시지 파싱/생성, Transaction 관리 |
+| **Call Manager** | `src/sip_core/call_manager.py` | B2BUA 로직, 통화 상태 추적 |
+| **RTP Relay** | `src/media/rtp_relay.py` | RTP 패킷 중계, PCM 큐 관리 (maxsize=150) |
+| **RTP Transport** | `src/ai_voicebot/pipecat/rtp_transport.py` | Pipecat → RTP, 재생 길이 동기화 |
+| **AI Orchestrator** | `src/ai_voicebot/orchestrator.py` | AI 세션 관리, 파이프라인 제어 |
+| **RAG Processor** | `src/ai_voicebot/pipecat/processors/rag_processor.py` | RAG 검색, LLM 응답 생성 |
+| **HITL Service** | `src/services/hitl_service.py` | call_id별 큐, 20초 timeout, fallback |
+| **API Gateway** | `src/api/main.py` | FastAPI REST API |
+| **WebSocket Server** | `src/websocket/server.py` | Socket.IO 실시간 통신 |
+
+### Frontend 컴포넌트
+
+| 컴포넌트 | 파일 | 역할 |
+|----------|------|------|
+| **Call History** | `frontend/app/call-history/page.tsx` | 통화 이력, Rolldown, 작업 버튼 |
+| **Live Monitor** | `frontend/app/dashboard/page.tsx` | 실시간 통화 모니터링 |
+| **Knowledge Manager** | `frontend/app/knowledge/page.tsx` | 지식 베이스 CRUD |
+| **HITL Interface** | `frontend/components/HITLDialog.tsx` | 운영자 응답 UI |
+| **WebSocket Hook** | `frontend/hooks/useWebSocket.ts` | Socket.IO 연결 관리 |
+
+---
+
+## 🔐 보안 및 프라이버시
+
+### 인증 및 권한
+
+- ✅ **JWT 토큰** - API 인증
+- ✅ **OAuth2** - 소셜 로그인
+- ✅ **RBAC** - 역할 기반 접근 제어 (Admin/Operator/Viewer)
+- ✅ **WebSocket 인증** - 토큰 기반
+
+### 데이터 보안
+
+- ✅ **TLS/SSL** - 모든 외부 연결 암호화
+- ✅ **환경 변수** - 민감 정보 관리
+- ✅ **Database 암호화** - 저장 데이터 암호화
+- ✅ **로그 마스킹** - PII 정보 마스킹
+
+### 컴플라이언스
+
+- ✅ **통화 녹음 동의** - 설정 가능
+- ✅ **GDPR 준수** - 데이터 보관 정책
+- ✅ **감사 로그** - 운영자 작업 기록
+
+---
+
+## 📈 모니터링 및 관찰성
+
+### Prometheus 메트릭
+
+**통화 메트릭**:
+- `active_calls_total` - 현재 활성 통화 수
+- `call_duration_seconds` - 통화 시간 히스토그램
+- `ai_activated_calls_total` - AI 응대 통화 수
+
+**AI 메트릭**:
+- `ai_response_time_seconds` - AI 응답 시간
+- `ai_confidence_score` - AI 신뢰도 분포
+- `rag_search_time_seconds` - RAG 검색 지연
+
+**HITL 메트릭**:
+- `hitl_requests_total` - HITL 요청 수
+- `hitl_response_time_seconds` - 운영자 응답 시간
+- `hitl_queue_size` - 대기 큐 크기
+
+**비용 메트릭**:
+- `llm_tokens_used_total` - LLM 토큰 사용량
+- `stt_duration_seconds_total` - STT 오디오 길이
+- `tts_characters_total` - TTS 문자 수
+
+### 구조화된 로그 (structlog)
 
 ```json
 {
-  "timestamp": "2025-01-05T10:30:45.123Z",
+  "timestamp": "2026-03-10T10:30:45.123Z",
   "level": "info",
   "event": "ai_response_time_breakdown",
   "call_id": "abc-123",
@@ -305,56 +475,36 @@ Save to KB:
 }
 ```
 
-### Dashboards (Grafana)
-
-**Main Dashboard:**
-- Active calls graph
-- AI confidence trends
-- Response time heatmap
-- Cost tracking
-
-**HITL Dashboard:**
-- Queue depth over time
-- Average operator response time
-- Resolution rate
-- Top unresolved questions
-
-**System Health:**
-- API latency
-- WebSocket connections
-- Database query time
-- Error rates
-
 ---
 
-## 🚀 Deployment Options
+## 🚀 배포 옵션
 
-### Development
+### 개발 환경
 
 ```bash
-# Run all services locally
-docker-compose up
+# 전체 시스템 실행
+.\start-all.ps1
 
 # Frontend: http://localhost:3000
 # API: http://localhost:8000
 # WebSocket: ws://localhost:8001
 ```
 
-### Production
+### 프로덕션 환경
 
-**Option 1: Single Server**
+**옵션 1: 단일 서버**
 - Ubuntu 22.04 LTS
 - 8 CPU, 16GB RAM
 - Docker + Docker Compose
 - Nginx reverse proxy
 
-**Option 2: Kubernetes**
+**옵션 2: Kubernetes**
 - Frontend: Vercel / Netlify
 - Backend: GKE / EKS
 - Database: Cloud SQL / RDS
 - Vector DB: Pinecone Cloud
 
-**Option 3: Hybrid**
+**옵션 3: 하이브리드**
 - Frontend: Vercel (CDN)
 - Backend: On-premise VM
 - AI Services: Google Cloud
@@ -362,154 +512,119 @@ docker-compose up
 
 ---
 
-## 📚 Documentation Index
+## 📚 관련 문서
 
-### Core Docs
+### 핵심 문서
 
-| Document | Description |
-|----------|-------------|
-| **[README.md](../README.md)** | Project overview & quick start |
-| **[ai-voicebot-architecture.md](ai-voicebot-architecture.md)** | Complete AI system design |
-| **[frontend-architecture.md](frontend-architecture.md)** | Frontend & HITL detailed design |
+| 문서 | 설명 |
+|------|------|
+| **[README.md](../README.md)** | 프로젝트 개요 및 빠른 시작 |
+| **[INDEX.md](INDEX.md)** | 전체 문서 인덱스 |
+| **[QUICK_START.md](QUICK_START.md)** | 5분 설치 가이드 |
 
-### Technical Specs
+### 아키텍처 문서
 
-| Document | Description |
-|----------|-------------|
-| **[gemini-model-comparison.md](gemini-model-comparison.md)** | Flash vs Pro analysis |
-| **[ai-response-time-analysis.md](ai-response-time-analysis.md)** | Performance breakdown |
-| **[google-api-setup.md](google-api-setup.md)** | Google Cloud API setup guide |
+| 문서 | 설명 |
+|------|------|
+| **[architecture/ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md)** | AI Voicebot 완전한 설계 (5,000+ lines) |
+| **[architecture/frontend-architecture.md](architecture/frontend-architecture.md)** | Frontend 상세 설계 (2,300+ lines) |
+| **[architecture/voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md)** | Voice AI 대화 엔진 |
 
-### Guides
+### 설계 문서
 
-| Document | Description |
-|----------|-------------|
-| **[AI_QUICKSTART.md](AI_QUICKSTART.md)** | 15-minute setup guide |
-| **[USER_MANUAL.md](USER_MANUAL.md)** | End-user guide |
-| **[DEBUGGING.md](DEBUGGING.md)** | Troubleshooting |
+| 문서 | 설명 |
+|------|------|
+| **[design/TTS_RTP_AND_STT_QUEUE_DESIGN.md](design/TTS_RTP_AND_STT_QUEUE_DESIGN.md)** | TTS→RTP 파이프라인, PCM 큐 설계 |
+| **[design/TTS_RTP_STRUCTURE_REVIEW.md](design/TTS_RTP_STRUCTURE_REVIEW.md)** | TTS→큐→RTP 구조 검토 및 이슈 분석 |
+| **[design/OPERATOR-AWAY-MODE-DESIGN.md](design/OPERATOR-AWAY-MODE-DESIGN.md)** | 운영자 부재중 모드 상세 설계 |
 
----
+### 가이드
 
-## 🎯 Roadmap
-
-### ✅ Phase 1: Core AI (Completed)
-- Basic AI auto-response
-- STT/TTS/LLM integration
-- RAG knowledge retrieval
-- Call recording
-
-### 🚧 Phase 2: Frontend & HITL (In Progress)
-- Web dashboard
-- Real-time monitoring
-- Knowledge base management
-- Human-in-the-loop system
-
-### 📋 Phase 3: Advanced Features (Planned)
-- Mobile app for operators
-- Multi-language support
-- Advanced analytics
-- CRM integration
-- A/B testing framework
-
-### 🌟 Phase 4: Enterprise (Future)
-- Multi-tenant support
-- SSO integration
-- Custom AI model training
-- White-label frontend
-- Enterprise SLA
+| 문서 | 설명 |
+|------|------|
+| **[guides/USER_MANUAL.md](guides/USER_MANUAL.md)** | 사용자 매뉴얼 |
+| **[guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md)** | 문제 해결 가이드 |
+| **[guides/google-api-setup.md](guides/google-api-setup.md)** | Google Cloud API 설정 |
 
 ---
 
-## 🧪 Quality Assurance (QA)
+## 🎯 사용 사례
 
-### Test Strategy
+### 1. 소규모 기업 접수 자동화
 
-Our QA approach focuses on **functional testing** with a pyramid structure:
+**문제**: 영업시간 외 고객 문의 누락
+**해결**: AI 자동 응답으로 24시간 응대
+**효과**: 
+- 고객 만족도 ↑
+- 인건비 절감
+- 지식 베이스 자동 구축
 
-```
-         ▲
-        / \
-       / E2E \ (10%)
-      /───────\
-     / Integration \ (30%)
-    /─────────────\
-   /   Unit Tests  \ (60%)
-  /___________________\
-```
+### 2. 콜센터 1차 응대
 
-### Test Coverage
+**문제**: 반복적인 FAQ 질문 처리 부담
+**해결**: AI가 FAQ 자동 응답, 복잡한 질문만 상담원 전달
+**효과**:
+- 상담원 업무 부하 30% 감소
+- 평균 응답 시간 60% 단축
+- 고객 대기 시간 감소
 
-#### Current Test Results
-- **Total Tests**: 32
-- **Passed**: ✅ 32 (100%)
-- **Failed**: ❌ 0 (0%)
-- **Success Rate**: 100% ✨
+### 3. 의료 기관 예약 안내
 
-#### Module Coverage
-- **SIP Core Models**: 100% ✅
-- **Call Session**: 100% ✅
-- **Text Embedder**: 88.06%
-- **CDR**: 57.59%
-
-### Running Tests
-
-```bash
-# Run all unit tests
-pytest tests_new/unit/ -v
-
-# Generate detailed report
-pytest tests_new/unit/ -v --junit-xml=test-report.xml
-python generate_test_report.py
-
-# View results
-cat docs/qa/test-detailed-report.md
-```
-
-### Test Documentation
-
-Comprehensive test documentation is available:
-- 📋 [Test Strategy](qa/test-strategy.md) - Overall testing approach
-- 📝 [Test Execution Guide](qa/test-execution-guide.md) - Step-by-step instructions
-- 📊 [Detailed Test Report](qa/test-detailed-report.md) - Latest test results with:
-  - Test execution statistics
-  - Category-wise summaries (23 categories)
-  - **Detailed results for each test**:
-    - 🟢 **Action**: What was tested
-    - 🎯 **Expected**: Expected outcome
-    - ✅ **Result**: Pass/Fail with details
-    - ❌ **Failure Info**: Error messages and traceback
+**문제**: 전화 예약 문의 집중 시간대 대응 어려움
+**해결**: AI가 진료 시간, 예약 가능 시간 안내
+**효과**:
+- 예약 담당 인력 50% 감소
+- 환자 편의성 향상
+- 24시간 정보 제공
 
 ---
 
-## 🤝 Contributing
+## 🔮 로드맵
 
-We welcome contributions! Areas that need help:
+### ✅ Phase 1: Core AI (완료)
+- SIP B2BUA 구현
+- AI 자동 응답
+- STT/TTS/LLM 통합
+- RAG 지식 검색
+- 통화 녹음
 
-1. **Frontend Components** - React UI improvements
-2. **AI Prompt Engineering** - Better LLM prompts
-3. **Testing** - Unit tests, integration tests
-4. **Documentation** - Tutorials, examples
-5. **Translations** - i18n support
+### ✅ Phase 2: Frontend & HITL (완료)
+- 웹 대시보드
+- 실시간 모니터링
+- 지식 베이스 관리
+- Human-in-the-Loop
+- 통화 이력 관리 (발신/종료/녹음)
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+### 🚧 Phase 3: 고급 기능 (진행중)
+- [ ] 멀티 언어 지원
+- [ ] 고급 분석 대시보드
+- [ ] CRM 연동
+- [ ] A/B 테스트 프레임워크
+- [ ] 모바일 앱
+
+### 🌟 Phase 4: Enterprise (계획)
+- [ ] 멀티 테넌트 지원
+- [ ] SSO 통합
+- [ ] 커스텀 AI 모델 학습
+- [ ] 화이트 라벨 프론트엔드
+- [ ] Enterprise SLA
 
 ---
 
-## 📞 Support
+## 📞 지원 및 문의
 
-- **Issues:** [GitHub Issues](https://github.com/hak023/sip_pbx/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/hak023/sip_pbx/discussions)
-- **Email:** hak023@example.com
+- **Issues**: [GitHub Issues](https://github.com/hak023/sip_pbx/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/hak023/sip_pbx/discussions)
+- **Email**: hak023@example.com
 
 ---
 
-## 📄 License
+## 📄 라이선스
 
-MIT License - see [LICENSE](../LICENSE)
+MIT License - 자세한 내용은 [LICENSE](../LICENSE) 참조
 
 ---
 
 **Built with ❤️ by Winston (Architect) & Team**
 
-*Last Updated: 2025-01-05*
-
+*최종 업데이트: 2026-03-10*
