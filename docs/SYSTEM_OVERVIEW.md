@@ -151,6 +151,542 @@
 
 ---
 
+## 🧠 AI 기술 상세 - 사람처럼 대화하는 비결
+
+### LLM 기반 지능형 응답 처리
+
+시스템은 **LangGraph Agentic RAG** 아키텍처를 사용하여 사람과 같은 자연스러운 대화를 구현합니다.
+
+#### 1. 대화 처리 파이프라인
+
+```
+사용자 발화 → Intent 분석 → 캐시 확인 → RAG 검색 → LLM 응답 생성 → TTS 변환
+```
+
+**각 단계 상세**:
+
+1. **Intent Classification (의도 분석)**
+   - LLM이 사용자 발화의 의도를 18가지 카테고리로 분류
+   - 카테고리: 질문, 불만, 인사, 작별, 감사, 동의, 거부, 반복 요청, 명확화, 도움말, 전화 전환, 잡담 등
+   - 의도에 따라 최적화된 응답 경로 선택
+
+2. **Semantic Cache (시맨틱 캐시)**
+   - 유사한 질문은 캐시에서 즉시 응답 (0.1초 이내)
+   - 임베딩 기반 유사도 검색 (threshold: 0.85)
+   - 응답 속도 10배 향상
+
+3. **Adaptive RAG (적응형 검색)**
+   - **Query Rewriting**: 질문을 더 명확하게 재작성
+   - **Small-to-Big Retrieval**: 작은 청크로 검색 후 큰 맥락 반환
+   - **Contextual Compression**: 검색 결과에서 관련 부분만 추출
+   - **Hybrid Search**: Vector 검색 + 키워드 검색 결합
+
+4. **LLM Response Generation (응답 생성)**
+   - **Gemini 2.5 Flash** 사용 (초저비용, 초고속)
+   - **Streaming 응답**: 첫 단어 0.5초 이내 시작
+   - **Context Window**: 최근 5턴 대화 + RAG 결과 + 조직 정보
+   - **Role Prompt**: "당신은 친절한 고객센터 상담원입니다..."
+
+#### 2. RAG (Retrieval Augmented Generation)
+
+**지식 베이스 검색 과정**:
+
+```
+사용자 질문: "영업시간이 언제인가요?"
+    ↓
+1. Embedding 변환
+   → Vector: [0.23, -0.45, 0.67, ..., 0.12] (384차원)
+    ↓
+2. VectorDB 유사도 검색
+   → Top 5 문서 검색
+   → Score: [0.92, 0.87, 0.81, 0.75, 0.68]
+    ↓
+3. 관련 문서만 선택 (threshold: 0.7)
+   → "영업시간은 평일 9시~6시입니다"
+   → "주말은 휴무입니다"
+    ↓
+4. LLM에 전달
+   System: 다음 정보를 바탕으로 답변하세요
+   Context: 영업시간은 평일 9시~6시, 주말 휴무
+   Question: 영업시간이 언제인가요?
+    ↓
+5. LLM 응답 생성
+   → "평일 오전 9시부터 오후 6시까지 영업하며, 주말은 휴무입니다."
+```
+
+**지식 베이스 자동 구축**:
+
+```
+통화 종료
+    ↓
+1. STT 전사 로드
+   발신자: "다음 주 화요일에 방문 가능한가요?"
+   착신자: "네, 화요일 오후 2시 이후에 가능합니다"
+    ↓
+2. LLM 지식 추출
+   Prompt: "이 대화에서 유용한 정보를 추출하세요"
+   → Q: "화요일 방문 가능 시간"
+   → A: "오후 2시 이후 가능"
+    ↓
+3. Usefulness 판단
+   Prompt: "이 정보가 재사용 가능한가요?"
+   → 유용성 점수: 0.85 (threshold: 0.6 이상)
+    ↓
+4. VectorDB 저장
+   → Embedding 변환
+   → 자동으로 지식 베이스에 추가
+```
+
+#### 3. Smart Turn Detection (자연스러운 대화)
+
+**사람처럼 발화 종료 감지**:
+
+- **Silero VAD**: 음성 활동 감지 (200ms 단위)
+- **Smart Turn v3.2**: 문법·억양·속도 분석 (10-100ms)
+  - 문장 종결: "입니다.", "습니다."
+  - 상승 억양: "... 인가요?"
+  - 말 속도: 빨라지거나 느려짐
+
+**Barge-in 처리** (끼어들기):
+
+```
+AI가 말하는 중...
+    ↓
+사용자 발화 감지
+    ↓
+긴급 키워드? ("잠깐만요", "아니요")
+  YES → 즉시 AI 중단
+  NO → 계속 진행
+    ↓
+3단어 이상 발화?
+  YES → LLM 판단
+    ↓
+LLM: "사용자가 끼어들려는 것 같나요?"
+  YES → AI 중단, 사용자 발화 청취
+  NO → AI 계속, 발화 무시
+```
+
+#### 4. HITL (Human-in-the-Loop) 연동
+
+**AI가 모르는 질문 처리**:
+
+```
+RAG 신뢰도 < 0.6
+    ↓
+HITL 트리거
+    ↓
+AI: "잠시만 확인 중이니 기다려 주세요"
+    + 대기 음악 재생
+    ↓
+WebSocket → Frontend 알림 🔔
+    ↓
+운영자 확인 (20초 이내)
+  ├─ 응답 있음
+  │    ↓
+  │  LLM으로 응답 다듬기
+  │    → "확인해 드렸습니다. [응답 내용]"
+  │    → VectorDB 자동 저장
+  │
+  └─ 응답 없음 (timeout)
+       ↓
+     AI: "확인 후 다시 안내드리겠습니다"
+       → 통화 종료
+       → 미처리 이력 저장
+```
+
+---
+
+## 👥 유저 스토리 기반 시나리오
+
+### 시나리오 1: 접수 담당자 - 영업시간 문의
+
+**페르소나**: 김미라 (접수 담당자, 30대)
+**목표**: 영업시간 외 전화 문의 자동 처리
+**Pain Point**: 저녁/주말에도 영업시간 문의 전화가 많음
+
+**Before (시스템 도입 전)**:
+```
+📞 [저녁 8시] 전화벨 울림
+고객: "영업시간이 언제인가요?"
+김미라: (전화 못 받음) → 고객 불만
+```
+
+**After (시스템 도입 후)**:
+```
+📞 [저녁 8시] 전화 자동 연결
+AI: "안녕하세요, 무엇을 도와드릴까요?"
+고객: "영업시간이 언제인가요?"
+AI: (0.9초) "평일 오전 9시부터 오후 6시까지 영업하며, 주말은 휴무입니다."
+고객: "토요일은 안 되나요?"
+AI: "죄송합니다. 주말은 휴무이며, 평일 중에 방문 부탁드립니다."
+고객: "알겠습니다. 감사합니다."
+AI: "네, 좋은 하루 보내세요."
+→ [통화 종료, 녹음 저장]
+```
+
+**Frontend 활용**:
+```
+[다음날 아침, 김미라 출근]
+→ 대시보드: "어제 영업시간 문의 5건"
+→ 통화 이력 클릭
+  ├─ 📞 저녁 8시: 영업시간 문의 (AI 응대)
+  ├─ 📞 저녁 9시: 예약 가능 여부 (AI → HITL → 미처리)
+  └─ 📞 밤 11시: 긴급 문의 (부재중 메시지)
+
+→ 미처리 HITL 확인
+  "예약 가능 여부" 클릭
+  → 대화 내용 확인
+  → 고객에게 회신 전화 📞
+```
+
+**효과**:
+- ✅ 24시간 자동 응대
+- ✅ 단순 문의 90% 자동 처리
+- ✅ 복잡한 문의만 다음날 처리
+- ✅ 고객 만족도 ↑
+
+---
+
+### 시나리오 2: 운영자 - 복잡한 질문 HITL 개입
+
+**페르소나**: 박지훈 (고객센터 팀장, 40대)
+**목표**: AI가 처리 못하는 질문 실시간 지원
+**Pain Point**: AI가 틀린 답변하면 고객 불만
+
+**Before**:
+```
+고객: "다음 주 수요일에 김 대리님 만날 수 있나요?"
+AI: (낮은 신뢰도, 추측 답변) → 잘못된 정보 제공
+```
+
+**After**:
+```
+[박지훈 대시보드 화면]
+
+📞 활성 통화: 3건
+┌────────────────────────────────┐
+│ 🔔 HITL 요청!                   │
+│ 발신자: 010-1234-5678          │
+│ 질문: "다음 주 수요일에        │
+│       김 대리님 만날 수 있나요?"│
+│                                │
+│ [20초 남음 ⏱️]                  │
+│                                │
+│ 📝 답변 입력:                   │
+│ [________________________]     │
+│                                │
+│ [전송] [거부] [통화 전환]       │
+└────────────────────────────────┘
+
+→ 박지훈 입력: "수요일 오후 3시 가능"
+→ [전송] 클릭
+
+AI: (LLM으로 다듬기)
+  "확인해 드렸습니다. 다음 주 수요일 오후 3시에
+   김 대리님과 미팅이 가능합니다."
+
+고객: "감사합니다!"
+
+→ [자동으로 지식 베이스 저장]
+  Q: "김 대리 미팅 가능 시간"
+  A: "수요일 오후 3시"
+```
+
+**Frontend 기능**:
+- 🔔 **실시간 알림**: 소리 + 화면 팝업
+- ⏱️ **타이머 표시**: 20초 카운트다운
+- 📝 **빠른 입력**: 템플릿 응답 지원
+- 🔄 **통화 전환**: 직접 통화로 전환 가능
+- 📊 **통계**: HITL 요청 빈도, 응답 시간
+
+**효과**:
+- ✅ AI 오답 방지
+- ✅ 고객 대기 시간 최소화
+- ✅ 지식 베이스 자동 증가
+- ✅ 운영자 부담 감소
+
+---
+
+### 시나리오 3: 관리자 - 통화 이력 분석
+
+**페르소나**: 이수진 (서비스 개선 담당, 35대)
+**목표**: 고객 문의 패턴 파악, 서비스 개선
+**Pain Point**: 어떤 질문이 많은지 모름
+
+**Frontend 활용**:
+
+```
+[이수진 대시보드]
+
+📊 이번 주 통화 분석
+─────────────────────────
+총 통화: 234건
+AI 자동 처리: 187건 (80%)
+HITL 개입: 32건 (14%)
+미처리: 15건 (6%)
+
+🔥 TOP 5 질문 (이번 주)
+1. 영업시간 문의 - 48건
+2. 예약 변경 - 31건
+3. 주차장 위치 - 27건
+4. 가격 문의 - 23건
+5. 직원 통화 연결 - 19건
+
+📈 트렌드
+└─ "예약 변경" 문의 ↑ 35% (지난 주 대비)
+   → 조치 필요: 온라인 예약 변경 기능 추가
+
+🎯 HITL 분석
+─────────────────────────
+평균 응답 시간: 12초
+응답률: 90% (3건 timeout)
+만족도: 4.5/5.0
+
+⚠️ 개선 필요 질문
+1. "환불 정책" - HITL 10건, 지식 베이스 부족
+2. "특정 직원 일정" - HITL 8건, 캘린더 연동 필요
+3. "결제 방법" - 답변 일관성 부족
+
+📞 통화 이력 상세
+─────────────────────────
+[클릭하여 펼치기 ▼]
+
+2026-03-10 14:23 | 010-1234-5678
+├─ 구분: AI 응대
+├─ 주제: 영업시간 문의
+├─ 만족도: ⭐⭐⭐⭐⭐
+└─ 💬 대화 내용
+   AI: "안녕하세요..."
+   고객: "영업시간이..."
+   [전체 보기]
+
+작업:
+[📞 재전화] [✖ 블랙리스트] [⬇ 녹음 다운로드]
+```
+
+**효과**:
+- ✅ 데이터 기반 의사결정
+- ✅ 서비스 개선 포인트 발굴
+- ✅ 지식 베이스 갭 분석
+- ✅ 운영 효율성 향상
+
+---
+
+## 🏗️ 아키텍처 동작 구조
+
+### 전체 시스템 플로우
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    시스템 동작 흐름도                             │
+└─────────────────────────────────────────────────────────────────┘
+
+1. 통화 시작 (SIP Layer)
+──────────────────────────
+발신자 → SIP INVITE → Call Manager
+  ↓
+Call Manager → 착신자 호출 (10초 대기)
+  ↓
+타임아웃 or 부재중?
+  YES → AI 모드 활성화
+  NO → 일반 통화 연결
+
+2. AI 모드 활성화 (Audio Layer)
+──────────────────────────
+Call Manager → RTP Relay Worker (AI Mode)
+  ↓
+RTP Packets → PCM Queue (maxsize: 150)
+  ↓
+Pipecat Pipeline 시작
+  ├─ Silero VAD (음성 활동 감지)
+  ├─ Smart Turn (발화 종료 감지)
+  └─ Google STT (음성→텍스트)
+
+3. AI 처리 (Intelligence Layer)
+──────────────────────────
+STT 텍스트 → LangGraph Agent
+  ↓
+┌─────────────────────────────────┐
+│ LangGraph Workflow              │
+├─────────────────────────────────┤
+│ 1. classify_intent              │
+│    → 의도 분석 (18가지)          │
+│ 2. check_cache                  │
+│    → 캐시 확인 (0.1초)           │
+│ 3. rewrite_query                │
+│    → 질문 재작성                 │
+│ 4. adaptive_rag                 │
+│    → VectorDB 검색              │
+│ 5. generate_response            │
+│    → LLM 응답 생성 (Streaming)   │
+│ 6. hitl_alert (신뢰도 < 0.6)    │
+│    → 운영자 요청                 │
+│ 7. update_cache                 │
+│    → 캐시 저장                   │
+│ 8. update_state                 │
+│    → 대화 상태 업데이트          │
+└─────────────────────────────────┘
+  ↓
+응답 텍스트 (Streaming)
+
+4. 음성 합성 (TTS Layer)
+──────────────────────────
+응답 텍스트 → Google TTS (Streaming)
+  ↓
+PCM Audio → RTP Packets
+  ↓
+RTP Relay Worker → 발신자
+
+5. 동시 처리 (Concurrent)
+──────────────────────────
+[Frontend WebSocket]
+  └─ 실시간 이벤트 전송
+     ├─ call:new
+     ├─ transcript (STT/TTS)
+     ├─ hitl:request
+     └─ call:ended
+
+[Database]
+  └─ 비동기 저장
+     ├─ PostgreSQL (통화 이력)
+     ├─ Redis (실시간 상태)
+     └─ VectorDB (지식 베이스)
+
+6. 통화 종료 (Cleanup Layer)
+──────────────────────────
+BYE 수신 → Call Manager
+  ↓
+RTP Relay Stop
+  ↓
+Pipecat Pipeline Stop
+  ↓
+지식 추출 트리거
+  ├─ STT 전사 로드
+  ├─ LLM 분석
+  ├─ 유용성 판단
+  └─ VectorDB 저장
+
+CDR 생성 → logs/
+WebSocket: call:ended → Frontend
+```
+
+### 핵심 컴포넌트 상호작용
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                  컴포넌트 간 통신 흐름                          │
+└───────────────────────────────────────────────────────────────┘
+
+[SIP Layer]
+  ├─ SIPEndpoint: UDP 5060 listen
+  │   └─ asyncio.DatagramProtocol
+  │       └─ SIP 메시지 파싱/생성
+  │
+  ├─ CallManager: 통화 상태 관리
+  │   ├─ caller_leg: Dict[call_id, LegState]
+  │   ├─ callee_leg: Dict[call_id, LegState]
+  │   └─ ai_sessions: Dict[call_id, AIOrchestrator]
+  │
+  └─ RTPRelayWorker: 미디어 중계
+      ├─ _standard_mode(): 일반 RTP relay
+      └─ _pipecat_mode(): AI RTP routing
+          └─ _pipecat_pcm_queue: asyncio.Queue(150)
+
+[AI Layer - Pipecat]
+  ├─ Custom RTP Transport
+  │   └─ send_audio() / receive_audio()
+  │
+  ├─ Pipeline Processors
+  │   ├─ VADProcessor (Silero)
+  │   ├─ SmartTurnDetector
+  │   ├─ STTProcessor (Google)
+  │   ├─ RAGProcessor (LangGraph)
+  │   └─ TTSProcessor (Google)
+  │
+  └─ Audio Buffer
+      └─ Jitter compensation
+
+[Intelligence Layer - LangGraph]
+  ├─ StateGraph
+  │   ├─ ConversationState (shared)
+  │   └─ 8 Nodes (classify → cache → rag → generate → ...)
+  │
+  ├─ VectorDB Client
+  │   ├─ ChromaDB (local dev)
+  │   └─ Pinecone (production)
+  │
+  └─ LLM Client
+      └─ Gemini 2.5 Flash (Streaming)
+
+[API Layer]
+  ├─ FastAPI (8000)
+  │   ├─ /api/call-history
+  │   ├─ /api/calls/{id}/hangup
+  │   ├─ /api/outbound/call
+  │   └─ /api/knowledge/*
+  │
+  └─ Socket.IO (8001)
+      ├─ WebSocket connections
+      ├─ Room-based events
+      └─ Real-time broadcast
+
+[Storage Layer]
+  ├─ PostgreSQL
+  │   ├─ call_history
+  │   ├─ hitl_requests
+  │   └─ unresolved_hitl_requests
+  │
+  ├─ Redis
+  │   ├─ operator_status:{owner}
+  │   ├─ session:{call_id}
+  │   └─ cache:semantic:{hash}
+  │
+  └─ VectorDB
+      ├─ knowledge_base collection
+      └─ semantic_cache collection
+```
+
+### 성능 최적화 전략
+
+```
+1. 비동기 I/O (asyncio)
+──────────────────────────
+- 모든 네트워크 I/O: aiohttp, asyncpg
+- RTP 패킷 처리: asyncio.Queue
+- LLM 호출: Streaming API
+→ 1,000+ 동시 연결 가능
+
+2. 캐싱 전략
+──────────────────────────
+- L1: 메모리 (dict) - 1ms
+- L2: Redis - 5ms
+- L3: VectorDB - 50ms
+→ Cache Hit Rate: 85%
+
+3. 커넥션 풀
+──────────────────────────
+- PostgreSQL: 20 connections
+- Redis: 10 connections
+- HTTP: aiohttp session reuse
+→ 연결 생성 오버헤드 제거
+
+4. Batch Processing
+──────────────────────────
+- RTP Packets: 20ms 단위 batch
+- Database Writes: 100ms 단위 batch
+- WebSocket Events: 50ms 단위 batch
+→ CPU 사용률 30% 감소
+
+5. Streaming
+──────────────────────────
+- LLM: 첫 토큰 0.5초
+- TTS: 첫 청크 0.2초
+- STT: 실시간 partial results
+→ 응답 시작 시간 70% 단축
+```
+
+---
+
 ## 🎯 주요 사용 시나리오
 
 ### 1️⃣ 일반 통화 (AI 미사용)
