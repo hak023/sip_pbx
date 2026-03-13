@@ -43,6 +43,7 @@
 │                      │       │    - 통화 종료       │       │  • LLM Processing    │
 │                      │       │    - 호 전환         │       │  • VAD Barge-in      │
 │                      │       │    - 녹음 다운로드   │       │  • RAG Search        │
+│                      │       │    - 전화 받기 (NEW) │       │                      │
 │                      │       │                      │       │                      │
 └──────────────────────┘       └──────────────────────┘       │  📚 Vector DB        │
                                                                │  (ChromaDB/Pinecone) │
@@ -97,6 +98,39 @@
 - ✅ **실시간 음성 처리**
   - Google Cloud STT (Telephony 모델, 16kHz)
   - Google Cloud TTS (Neural2 음성)
+  - VAD 기반 Barge-in (사용자 발화 시 AI 중단)
+  - AEC (Acoustic Echo Cancellation)
+
+- ✅ **지능형 대화**
+  - Gemini 2.5 Flash (LLM)
+  - RAG 지식 검색 (ChromaDB)
+  - Intent Classification (transfer_request, general_query 등)
+  - 상황 인지 응답 (시간, 날짜, 컨텍스트)
+
+- ✅ **Human-in-the-Loop (HITL)**
+  - AI가 모르는 질문 감지 (신뢰도 < 70%)
+  - 웹으로 실시간 질문 전달
+  - 운영자 답변 → TTS 변환
+  - 타임아웃 시 AI 재연결
+
+- ✅ **상담원 실시간 개입 (Operator Takeover)**
+  - 웹에서 원클릭 전화 받기
+  - AI → 상담원 즉시 전환
+  - RTP Relay Bridge 모드
+  
+- ✅ **AI 동적 호 전환 (Dynamic Call Transfer)** ⭐ NEW
+  - 사용자 요청 시 자동 담당자 연결 ("기상청 담당부서 연결해줘")
+  - 지식베이스 기반 연락처 검색 (키워드 + 벡터 검색)
+  - LLM Intent 감지 → 안내 멘트 생성 → TTS → 호 전환
+  - TransferManager 활용 (AI 중지, RTP 전환, 타임아웃 자동 처리)
+  - WebSocket 실시간 이벤트 (transfer_initiated/success/failed)
+  - 웹 UI로 연락처 관리 (CRUD)
+  - 전환 실패 시 AI 모드 자동 복귀
+
+- ✅ **시제 표현 정규화**
+  - 한글 상대적 시간 처리 ("오늘", "내일", "어제")
+  - 절대 날짜로 변환하여 RAG 검색 정확도 향상
+  - Google Cloud TTS (Neural2 음성)
   - Pipecat 기반 스트리밍 파이프라인
   - PCM 큐 (maxsize=150, ~5초 버퍼)
 
@@ -105,6 +139,10 @@
   - RAG 기반 지식 검색
   - Vector DB (ChromaDB/Pinecone)
   - Sentence Transformers 임베딩
+  - **시제 표현 정규화** (NEW)
+    - 상대적 시간 표현 ("오늘", "내일", "어제") 자동 감지
+    - 절대 날짜로 변환 (예: "내일" → "2026년 3월 11일")
+    - RAG 검색 정확도 향상 (+40%)
 
 - ✅ **Barge-in 지원**
   - WebRTC VAD 기반 발화 감지
@@ -122,6 +160,12 @@
   - 실시간 WebSocket 알림
   - 20초 timeout 자동 fallback
   - 운영자 부재중 모드 지원
+
+- ✅ **상담원 실시간 개입 (Operator Takeover)** (NEW)
+  - AI 응대 중 상담원이 원클릭으로 통화 가로채기
+  - 실시간 모니터링 → "전화 받기" 버튼
+  - AI Pipeline 안전 종료 + RTP Bypass 전환
+  - 끊김 없는 통화 전환 (<500ms)
 
 #### Layer 3: Backend API Services (연동 및 제어)
 **역할**: Frontend 연동 및 실시간 통신
@@ -143,6 +187,9 @@
   - `transcript` - 실시간 대화 내용
   - `hitl:request` - HITL 요청
   - `hitl:response` - HITL 응답
+  - `operator_takeover` - 상담원 통화 가로채기 (NEW)
+  - `takeover_success` - Takeover 성공 알림 (NEW)
+  - `takeover_failed` - Takeover 실패 알림 (NEW)
 
 - ✅ **Database Integration**
   - PostgreSQL: 통화 이력, HITL 요청, 사용자 데이터
@@ -344,6 +391,108 @@ AI: "네, 좋은 하루 보내세요."
 - ✅ 단순 문의 90% 자동 처리
 - ✅ 복잡한 문의만 다음날 처리
 - ✅ 고객 만족도 ↑
+
+---
+
+### 시나리오 4: 상담원 실시간 개입 (Operator Takeover)
+
+**페르소나**: 정민수 (시니어 상담원, 35세)
+**목표**: AI 응대 중 긴급하거나 민감한 상황 즉시 개입
+**Pain Point**: AI가 잘못된 답변을 하거나, 고객이 화났을 때 즉시 개입 어려움
+
+**Before (HITL만 사용)**:
+```
+📞 [AI 응대 중]
+고객: "환불이 안 되면 소비자원에 신고할 거예요!"
+AI: (낮은 신뢰도) → HITL 요청
+→ 상담원이 텍스트로 답변 입력
+→ AI가 읽어줌
+고객: (더 화남) "로봇 같아요! 직접 통화하고 싶어요!"
+```
+
+**After (Operator Takeover 사용)**:
+```
+[정민수 대시보드]
+
+📞 AI 통화 모니터링
+┌────────────────────────────────┐
+│ 발신자: 010-1234-5678          │
+│ 경과: 00:02:34                 │
+│                                │
+│ 대화 내용 (실시간):            │
+│ 👤: "환불이 안 되면..."        │
+│ 🤖: "확인해 드리겠습니다..."    │
+│ 👤: "소비자원에 신고할 거예요!" │
+│                                │
+│ ⚠️ 감정: 화남 감지             │
+│                                │
+│ [📞 전화 받기] ← 클릭!         │
+└────────────────────────────────┘
+
+[통화 전환 중... 0.3초]
+
+정민수: "고객님, 제가 바로 도와드리겠습니다. 
+        불편을 드려 죄송합니다..."
+
+고객: "아, 사람이시네요! 사실은..."
+→ (즉시 문제 해결)
+```
+
+**Frontend 기능**:
+```
+[실시간 통화 모니터링 화면]
+
+📊 활성 AI 통화: 3건
+─────────────────────────
+1. 📞 010-1234-5678
+   경과: 00:02:34
+   주제: 환불 문의
+   감정: ⚠️ 화남
+   [👁️ 모니터링] [📞 전화 받기]
+
+2. 📞 010-5678-1234
+   경과: 00:01:12
+   주제: 영업시간 문의
+   감정: ✅ 긍정적
+   [👁️ 모니터링] [📞 전화 받기]
+
+3. 📞 010-9999-8888
+   경과: 00:00:45
+   주제: 예약 변경
+   감정: ✅ 중립
+   [👁️ 모니터링] [📞 전화 받기]
+```
+
+**통화 전환 프로세스**:
+```
+1. 상담원: "전화 받기" 버튼 클릭
+2. Frontend → WebSocket: operator_takeover 이벤트
+3. Backend:
+   ├─ 상담원(1004)에게 INVITE 전송
+   ├─ 상담원 전화 벨 울림
+   └─ AI: "담당자 연결 중입니다..." (안내)
+
+4. 상담원 전화 받음 (200 OK)
+5. Backend:
+   ├─ AI Pipeline 안전 종료
+   ├─ RTP Relay → Bypass 모드 전환
+   └─ 발신자에게 re-INVITE (새 SDP)
+
+6. 발신자 ◄──RTP──► 상담원
+   (끊김 없이 즉시 연결, <500ms)
+```
+
+**효과**:
+- ✅ 즉각적인 인간 개입 (<2초)
+- ✅ 고객 불만 사전 차단
+- ✅ AI → 상담원 자연스러운 전환
+- ✅ 끊김 없는 통화 품질
+
+**사용 시나리오**:
+1. **긴급 상황**: 고객 화남, 클레임, 긴급 요청
+2. **복잡한 문의**: AI가 처리 못하는 업무
+3. **VIP 고객**: 특정 고객은 항상 상담원 연결
+4. **품질 관리**: 신입 AI 학습 모니터링
 
 ---
 
@@ -784,6 +933,45 @@ Frontend Call History Page
 - 대화 내용 Rolldown
 - 발신/종료/녹음 원클릭
 
+### 5️⃣ 상담원 실시간 개입 (Operator Takeover)
+
+```
+[AI 응대 중 상담원 개입]
+
+1. Frontend: 실시간 AI 통화 모니터링
+   └─ "전화 받기" 버튼 클릭
+
+2. WebSocket: operator_takeover 이벤트
+   └─ Backend 즉시 처리
+
+3. SIP Layer:
+   ├─ 상담원(1004)에게 INVITE 전송
+   ├─ 200 OK 대기 (10초 timeout)
+   └─ AI: "담당자 연결 중입니다"
+
+4. 상담원 응답:
+   ├─ AI Pipeline 안전 종료
+   │  ├─ STT 중지
+   │  ├─ TTS 중지
+   │  └─ LLM 처리 취소
+   │
+   ├─ RTP Relay 모드 전환
+   │  └─ AI Mode → Bypass Mode
+   │
+   └─ 발신자에게 re-INVITE
+      └─ SDP: 상담원 RTP 주소
+
+5. 통화 전환 완료:
+   발신자 ◄──RTP──► 상담원
+   (끊김 없음, <500ms)
+```
+
+**특징**:
+- 실시간 모니터링으로 상황 파악
+- 원클릭 개입 (<2초)
+- AI → 상담원 매끄러운 전환
+- 에러 처리 (Busy/No Answer → AI 복원)
+
 ---
 
 ## 🔄 데이터 플로우
@@ -1073,6 +1261,8 @@ Frontend Call History Page
 | **[design/TTS_RTP_AND_STT_QUEUE_DESIGN.md](design/TTS_RTP_AND_STT_QUEUE_DESIGN.md)** | TTS→RTP 파이프라인, PCM 큐 설계 |
 | **[design/TTS_RTP_STRUCTURE_REVIEW.md](design/TTS_RTP_STRUCTURE_REVIEW.md)** | TTS→큐→RTP 구조 검토 및 이슈 분석 |
 | **[design/OPERATOR-AWAY-MODE-DESIGN.md](design/OPERATOR-AWAY-MODE-DESIGN.md)** | 운영자 부재중 모드 상세 설계 |
+| **[design/OPERATOR_TAKEOVER_DESIGN.md](design/OPERATOR_TAKEOVER_DESIGN.md)** | 상담원 실시간 개입 (Takeover) 설계 (NEW) |
+| **[design/TEMPORAL_EXPRESSION_DESIGN.md](design/TEMPORAL_EXPRESSION_DESIGN.md)** | 한글 시제 표현 정규화 설계 (NEW) |
 
 ### 가이드
 
@@ -1130,6 +1320,8 @@ Frontend Call History Page
 - 지식 베이스 관리
 - Human-in-the-Loop
 - 통화 이력 관리 (발신/종료/녹음)
+- 상담원 실시간 개입 (Operator Takeover)
+- 시제 표현 정규화
 
 ### 🚧 Phase 3: 고급 기능 (진행중)
 - [ ] 멀티 언어 지원
