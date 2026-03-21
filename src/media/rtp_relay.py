@@ -4,15 +4,16 @@ RTP/RTCP 패킷 relay (Bypass Mode)
 """
 
 import asyncio
+import time
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
 from src.media.rtp_packet import RTPParser, RTCPPacket
 from src.media.media_session import MediaSession
 from src.common.logger import get_async_logger
+from src.media.aec_processor import AEC_FRAME_BYTES  # 10ms @ 16kHz = 320 bytes
 
 logger = get_async_logger(__name__)
-
 
 @dataclass
 class RTPEndpoint:
@@ -63,6 +64,9 @@ class RTPRelayWorker:
         self.callee_endpoint = callee_endpoint
         self.bind_ip = bind_ip  # Bind IP 저장
         
+        # ✅ Windows Proactor sendto 동시성 보호 (AssertionError 방지)
+        self._sendto_lock = asyncio.Lock()
+        
         # RTCP 엔드포인트 (MediaSession에서 RTCP 포트 가져오기)
         self.caller_rtcp_endpoint = RTPEndpoint(
             ip=caller_endpoint.ip,
@@ -81,10 +85,13 @@ class RTPRelayWorker:
         self._pipecat_audio_queue: Optional[asyncio.Queue] = None
         self._pipecat_mode = False  # True이면 Pipecat 파이프라인으로 오디오 전달
         self._rtp_packet_builder = None  # TTS -> RTP 변환용
-        # TTS→RTP 실시간 패이싱: 한꺼번에 보내면 전화기 지터 버퍼가 중간 패킷을 버려 앞뒤만 들림
-        self._pipecat_outgoing_queue: Optional[asyncio.Queue] = None
+        # TTS→RTP: PCM 큐 + 단일 발송 루프(20ms 패이싱)
+        self._pipecat_pcm_queue: Optional[asyncio.Queue] = None
         self._pipecat_outgoing_task: Optional[asyncio.Task] = None
         self._RTP_PACKET_MS = 20  # 20ms per RTP packet (G.711 표준)
+        # AEC (선택): far-end 참조 + near-end 에코 제거
+        self._aec_processor = None
+        self._aec_near_buffer = b""
         
         # ★ Bridge 모드 지원 (Transfer)
         self.relay_mode: str = RelayMode.BYPASS  # 현재 릴레이 모드
@@ -117,7 +124,14 @@ class RTPRelayWorker:
             "total_bytes_relayed": 0,
             "ai_packets": 0,  # AI로 전달된 패킷 수
             "recording_packets": 0,  # 녹음으로 전달된 패킷 수
+            # RTP TTS 전송 품질 모니터링
+            "rtp_tts_packets_sent": 0,  # 실제 전송 성공한 RTP 패킷 수
+            "rtp_tts_packets_dropped": 0,  # 큐 오버플로우로 드롭된 패킷 수
+            "rtp_tts_send_errors": 0,  # sendto() 예외 발생 횟수
         }
+        # 지연 분석용: 구간별 첫 로그 한 번만 (RTP→STT→TTS→RTP)
+        self._timing_first_caller_rtp_logged = False
+        self._timing_first_tts_rtp_sent_logged = False
         
         logger.info("rtp_relay_worker_created",
                    call_id=media_session.call_id,
@@ -267,6 +281,12 @@ class RTPRelayWorker:
             return
         
         self.running = False
+        # 일반 통화 실시간 STT 세션 정리 (해당 call_id 스트림 종료)
+        try:
+            from src.media.bypass_realtime_stt import get_bypass_realtime_stt
+            get_bypass_realtime_stt().end_call(self.media_session.call_id)
+        except Exception:
+            pass
         
         # 모든 transport 닫기
         if self.caller_audio_transport:
@@ -338,7 +358,7 @@ class RTPRelayWorker:
             # 정상 통화에서는 여러 STUN 패킷이 교환되므로 이를 모방
             stun_request = caller_protocol._create_stun_binding_request()
             
-            # 1차 전송 (즉시)
+            # 1차 전송 (즉시) - 동기 함수이므로 직접 전송
             caller_protocol.transport.sendto(stun_request, caller_rtp_addr)
             logger.info("stun_binding_request_sent_to_caller",
                        call_id=self.media_session.call_id,
@@ -353,7 +373,8 @@ class RTPRelayWorker:
                     # 20ms 대기 후 2차 전송
                     await asyncio.sleep(0.02)
                     stun_request2 = caller_protocol._create_stun_binding_request()
-                    caller_protocol.transport.sendto(stun_request2, caller_rtp_addr)
+                    async with self._sendto_lock:
+                        caller_protocol.transport.sendto(stun_request2, caller_rtp_addr)
                     logger.info("stun_binding_request_sent_to_caller",
                                call_id=self.media_session.call_id,
                                caller_rtp_addr=f"{caller_rtp_addr[0]}:{caller_rtp_addr[1]}",
@@ -363,7 +384,8 @@ class RTPRelayWorker:
                     # 40ms 대기 후 3차 전송
                     await asyncio.sleep(0.02)
                     stun_request3 = caller_protocol._create_stun_binding_request()
-                    caller_protocol.transport.sendto(stun_request3, caller_rtp_addr)
+                    async with self._sendto_lock:
+                        caller_protocol.transport.sendto(stun_request3, caller_rtp_addr)
                     logger.info("stun_binding_request_sent_to_caller",
                                call_id=self.media_session.call_id,
                                caller_rtp_addr=f"{caller_rtp_addr[0]}:{caller_rtp_addr[1]}",
@@ -382,6 +404,53 @@ class RTPRelayWorker:
                        call_id=self.media_session.call_id,
                        error=str(e),
                        exc_info=True)
+    
+    def feed_bypass_realtime_stt(self, socket_type: str, data: bytes) -> None:
+        """유저 간 통화용 Google 스트리밍 STT 입력. AI 모드에서는 호출하지 않음."""
+        if self.ai_mode:
+            return
+        if "audio" not in socket_type or "rtp" not in socket_type or "rtcp" in socket_type:
+            return
+        if socket_type == "caller_audio_rtp":
+            channel = "caller"
+        elif socket_type == "callee_audio_rtp":
+            channel = "callee"
+        elif socket_type == "bridge_callee_rtp":
+            channel = "callee"
+        else:
+            return
+        try:
+            try:
+                rtp_packet = RTPParser.parse(data)
+                audio_payload = rtp_packet.payload
+            except Exception:
+                audio_payload = data[12:] if len(data) > 12 else b""
+            if not audio_payload:
+                return
+            codec = getattr(self.media_session, "codec", "PCMU") or "PCMU"
+            from src.media.bypass_realtime_stt import get_bypass_realtime_stt
+
+            get_bypass_realtime_stt().feed_audio(
+                self.media_session.call_id, channel, audio_payload, codec
+            )
+            if not getattr(self, "_bypass_stt_feed_logged", False):
+                self._bypass_stt_feed_logged = True
+                logger.info(
+                    "bypass_realtime_stt_feed_started",
+                    call_id=self.media_session.call_id,
+                    socket_type=socket_type,
+                    channel=channel,
+                    note="유저 간 통화 RTP → 실시간 STT (대시보드 stt_transcript)",
+                )
+        except Exception as e:
+            if not getattr(self, "_bypass_stt_feed_error_logged", False):
+                self._bypass_stt_feed_error_logged = True
+                logger.warning(
+                    "bypass_realtime_stt_feed_error",
+                    call_id=self.media_session.call_id,
+                    socket_type=socket_type,
+                    error=str(e),
+                )
     
     def on_packet_received(
         self,
@@ -418,11 +487,98 @@ class RTPRelayWorker:
                     from src.ai_voicebot.pipecat.audio_utils import rtp_to_pcm16k
                     codec = getattr(self.media_session, 'codec', 'PCMU')
                     pcm_data = rtp_to_pcm16k(data, codec)
+                    
+                    # 디버깅: RTP→STT 입력 모니터링 (첫 50개 + 100개마다)
+                    if not hasattr(self, "_caller_rtp_received_count"):
+                        self._caller_rtp_received_count = 0
+                    self._caller_rtp_received_count += 1
+                    
+                    if self._caller_rtp_received_count <= 50 or self._caller_rtp_received_count % 100 == 0:
+                        is_tts_active = bool(getattr(self, "_pipecat_outgoing_task", None) and 
+                                           not self._pipecat_outgoing_task.done() and
+                                           getattr(self, "_pipecat_pcm_queue", None) and 
+                                           self._pipecat_pcm_queue.qsize() > 0)
+                        logger.info("caller_rtp_to_stt_input",
+                                   call_id=self.media_session.call_id,
+                                   progress="stt_rtp",
+                                   packet_count=self._caller_rtp_received_count,
+                                   rtp_bytes=len(data),
+                                   pcm_bytes=len(pcm_data) if pcm_data else 0,
+                                   stt_queue_size=self._pipecat_audio_queue.qsize(),
+                                   tts_sending_active=is_tts_active,
+                                   tts_queue_size=self._pipecat_pcm_queue.qsize() if hasattr(self, "_pipecat_pcm_queue") and self._pipecat_pcm_queue else 0,
+                                   note="Caller RTP → STT 입력 (TTS 동시 송출 여부 확인)")
+                    # STT 경로 점검: 첫 패킷 시 한 번, 이후 200마다 (테스트 후 동작 여부 점검용)
+                    if self._caller_rtp_received_count == 1:
+                        logger.info("stt_path_rtp_first",
+                                   call_id=self.media_session.call_id,
+                                   note="[STT 경로] RTP → 큐 첫 투입 (이 로그가 있어야 경로 시작)")
+                    if self._caller_rtp_received_count > 0 and self._caller_rtp_received_count % 200 == 0:
+                        logger.info("stt_path_rtp_to_queue",
+                                   call_id=self.media_session.call_id,
+                                   packet_count=self._caller_rtp_received_count,
+                                   queue_size=self._pipecat_audio_queue.qsize(),
+                                   queue_max=self._pipecat_audio_queue.maxsize,
+                                   note="[STT 경로] RTP → STT 입력 큐 투입 누적")
+                    
                     if pcm_data:
-                        try:
-                            self._pipecat_audio_queue.put_nowait(pcm_data)
-                        except asyncio.QueueFull:
-                            pass  # 큐 가득 차면 드롭
+                        if getattr(self, "_aec_processor", None):
+                            self._aec_near_buffer = getattr(self, "_aec_near_buffer", b"") + pcm_data
+                            while len(self._aec_near_buffer) >= AEC_FRAME_BYTES:
+                                chunk = self._aec_near_buffer[:AEC_FRAME_BYTES]
+                                self._aec_near_buffer = self._aec_near_buffer[AEC_FRAME_BYTES:]
+                                out = self._aec_processor.process_stream(chunk)
+                                try:
+                                    self._pipecat_audio_queue.put_nowait(out)
+                                except asyncio.QueueFull:
+                                    if not getattr(self, "_stt_queue_full_logged", False):
+                                        self._stt_queue_full_logged = True
+                                        logger.warning("stt_input_queue_full_dropping",
+                                                     call_id=self.media_session.call_id,
+                                                     queue_size=self._pipecat_audio_queue.maxsize,
+                                                     note="STT 입력 큐 가득 - caller PCM 드롭 (소비 지연 시 발생)")
+                                    break
+                                if not self._timing_first_caller_rtp_logged:
+                                    self._timing_first_caller_rtp_logged = True
+                                    from datetime import datetime
+                                    logger.info("timing_caller_rtp_first_to_pipeline",
+                                               call_id=self.media_session.call_id,
+                                               progress="timing",
+                                               ts_iso=datetime.now().isoformat(timespec="milliseconds"),
+                                               note="RTP→STT 구간 시작: caller 음성 첫 패킷이 파이프라인에 투입된 시점")
+                        else:
+                            try:
+                                self._pipecat_audio_queue.put_nowait(pcm_data)
+                                qsize = self._pipecat_audio_queue.qsize()
+                                if qsize >= 800:
+                                    if not getattr(self, "_stt_path_queue_high_logged", False):
+                                        self._stt_path_queue_high_logged = True
+                                        logger.warning("stt_path_queue_high",
+                                                      call_id=self.media_session.call_id,
+                                                      queue_size=qsize,
+                                                      queue_max=self._pipecat_audio_queue.maxsize,
+                                                      note="[STT 경로] 큐 백로그 큼 — Input 소비 지연, 파이프라인 블로킹 가능성")
+                                elif qsize < 400:
+                                    self._stt_path_queue_high_logged = False  # 다음 백로그 시 다시 로그
+                                if not self._timing_first_caller_rtp_logged:
+                                    self._timing_first_caller_rtp_logged = True
+                                    from datetime import datetime
+                                    logger.info("timing_caller_rtp_first_to_pipeline",
+                                               call_id=self.media_session.call_id,
+                                               progress="timing",
+                                               ts_iso=datetime.now().isoformat(timespec="milliseconds"),
+                                               note="RTP→STT 구간 시작: caller 음성 첫 패킷이 파이프라인에 투입된 시점")
+                            except asyncio.QueueFull:
+                                if not getattr(self, "_stt_queue_full_logged", False):
+                                    self._stt_queue_full_logged = True
+                                    logger.warning("stt_input_queue_full_dropping",
+                                                 call_id=self.media_session.call_id,
+                                                 queue_size=self._pipecat_audio_queue.maxsize,
+                                                 note="STT 입력 큐 가득 - caller PCM 드롭 (소비 지연 시 발생)")
+                                logger.warning("stt_path_queue_full_drop",
+                                             call_id=self.media_session.call_id,
+                                             packet_count=getattr(self, "_caller_rtp_received_count", 0),
+                                             note="[STT 경로] 큐 풀 → caller PCM 드롭")
                     self.stats["ai_packets"] += 1
                 except Exception as e:
                     logger.error("pipecat_packet_forward_error",
@@ -496,6 +652,9 @@ class RTPRelayWorker:
                                    call_id=self.media_session.call_id,
                                    error=str(e))
         
+        # 일반 통화(bypass) 실시간 STT (relay 성공 경로)
+        self.feed_bypass_realtime_stt(socket_type, data)
+        
         # 미디어 세션 RTP 수신 기록
         from_caller = "caller" in socket_type
         self.media_session.update_rtp_received(from_caller)
@@ -514,8 +673,11 @@ class RTPRelayWorker:
     
     def enable_ai_mode(self, ai_orchestrator):
         """
-        AI 모드 활성화 및 AI Orchestrator 설정
-        
+        AI 모드 활성화 및 AI Orchestrator 설정 (Legacy 경로).
+
+        pipeline_engine="legacy" 일 때만 사용. 현재 기본은 Pipecat이므로
+        대부분의 통화에서는 enable_pipecat_mode() 가 호출됩니다.
+
         Args:
             ai_orchestrator: AI Orchestrator 인스턴스
         """
@@ -540,58 +702,333 @@ class RTPRelayWorker:
                          call_id=self.media_session.call_id)
             return
         
+        # callee_audio_transport가 닫힌 경우 caller_audio_transport 로 폴백 (Windows ICMP 에러 대응)
+        transport = self.callee_audio_transport or self.caller_audio_transport
+        if not transport:
+            logger.error("send_ai_audio_no_transport",
+                        call_id=self.media_session.call_id,
+                        message="both callee/caller_audio_transport are None, TTS RTP cannot be sent to caller")
+            return
+        
         # RTP 패킷 빌더가 없으면 생성 (lazy init)
         if not self._rtp_packet_builder:
             from src.ai_voicebot.pipecat.audio_utils import RTPPacketBuilder
             codec = getattr(self.media_session, 'codec', 'PCMU')
             self._rtp_packet_builder = RTPPacketBuilder(codec=codec)
         
-        # Callee Audio RTP transport를 통해 Caller에게 전송
-        if self.callee_audio_transport:
-            try:
-                # ✅ Caller의 실제 RTP 수신 포트 (SDP에서 가져온 포트)
-                caller_ip = str(self.caller_endpoint.ip)
-                caller_port = int(self.caller_endpoint.port)
-                
-                # PCM(16kHz) → G.711 → RTP 패킷들로 변환
-                rtp_packets = self._rtp_packet_builder.build_packets(audio_data, sample_rate=16000)
-                
-                for packet in rtp_packets:
-                    try:
-                        self.callee_audio_transport.sendto(
-                            packet, (caller_ip, caller_port)
-                        )
-                    except Exception as e:
-                        logger.error("ai_audio_send_error",
-                                   call_id=self.media_session.call_id,
-                                   error=str(e))
-                        break
-            except Exception as e:
-                logger.error("ai_audio_send_error",
-                           call_id=self.media_session.call_id,
-                           error=str(e))
+        try:
+            # ✅ Caller의 실제 RTP 수신 포트 (SDP에서 가져온 포트)
+            caller_ip = str(self.caller_endpoint.ip)
+            caller_port = int(self.caller_endpoint.port)
+            
+            # PCM(16kHz) → G.711 → RTP 패킷들로 변환
+            rtp_packets = self._rtp_packet_builder.build_packets(audio_data, sample_rate=16000)
+            
+            for packet in rtp_packets:
+                try:
+                    # 동기 메서드이므로 직접 전송 (레거시 메서드, Pipecat 모드에서는 미사용)
+                    transport.sendto(
+                        packet, (caller_ip, caller_port)
+                    )
+                    self.stats["callee_audio_packets"] += 1
+                except Exception as e:
+                    logger.error("ai_audio_send_error",
+                               call_id=self.media_session.call_id,
+                               error=str(e))
+                    break
+        except Exception as e:
+            logger.error("ai_audio_send_error",
+                       call_id=self.media_session.call_id,
+                       error=str(e))
     
     # =========================================================================
     # Pipecat Pipeline 지원 메서드 (Phase 1)
     # =========================================================================
     
-    async def _pipecat_outgoing_sender_loop(self):
+    async def _pipecat_tts_sender_loop(self):
         """
-        RTP 패킷을 20ms 간격으로 전송 (실시간 패이싱).
-        한꺼번에 보내면 전화기 지터 버퍼가 중간 패킷을 버려 '앞뒤만 들림' 현상 발생.
+        TTS PCM 큐에서 청크를 꺼내 RTP로 변환 후 20ms 간격으로 전송.
+        - 근본 해결: RTP 패킷 큐 대신 PCM 큐 사용 → 버스트 제거, 전송률 일정.
+        - 한 청크씩 변환·전송하므로 지터 최소화.
         """
-        interval_sec = self._RTP_PACKET_MS / 1000.0
-        while self._pipecat_mode and self._pipecat_outgoing_queue is not None:
+        import time
+        interval_sec = self._RTP_PACKET_MS / 1000.0  # 0.020초
+        packets_sent = 0
+        bytes_sent_cumulative = 0  # Phase1 등 RTP 전송량 검증용 (3초 ≈ 96000 바이트)
+        interval_violations = 0
+        INTERVAL_TOLERANCE_MS = 5
+        empty_timeout_count = 0  # 큐 비어서 1초 대기한 횟수 (언더런 지표)
+        last_was_empty_timeout = False
+        _logged_3s = False  # 3초 상당 전송 시 1회 로그
+
+        while self._pipecat_mode and self._pipecat_pcm_queue is not None:
             try:
-                packet = await asyncio.wait_for(
-                    self._pipecat_outgoing_queue.get(), timeout=0.1
+                # 디버깅: 큐 대기 시작 시간 기록
+                queue_wait_start = time.perf_counter()
+                
+                # 1.0s는 TTS 청크 간 정상 갭에서도 empty_timeout 로그가 자주 남음 → 소폭 완화
+                pcm_data = await asyncio.wait_for(
+                    self._pipecat_pcm_queue.get(), timeout=1.25
                 )
-                if packet is None:  # Sentinel
+                
+                # ✅ RTP base_time 초기화: 첫 PCM 데이터를 가져온 직후 설정 (대기 시간 제외)
+                if not hasattr(self, '_rtp_base_time') or self._rtp_base_time is None:
+                    self._rtp_base_time = time.perf_counter()
+                    self._rtp_packets_sent_total = 0
+                    self._rtp_last_send_time = self._rtp_base_time
+                    queue_wait_ms = (self._rtp_base_time - queue_wait_start) * 1000
+                    logger.info("rtp_base_time_initialized",
+                               call_id=self.media_session.call_id,
+                               progress="rtp_timing",
+                               pcm_queue_wait_ms=round(queue_wait_ms, 2),
+                               note="첫 PCM 데이터 수신 → RTP 절대 시간 기준점 설정")
+                else:
+                    # 디버깅: 큐에서 데이터 가져오는데 걸린 시간 (첫 50개)
+                    queue_wait_ms = (time.perf_counter() - queue_wait_start) * 1000
+                    if packets_sent < 50 and queue_wait_ms > 1.0:
+                        logger.info("pcm_queue_wait_time",
+                                   call_id=self.media_session.call_id,
+                                   progress="rtp_timing",
+                                   packet_seq=packets_sent,
+                                   wait_ms=round(queue_wait_ms, 2),
+                                   queue_size_before=self._pipecat_pcm_queue.qsize() + 1,
+                                   note="PCM 큐에서 데이터 가져오는데 걸린 시간")
+                
+                if pcm_data is None:  # Sentinel
+                    if packets_sent > 0 or empty_timeout_count > 0:
+                        logger.info("rtp_sender_session_end",
+                                   call_id=self.media_session.call_id,
+                                   packets_sent=packets_sent,
+                                   total_sent=self.stats["rtp_tts_packets_sent"],
+                                   total_dropped=self.stats["rtp_tts_packets_dropped"],
+                                   send_errors=self.stats["rtp_tts_send_errors"],
+                                   interval_violations=interval_violations,
+                                   empty_timeout_count=empty_timeout_count,
+                                   note="TTS 발송 루프 종료 (empty_timeout_count>0이면 해당 구간 끊김 가능)")
                     break
-                if self.callee_audio_transport and self.caller_endpoint:
-                    caller_ip = str(self.caller_endpoint.ip)
-                    caller_port = int(self.caller_endpoint.port)
-                    self.callee_audio_transport.sendto(packet, (caller_ip, caller_port))
+                
+                # Phase2 등 "큐 비었다가 새 청크" 도착 시 이 청크만 새 구간으로 base_time 설정.
+                # last_was_empty_timeout만 쓰면: empty 직후 Phase1 꼬리 청크가 와서 base_time 설정 후
+                # Phase2 첫 청크가 올 때 last_was_empty_timeout=False라 새 구간 미적용 → 1초 리셋 발생.
+                # empty_timeout_count >= 2(2초 이상 비어 있음)이고 이미 패킷을 보낸 적 있으면
+                # 이번 청크도 새 구간으로 간주해 Phase2 첫 청크에서도 항상 base_time 적용.
+                new_segment = last_was_empty_timeout or (
+                    empty_timeout_count >= 2 and packets_sent > 0
+                )
+                if new_segment:
+                    logger.info("rtp_tts_sender_resumed_after_empty",
+                                call_id=self.media_session.call_id,
+                                empty_timeouts=empty_timeout_count,
+                                packets_sent_so_far=packets_sent,
+                                note="PCM 큐 비어 있다가 새 청크 수신 — 새 구간 base_time 설정 (Phase2 등)")
+                    self._rtp_base_time = time.perf_counter()
+                    self._rtp_packets_sent_total = 0
+                    self._rtp_last_send_time = self._rtp_base_time
+                    self._rtp_new_segment_after_empty = True  # 이 청크 첫 패킷까지 1초 리셋 미적용
+                    if empty_timeout_count >= 2 and packets_sent > 0:
+                        empty_timeout_count = 0  # 다중 empty 후 새 구간 적용했으면 소비
+                last_was_empty_timeout = False
+
+                bytes_sent_cumulative += len(pcm_data)
+                if not _logged_3s and bytes_sent_cumulative >= 96000:  # 16kHz*2*3초
+                    _logged_3s = True
+                    logger.info("rtp_sent_3s_equivalent",
+                                call_id=self.media_session.call_id,
+                                progress="rtp_timing",
+                                bytes_sent_cumulative=bytes_sent_cumulative,
+                                chunks_sent=packets_sent,
+                                note="RTP 발송 루프 누적 3초 상당(≈96KB) 전송 — Phase1 검증용")
+
+                if not self._rtp_packet_builder:
+                    continue
+                # AEC far-end 참조: TTS PCM을 10ms 단위로 AEC에 넣음
+                if self._aec_processor:
+                    for i in range(0, len(pcm_data), AEC_FRAME_BYTES):
+                        chunk = pcm_data[i : i + AEC_FRAME_BYTES]
+                        if len(chunk) == AEC_FRAME_BYTES:
+                            self._aec_processor.feed_reverse_stream(chunk)
+                rtp_packets = self._rtp_packet_builder.build_packets(pcm_data, 16000)
+                
+                # ✅ AI 모드: Caller Transport 우선 (Callee Transport는 invalid일 수 있음)
+                # AI Takeover 후 Callee Transport가 connection_lost될 수 있으므로 Caller Transport 사용
+                if self.ai_mode:
+                    _transport = self.caller_audio_transport or self.callee_audio_transport
+                else:
+                    _transport = self.callee_audio_transport or self.caller_audio_transport
+                
+                if not _transport or not self.caller_endpoint:
+                    logger.error("rtp_tts_no_valid_transport",
+                                call_id=self.media_session.call_id,
+                                ai_mode=self.ai_mode,
+                                has_caller_transport=self.caller_audio_transport is not None,
+                                has_callee_transport=self.callee_audio_transport is not None,
+                                note="TTS 전송 불가 - Transport 없음")
+                    continue
+                
+                caller_ip = str(self.caller_endpoint.ip)
+                caller_port = int(self.caller_endpoint.port)
+                
+                # 디버깅: PCM 청크당 생성된 RTP 패킷 수 로그 (첫 10개 + 100개마다)
+                if packets_sent < 10 or packets_sent % 100 == 0:
+                    logger.info("rtp_pcm_chunk_to_packets",
+                               call_id=self.media_session.call_id,
+                               progress="rtp_timing",
+                               pcm_bytes=len(pcm_data),
+                               rtp_packets_count=len(rtp_packets),
+                               packets_sent_so_far=packets_sent,
+                               note="PCM 청크 → RTP 패킷 변환")
+                
+                # ✅ 절대 시간 기반 스케줄링 - 첫 패킷에서 이미 base_time 초기화됨
+                # 여기서는 재초기화하지 않음
+                if not hasattr(self, '_rtp_base_time') or self._rtp_base_time is None:
+                    # 안전장치: 이미 위에서 초기화되어야 하지만, 혹시 모를 경우 대비
+                    self._rtp_base_time = time.perf_counter()
+                    self._rtp_packets_sent_total = 0
+                    self._rtp_last_send_time = self._rtp_base_time
+                    logger.warning("rtp_base_time_late_init",
+                                  call_id=self.media_session.call_id,
+                                  note="RTP base_time이 늦게 초기화됨 (버그 가능성)")
+                
+                # 오차 누적 추적 (디버깅용)
+                accumulated_error_ms = 0.0
+                
+                for idx, packet in enumerate(rtp_packets):
+                    if not self._pipecat_mode:
+                        break
+                    
+                    # 절대 시간 기반: 목표 전송 시간 계산
+                    target_time = self._rtp_base_time + (self._rtp_packets_sent_total * interval_sec)
+                    now_before_sleep = time.perf_counter()
+                    sleep_needed = target_time - now_before_sleep
+                    
+                    # ✅ Hybrid sleep: asyncio.sleep + busy-wait (정밀 타이밍)
+                    # asyncio.sleep은 부정확하므로 목표 시간 1ms 전까지만 sleep
+                    # 나머지는 busy-wait로 정밀 조정
+                    if sleep_needed > 0.001:  # 1ms 이상이면 asyncio.sleep
+                        await asyncio.sleep(sleep_needed - 0.001)
+                    
+                    # Busy-wait: 목표 시간까지 정밀 대기
+                    while time.perf_counter() < target_time:
+                        pass  # Busy-wait (CPU 사용하지만 정밀함)
+                    
+                    # 실제 전송 시간 기록
+                    now_after_sleep = time.perf_counter()
+                    actual_from_base_ms = (now_after_sleep - self._rtp_base_time) * 1000
+                    expected_from_base_ms = self._rtp_packets_sent_total * self._RTP_PACKET_MS
+                    current_error_ms = actual_from_base_ms - expected_from_base_ms
+                    
+                    # 이전 패킷과의 간격 (모니터링용)
+                    if self._rtp_packets_sent_total > 0:
+                        interval_from_prev_ms = (now_after_sleep - self._rtp_last_send_time) * 1000
+                    else:
+                        interval_from_prev_ms = 0.0
+                    
+                    # 디버깅: 첫 30개 패킷의 정확한 타이밍 로그
+                    if packets_sent < 30:
+                        logger.info("rtp_packet_timing_absolute",
+                                   call_id=self.media_session.call_id,
+                                   progress="rtp_timing",
+                                   packet_seq=packets_sent,
+                                   chunk_packet_idx=idx,
+                                   expected_time_from_base_ms=round(expected_from_base_ms, 2),
+                                   actual_time_from_base_ms=round(actual_from_base_ms, 2),
+                                   timing_error_ms=round(current_error_ms, 2),
+                                   interval_from_prev_ms=round(interval_from_prev_ms, 2),
+                                   sleep_requested_ms=round(sleep_needed * 1000, 2) if sleep_needed > 0 else 0,
+                                   note="절대 시간 기반 타이밍 (오차 누적 방지)")
+                    
+                    # 타이밍 위반 추적 (간격 기준)
+                    if self._rtp_packets_sent_total > 0:
+                        if abs(interval_from_prev_ms - self._RTP_PACKET_MS) > INTERVAL_TOLERANCE_MS:
+                            interval_violations += 1
+                            if interval_violations <= 5 or interval_violations % 50 == 0:
+                                logger.warning("rtp_interval_violation",
+                                             call_id=self.media_session.call_id,
+                                             expected_ms=self._RTP_PACKET_MS,
+                                             actual_ms=round(interval_from_prev_ms, 1),
+                                             violation_count=interval_violations,
+                                             packets_sent=packets_sent,
+                                             timing_error_ms=round(current_error_ms, 2),
+                                             note="20ms 간격 이탈 (절대 시간 오차 포함)")
+                    
+                    # 누적 오차가 너무 크면 base_time 리셋 (1초 이상). Phase2 첫 패킷 이전에는 미적용.
+                    if getattr(self, "_rtp_new_segment_after_empty", False):
+                        if self._rtp_packets_sent_total >= 1:
+                            self._rtp_new_segment_after_empty = False
+                    if not getattr(self, "_rtp_new_segment_after_empty", False) and abs(current_error_ms) > 1000.0:
+                        logger.warning("rtp_timing_drift_reset",
+                                     call_id=self.media_session.call_id,
+                                     progress="rtp_timing",
+                                     accumulated_error_ms=round(current_error_ms, 2),
+                                     packets_sent=packets_sent,
+                                     note="누적 오차 1초 이상 → base_time 리셋")
+                        self._rtp_base_time = time.perf_counter()
+                        self._rtp_packets_sent_total = 0
+                    elif abs(current_error_ms) > 100.0 and packets_sent % 50 == 0:
+                        logger.warning("rtp_timing_drift_detected",
+                                     call_id=self.media_session.call_id,
+                                     progress="rtp_timing",
+                                     accumulated_error_ms=round(current_error_ms, 2),
+                                     packets_sent=packets_sent,
+                                     note="누적 타이밍 오차 큼 (100ms 이상)")
+                    
+                    self._rtp_last_send_time = now_after_sleep
+                    self._rtp_packets_sent_total += 1
+                    
+                    if not self._timing_first_tts_rtp_sent_logged:
+                        self._timing_first_tts_rtp_sent_logged = True
+                        from datetime import datetime
+                        logger.info("timing_first_tts_rtp_sent_to_caller",
+                                   call_id=self.media_session.call_id,
+                                   progress="timing",
+                                   ts_iso=datetime.now().isoformat(timespec="milliseconds"),
+                                   note="TTS→RTP 첫 패킷 전송")
+                    try:
+                        # ✅ Transport 유효성 재확인 (connection_lost 후 None일 수 있음)
+                        if not _transport or _transport.is_closing():
+                            logger.error("rtp_transport_invalid_before_send",
+                                        call_id=self.media_session.call_id,
+                                        transport_type=type(_transport).__name__ if _transport else "None",
+                                        is_closing=_transport.is_closing() if _transport else "N/A",
+                                        note="Transport 무효 - TTS 전송 중단")
+                            break
+                        
+                        # ✅ Windows Proactor 동시성 보호
+                        async with self._sendto_lock:
+                            _transport.sendto(packet, (caller_ip, caller_port))
+                        packets_sent += 1
+                        self.stats["rtp_tts_packets_sent"] += 1
+                    except Exception as send_err:
+                        self.stats["rtp_tts_send_errors"] += 1
+                        logger.error("rtp_sendto_failed",
+                                   call_id=self.media_session.call_id,
+                                   dest_addr=f"{caller_ip}:{caller_port}",
+                                   error=str(send_err),
+                                   error_type=type(send_err).__name__)
+                        await asyncio.sleep(interval_sec)
+                        continue
+                    if packets_sent == 1:
+                        logger.info("rtp_first_packet_sent",
+                                   call_id=self.media_session.call_id,
+                                   dest_ip=caller_ip,
+                                   dest_port=caller_port,
+                                   packet_size=len(packet),
+                                   transport_type=type(_transport).__name__,
+                                   note="첫 RTP 패킷 전송 성공")
+                    if packets_sent % 100 == 0:
+                        qsize = self._pipecat_pcm_queue.qsize()
+                        logger.debug("rtp_sender_progress",
+                                    call_id=self.media_session.call_id,
+                                    packets_sent=packets_sent,
+                                    pcm_queue_size=qsize,
+                                    total_sent=self.stats["rtp_tts_packets_sent"],
+                                    interval_violations=interval_violations,
+                                    note="RTP 발송 진행")
+                        if qsize == 0:
+                            logger.info("rtp_tts_queue_depleted",
+                                        call_id=self.media_session.call_id,
+                                        packets_sent=packets_sent,
+                                        note="PCM 큐 소진 — 다음 TTS 청크 지연 시 끊김/깨짐 가능")
                     if self.recording_enabled and self.sip_recorder:
                         try:
                             audio_payload = packet[12:] if len(packet) > 12 else packet
@@ -607,40 +1044,75 @@ class RTPRelayWorker:
                             self.stats["recording_packets"] += 1
                         except Exception:
                             pass
-                await asyncio.sleep(interval_sec)
             except asyncio.TimeoutError:
+                empty_timeout_count += 1
+                last_was_empty_timeout = True
+                _kw = dict(
+                    call_id=self.media_session.call_id,
+                    empty_timeouts=empty_timeout_count,
+                    packets_sent=packets_sent,
+                    note="PCM 큐 대기 타임아웃 — 청크 간 갭이면 정상, 연속 다수면 끊김 가능",
+                )
+                if empty_timeout_count <= 2:
+                    logger.debug("rtp_tts_queue_empty_timeout", **_kw)
+                elif empty_timeout_count <= 5 or empty_timeout_count % 10 == 0:
+                    logger.info("rtp_tts_queue_empty_timeout", **_kw)
                 continue
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("pipecat_outgoing_sender_error",
-                            call_id=self.media_session.call_id, error=str(e))
+                self.stats["rtp_tts_send_errors"] += 1
+                logger.error("pipecat_tts_sender_error",
+                            call_id=self.media_session.call_id,
+                            error=str(e),
+                            error_type=type(e).__name__,
+                            send_errors_total=self.stats["rtp_tts_send_errors"])
 
     def enable_pipecat_mode(self):
         """
-        Pipecat 파이프라인 모드 활성화.
-        기존 ai_orchestrator 대신 Pipecat 파이프라인으로 오디오 라우팅.
-        TTS→RTP 전송은 실시간 패이싱(20ms 간격)으로 전화기 재생이 끊기지 않도록 함.
+        Pipecat 파이프라인 모드 활성화 (현재 기본 AI 응대 경로).
+
+        config.pipeline_engine = "pipecat" (기본값) 일 때 호출됨.
+        TTS→RTP: PCM 큐 + 단일 발송 루프로 안정화 (큐 적체·버스트 제거, 20ms 정확 전송).
         """
         self._pipecat_audio_queue = asyncio.Queue(maxsize=1000)
         self._pipecat_mode = True
         self.ai_mode = True  # AI 모드도 함께 활성화
-        
+
         # RTP 패킷 빌더 생성 (TTS -> RTP 변환용)
         from src.ai_voicebot.pipecat.audio_utils import RTPPacketBuilder
         codec = getattr(self.media_session, 'codec', 'PCMU')
         self._rtp_packet_builder = RTPPacketBuilder(codec=codec)
+
+        # TTS PCM 큐 (안정화): TTS가 PCM 청크만 넣고, 발송 루프에서 20ms 간격으로 변환·전송
+        # maxsize=150 청크 ≈ 5초 분량 — 인사말 등 버스트 시 empty_timeout/끊김 완화 (권장: APP_LOG_AI_CALL_20260310_101436_ANALYSIS.md)
+        self._pipecat_pcm_queue = asyncio.Queue(maxsize=150)
         
-        # 발송 큐 + 실시간 발송 태스크 (한꺼번에 보내면 전화기에서 중간 패킷 유실)
-        self._pipecat_outgoing_queue = asyncio.Queue(maxsize=5000)
+        # ✅ 절대 시간 기반 RTP 타이밍 변수 초기화
+        self._rtp_base_time = None
+        self._rtp_packets_sent_total = 0
+        self._rtp_last_send_time = None
+        self._rtp_new_segment_after_empty = False  # Phase2 등 큐 재개 시 1초 리셋 미적용 플래그
+        
+        # AEC (선택): aec-audio-processing 있으면 활성화
+        from src.media.aec_processor import create_aec_processor
+        self._aec_processor = create_aec_processor(16000, 1, 50)
+        self._aec_near_buffer = b""
+        if self._aec_processor:
+            logger.info("aec_enabled", call_id=self.media_session.call_id, note="WebRTC AEC 활성화")
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = asyncio.get_event_loop()
-        self._pipecat_outgoing_task = loop.create_task(self._pipecat_outgoing_sender_loop())
+        self._pipecat_outgoing_task = loop.create_task(self._pipecat_tts_sender_loop())
         
         logger.info("pipecat_mode_enabled",
-                    call_id=self.media_session.call_id)
+                    call_id=self.media_session.call_id,
+                    codec=codec,
+                    ssrc=self._rtp_packet_builder.ssrc,
+                    caller_endpoint=f"{self.caller_endpoint.ip}:{self.caller_endpoint.port}",
+                    has_transport=self.caller_audio_transport is not None or self.callee_audio_transport is not None,
+                    note="Pipecat 모드: PCM 큐 + 단일 발송 루프 (20ms 패이싱)")
     
     async def get_caller_audio_stream(self):
         """
@@ -655,66 +1127,211 @@ class RTPRelayWorker:
                         call_id=self.media_session.call_id)
             return
         
+        # 디버깅: 스트림 시작 로그
+        logger.info("pipecat_audio_stream_started",
+                   call_id=self.media_session.call_id,
+                   note="Input Transport가 오디오 스트림 읽기 시작")
+        
+        packet_count = 0
         while self._pipecat_mode:
             try:
+                # 타임아웃을 5초로 늘려서 Google STT 스트림 타임아웃 방지
                 pcm_data = await asyncio.wait_for(
-                    self._pipecat_audio_queue.get(), timeout=0.1
+                    self._pipecat_audio_queue.get(), timeout=5.0
                 )
                 if pcm_data is None:  # Sentinel for shutdown
                     break
+                packet_count += 1
+                
+                # 첫 패킷과 100개마다 로그 (테스트 후 STT 경로 점검용)
+                if packet_count == 1:
+                    logger.info("stt_path_queue_first",
+                               call_id=self.media_session.call_id,
+                               pcm_len=len(pcm_data),
+                               note="[STT 경로] 큐 → Input 첫 소비 (파이프라인이 큐를 읽기 시작)")
+                    logger.info("pipecat_audio_stream_first_packet",
+                               call_id=self.media_session.call_id,
+                               pcm_len=len(pcm_data),
+                               note="Input Transport가 첫 오디오 패킷 처리")
+                elif packet_count % 100 == 0:
+                    logger.debug("pipecat_audio_stream_progress",
+                                call_id=self.media_session.call_id,
+                                packets_processed=packet_count,
+                                queue_size=self._pipecat_audio_queue.qsize())
+                if packet_count > 0 and packet_count % 200 == 0:
+                    logger.info("stt_path_queue_to_consumer",
+                               call_id=self.media_session.call_id,
+                               packets_consumed=packet_count,
+                               queue_size=self._pipecat_audio_queue.qsize(),
+                               note="[STT 경로] 큐 → Input Transport 소비 누적")
+                if packet_count > 0 and packet_count % 300 == 0:
+                    logger.info("stt_path_queue_yield_ok",
+                               call_id=self.media_session.call_id,
+                               packets_consumed=packet_count,
+                               queue_size=self._pipecat_audio_queue.qsize(),
+                               note="[STT 경로] 큐에서 꺼내 yield — 소비 정상 시 계속 증가")
                 yield pcm_data
             except asyncio.TimeoutError:
+                # 타임아웃 발생 시 로그 (STT 스트림 keep-alive를 위해 silence 전송 고려)
+                logger.info("stt_path_queue_timeout",
+                           call_id=self.media_session.call_id,
+                           packets_consumed_so_far=packet_count,
+                           queue_size=self._pipecat_audio_queue.qsize(),
+                           note="[STT 경로] 5초간 큐 get 대기 (소비 지연 또는 RTP 없음)")
+                if packet_count == 0:
+                    logger.warning("pipecat_audio_stream_no_data",
+                                  call_id=self.media_session.call_id,
+                                  note="5초 동안 오디오 없음 - STT 타임아웃 위험")
                 continue
             except Exception as e:
                 logger.error("pipecat_audio_stream_error",
                            call_id=self.media_session.call_id,
                            error=str(e))
                 break
+        
+        logger.info("pipecat_audio_stream_stopped",
+                   call_id=self.media_session.call_id,
+                   total_packets=packet_count)
     
     def send_audio_to_caller(self, pcm_data: bytes, sample_rate: int = 16000):
         """
-        Pipecat에서 생성한 오디오(PCM)를 RTP 패킷으로 변환해 발송 큐에 넣음.
-        실제 전송은 _pipecat_outgoing_sender_loop에서 20ms 간격으로 수행(실시간 패이싱).
+        Pipecat TTS 오디오(PCM)를 PCM 큐에 넣음.
+        실제 RTP 변환·전송은 _pipecat_tts_sender_loop에서 20ms 간격으로 수행(안정적 패이싱).
+        큐 가득 시 put_nowait 실패 시 드롭(백프레셔는 발송 루프가 자연스럽게 유지).
         """
         if not self.ai_mode:
+            logger.warning("send_audio_to_caller_not_ai_mode",
+                          call_id=self.media_session.call_id,
+                          note="AI 모드가 아닌데 send_audio_to_caller 호출됨")
             return
-        if not self._pipecat_outgoing_queue:
+        if not getattr(self, '_pipecat_pcm_queue', None):
+            logger.error("send_audio_to_caller_no_queue",
+                        call_id=self.media_session.call_id,
+                        note="PCM 큐 미초기화 - enable_pipecat_mode 필요")
             return
         if not self._rtp_packet_builder:
             from src.ai_voicebot.pipecat.audio_utils import RTPPacketBuilder
             codec = getattr(self.media_session, 'codec', 'PCMU')
             self._rtp_packet_builder = RTPPacketBuilder(codec=codec)
+            logger.info("rtp_packet_builder_created",
+                       call_id=self.media_session.call_id,
+                       codec=codec,
+                       ssrc=self._rtp_packet_builder.ssrc)
+        
         try:
-            rtp_packets = self._rtp_packet_builder.build_packets(pcm_data, sample_rate)
-            for packet in rtp_packets:
-                try:
-                    self._pipecat_outgoing_queue.put_nowait(packet)
-                except asyncio.QueueFull:
-                    logger.warning("pipecat_outgoing_queue_full_dropping",
-                                  call_id=self.media_session.call_id)
-                    break
+            pcm_len = len(pcm_data)
+            self._pipecat_pcm_queue.put_nowait(pcm_data)
+            qsize = self._pipecat_pcm_queue.qsize()
+            if not hasattr(self, '_audio_chunks_logged'):
+                self._audio_chunks_logged = 0
+            if not hasattr(self, '_audio_chunks_total'):
+                self._audio_chunks_total = 0
+                self._audio_bytes_total = 0
+            
+            self._audio_chunks_total += 1
+            self._audio_bytes_total += pcm_len
+            
+            # 디버깅: 첫 10개 + 10개마다 상세 로그
+            if self._audio_chunks_logged < 10 or self._audio_chunks_total % 10 == 0:
+                logger.info("pcm_chunk_queued",
+                           call_id=self.media_session.call_id,
+                           progress="rtp_timing",
+                           chunk_seq=self._audio_chunks_total,
+                           pcm_bytes=pcm_len,
+                           queue_size_after=qsize,
+                           total_bytes_queued=self._audio_bytes_total,
+                           sample_rate=sample_rate,
+                           estimated_duration_ms=round((pcm_len / 2 / sample_rate) * 1000, 1),
+                           note="TTS PCM 청크를 큐에 추가 (발송 루프가 20ms 간격으로 소비)")
+                self._audio_chunks_logged += 1
+            elif pcm_len > 10000:
+                logger.debug("send_audio_to_caller_success",
+                           call_id=self.media_session.call_id,
+                           pcm_len=pcm_len,
+                           sample_rate=sample_rate,
+                           queue_size=qsize,
+                           codec=self._rtp_packet_builder.codec,
+                           note="PCM 큐 투입 (발송 루프에서 20ms 간격 전송)")
+            # 백로그 과다 시 1회 경고 (발송 지연·끊김 가능) — maxsize 150 기준 120에서 경고
+            if qsize >= 120 and not getattr(self, '_pcm_backlog_warned', False):
+                self._pcm_backlog_warned = True
+                logger.warning("rtp_tts_pcm_queue_backlog_high",
+                               call_id=self.media_session.call_id,
+                               queue_size=qsize,
+                               maxsize=self._pipecat_pcm_queue.maxsize,
+                               note="PCM 큐 백로그 큼 — 발송 루프가 TTS 속도를 따라가지 못할 수 있음")
+        except asyncio.QueueFull:
+            self.stats["rtp_tts_packets_dropped"] += 1
+            logger.warning("pipecat_pcm_queue_full_dropping",
+                          call_id=self.media_session.call_id,
+                          pcm_len=pcm_len,
+                          queue_size=self._pipecat_pcm_queue.maxsize,
+                          total_dropped=self.stats["rtp_tts_packets_dropped"],
+                          note="PCM 큐 가득 - 청크 1개 드롭 (발송 지연 완화 후 재시도)")
         except Exception as e:
             logger.error("pipecat_audio_to_caller_error",
-                         call_id=self.media_session.call_id, error=str(e))
-    
+                         call_id=self.media_session.call_id,
+                         pcm_len=len(pcm_data) if pcm_data else 0,
+                         sample_rate=sample_rate,
+                         error=str(e),
+                         error_type=type(e).__name__)
+
+    async def request_tts_flush(self):
+        """
+        (비활성화) 원래는 새 TTS 시작 시 PCM 큐를 비웠음. 현재는 순차 재생을 위해 no-op.
+        나중에 시스템 안정화 후 필요 시 플러시 기능을 다시 넣을 수 있음.
+        """
+        pass
+
     def stop_pipecat_mode(self):
-        """Pipecat 모드 정지 (발송 큐·태스크 포함)"""
+        """Pipecat 모드 정지 (PCM/오디오 큐·발송 태스크·AEC 포함)"""
         self._pipecat_mode = False
+        
+        # ✅ 절대 시간 기반 RTP 타이밍 통계 로그 출력
+        if hasattr(self, '_rtp_packets_sent_total') and self._rtp_packets_sent_total > 0:
+            total_packets = self._rtp_packets_sent_total
+            expected_duration_ms = total_packets * self._RTP_PACKET_MS
+            if hasattr(self, '_rtp_base_time') and hasattr(self, '_rtp_last_send_time'):
+                actual_duration_ms = (self._rtp_last_send_time - self._rtp_base_time) * 1000
+                timing_error_ms = actual_duration_ms - expected_duration_ms
+                timing_error_pct = (timing_error_ms / expected_duration_ms * 100) if expected_duration_ms > 0 else 0
+                
+                logger.info("rtp_absolute_timing_summary",
+                           call_id=self.media_session.call_id,
+                           progress="rtp_timing",
+                           total_packets_sent=total_packets,
+                           expected_duration_ms=round(expected_duration_ms, 2),
+                           actual_duration_ms=round(actual_duration_ms, 2),
+                           timing_error_ms=round(timing_error_ms, 2),
+                           timing_error_pct=round(timing_error_pct, 2),
+                           note="절대 시간 기반 RTP 전송 완료 통계")
+            
+            # 타이밍 상태 리셋
+            self._rtp_base_time = None
+            self._rtp_packets_sent_total = 0
+            self._rtp_last_send_time = None
+            self._rtp_new_segment_after_empty = False
+        
+        self._aec_processor = None
+        self._aec_near_buffer = b""
         if self._pipecat_audio_queue:
             try:
                 self._pipecat_audio_queue.put_nowait(None)
             except asyncio.QueueFull:
                 pass
-        if self._pipecat_outgoing_queue:
+        if getattr(self, '_pipecat_pcm_queue', None):
             try:
-                self._pipecat_outgoing_queue.put_nowait(None)
+                self._pipecat_pcm_queue.put_nowait(None)
             except asyncio.QueueFull:
                 pass
         if self._pipecat_outgoing_task and not self._pipecat_outgoing_task.done():
             self._pipecat_outgoing_task.cancel()
         self._pipecat_outgoing_task = None
-        self._pipecat_outgoing_queue = None
-        logger.info("pipecat_mode_stopped", call_id=self.media_session.call_id)
+        self._pipecat_pcm_queue = None
+        try:
+            logger.info("pipecat_mode_stopped", call_id=self.media_session.call_id)
+        except (ValueError, OSError):
+            pass  # 서버 종료 시 로그 파일이 이미 닫혀 있을 수 있음
     
     # =========================================================================
     # Bridge 모드 지원 (Transfer)
@@ -849,6 +1466,13 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
         """
         self.transport = transport
     
+    def _feed_bypass_stt_before_relay_skip(self, data: bytes) -> None:
+        """remote 무효 등으로 relay·on_packet_received 가 생략될 때도 유저 간 STT에 RTP 전달."""
+        try:
+            self.relay_worker.feed_bypass_realtime_stt(self.socket_type, data)
+        except Exception:
+            pass
+    
     def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
         """데이터그램 수신 (패킷 수신)
         
@@ -887,6 +1511,7 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                 try:
                     stun_response = self._create_stun_binding_response(data, addr)
                     if stun_response and self.transport:
+                        # 동기 콜백이므로 직접 전송 (단발성 STUN 응답)
                         self.transport.sendto(stun_response, addr)
                         logger.debug("stun_binding_response_sent_ai_mode",
                                    call_id=self.relay_worker.media_session.call_id,
@@ -948,6 +1573,7 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                                 str(self.relay_worker.bridge_callee_endpoint.ip),
                                 int(self.relay_worker.bridge_callee_endpoint.port)
                             )
+                            # 동기 콜백이므로 직접 전송 (이벤트 루프가 순차 호출)
                             self.relay_worker.bridge_callee_transport.sendto(data, bridge_addr)
                         self.relay_worker.on_packet_received(self.socket_type, data, addr)
                         return
@@ -958,6 +1584,7 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                                 str(self.relay_worker.caller_endpoint.ip),
                                 int(self.relay_worker.caller_endpoint.port)
                             )
+                            # 동기 콜백이므로 직접 전송 (이벤트 루프가 순차 호출)
                             self.relay_worker.caller_audio_transport.sendto(data, caller_addr)
                         self.relay_worker.on_packet_received(self.socket_type, data, addr)
                         return
@@ -977,11 +1604,36 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                     # RTCP 등 다른 소켓은 AI 모드에서 relay할 대상이 없으므로 스킵
                     return
                 
-                # ✅ 주소 유효성 검사 (Windows 에러 방지)
+                # ✅ AI 모드에서는 relay하지 않으므로 invalid_remote 검사 불필요 (이중 방어)
+                if self.relay_worker.ai_mode:
+                    return
+                
+                # ✅ Caller 측 소켓에서 remote가 무효(early bind / AI 전환 직후): relay 스킵, 경고 없음
+                # caller_audio_rtp/rtcp의 remote는 callee인데, early bind 시 0.0.0.0:0 이므로
+                # relay하면 안 되고, AI 전환 전 패킷도 이 경로로 오면 스킵만 하면 됨
+                if self.socket_type in ("caller_audio_rtp", "caller_audio_rtcp"):
+                    if not self.remote_endpoint or not self.remote_endpoint.ip or str(self.remote_endpoint.ip) == "0.0.0.0":
+                        logger.debug("rtp_relay_skip_caller_invalid_remote",
+                                   call_id=self.relay_worker.media_session.call_id,
+                                   socket_type=self.socket_type,
+                                   note="caller 측 소켓, remote 무효(early bind/AI). relay 스킵.")
+                        self._feed_bypass_stt_before_relay_skip(data)
+                        return
+                    if self.remote_port is None or self.remote_port <= 0:
+                        logger.debug("rtp_relay_skip_caller_invalid_port",
+                                   call_id=self.relay_worker.media_session.call_id,
+                                   socket_type=self.socket_type)
+                        self._feed_bypass_stt_before_relay_skip(data)
+                        return
+                
+                # ✅ 주소 유효성 검사 (Windows 에러 방지) — callee 측 등
                 if not self.remote_endpoint or not self.remote_endpoint.ip or str(self.remote_endpoint.ip) == "0.0.0.0":
                     logger.warning("rtp_relay_skip_invalid_remote",
                                  call_id=self.relay_worker.media_session.call_id,
-                                 socket_type=self.socket_type)
+                                 socket_type=self.socket_type,
+                                 ai_mode=self.relay_worker.ai_mode,
+                                 note="remote_endpoint 무효(0.0.0.0 등). AI 모드에서는 relay 없음.")
+                    self._feed_bypass_stt_before_relay_skip(data)
                     return
                 
                 if self.remote_port is None or self.remote_port <= 0:
@@ -989,11 +1641,13 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                                  call_id=self.relay_worker.media_session.call_id,
                                  socket_type=self.socket_type,
                                  port=self.remote_port)
+                    self._feed_bypass_stt_before_relay_skip(data)
                     return
                 
                 # 주소 튜플 생성 (Windows 호환성)
                 remote_addr = (str(self.remote_endpoint.ip), int(self.remote_port))
                 
+                # 동기 콜백이므로 직접 전송 (이벤트 루프가 순차 호출)
                 self.transport.sendto(data, remote_addr)
                 
                 # 콜백 호출
@@ -1142,4 +1796,18 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                           call_id=self.relay_worker.media_session.call_id,
                           socket_type=self.socket_type,
                           error=str(exc))
+
+        # callee_audio_rtp 소켓이 닫히면 transport 참조 제거
+        # → send_ai_audio가 다음 호출 시 None 체크로 early return 하거나 caller_audio_transport 폴백 사용
+        if self.socket_type == "callee_audio_rtp":
+            # AI 모드에서 Callee Transport가 끊긴 경우 Caller Transport로 폴백
+            if self.relay_worker.ai_mode:
+                logger.info("callee_transport_lost_in_ai_mode_fallback_to_caller",
+                           call_id=self.relay_worker.media_session.call_id,
+                           has_caller_transport=self.relay_worker.caller_audio_transport is not None,
+                           note="AI 모드 - Caller Transport로 폴백 (정상 동작)")
+            self.relay_worker.callee_audio_transport = None
+            logger.info("callee_audio_transport_cleared",
+                       call_id=self.relay_worker.media_session.call_id,
+                       reason="connection_lost")
 

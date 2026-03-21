@@ -1,23 +1,7 @@
-"""
-Knowledge Base Components
+# Knowledge base: ChromaDB client and embedder for API.
+# ContactKnowledgeExtractor / OrganizationInfoManager are used by pipeline
+# and may live in this package or be provided by the caller.
 
-Vector DB, Embedder, Knowledge Extractor, Extraction Pipeline v2
-"""
+from .contact_extractor import ContactKnowledgeExtractor
 
-from .embedder import TextEmbedder
-from .vector_db import VectorDB, Document
-from .chromadb_client import ChromaDBClient, get_chromadb_client, DEFAULT_PERSIST_DIRECTORY
-from .knowledge_extractor import KnowledgeExtractor
-from .extraction_pipeline import ExtractionPipeline
-
-__all__ = [
-    "TextEmbedder",
-    "VectorDB",
-    "Document",
-    "ChromaDBClient",
-    "get_chromadb_client",
-    "DEFAULT_PERSIST_DIRECTORY",
-    "KnowledgeExtractor",
-    "ExtractionPipeline",
-]
-
+__all__ = ["ContactKnowledgeExtractor"]

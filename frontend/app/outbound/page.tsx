@@ -1,246 +1,273 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-interface OutboundEntry {
-  outbound_id: string;
-  call_id: string | null;
-  caller_number: string;
-  callee_number: string;
-  purpose: string;
-  questions: string[];
-  caller_display_name: string;
-  state: string;
-  created_at: string | null;
-  started_at: string | null;
-  answered_at: string | null;
-  completed_at: string | null;
-  attempt_count: number;
-  failure_reason: string | null;
-  result: any | null;
-}
-
-interface OutboundStats {
-  total_calls: number;
-  completed_count: number;
-  task_completed_count: number;
-  success_rate: number;
-  avg_duration_seconds: number;
-  no_answer_count: number;
-  busy_count: number;
-  active_count: number;
-  queue_size: number;
-}
-
-const STATE_LABELS: Record<string, { label: string; color: string; icon: string }> = {
-  queued: { label: '대기', color: 'bg-gray-100 text-gray-800', icon: '⏳' },
-  dialing: { label: '발신중', color: 'bg-blue-100 text-blue-800', icon: '📞' },
-  ringing: { label: '링 중', color: 'bg-yellow-100 text-yellow-800', icon: '🔔' },
-  connected: { label: '통화중', color: 'bg-green-100 text-green-800', icon: '🟢' },
-  completed: { label: '완료', color: 'bg-emerald-100 text-emerald-800', icon: '✅' },
-  no_answer: { label: '미응답', color: 'bg-orange-100 text-orange-800', icon: '🔕' },
-  busy: { label: '통화중', color: 'bg-amber-100 text-amber-800', icon: '📵' },
-  rejected: { label: '거절', color: 'bg-red-100 text-red-800', icon: '🚫' },
-  failed: { label: '실패', color: 'bg-red-100 text-red-800', icon: '🔴' },
-  cancelled: { label: '취소', color: 'bg-gray-100 text-gray-800', icon: '⚪' },
-};
+import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { apiJson } from '@/lib/api';
+import { getTenantOwner } from '@/lib/tenant';
+import type { OutboundCallRecord, OutboundStats } from '@/types/api';
 
 export default function OutboundPage() {
-  const [calls, setCalls] = useState<OutboundEntry[]>([]);
+  const router = useRouter();
+  const [owner, setOwner] = useState('');
   const [stats, setStats] = useState<OutboundStats | null>(null);
-  const [filter, setFilter] = useState<string>('');
+  const [calls, setCalls] = useState<OutboundCallRecord[]>([]);
+  const [stateFilter, setStateFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [callsRes, statsRes] = await Promise.all([
-        axios.get(`${API_BASE}/api/outbound/`, { params: filter ? { state: filter } : {} }),
-        axios.get(`${API_BASE}/api/outbound/stats`),
-      ]);
-      setCalls(callsRes.data.calls || []);
-      setStats(statsRes.data);
-    } catch (err) {
-      console.error('Failed to fetch outbound data:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [filter]);
+  const [callerNumber, setCallerNumber] = useState('');
+  const [calleeNumber, setCalleeNumber] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const [questionsText, setQuestionsText] = useState('안부 확인');
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
-
-  const handleCancel = async (outboundId: string) => {
+    const t = localStorage.getItem('tenant');
+    if (!t) {
+      router.push('/login');
+      return;
+    }
     try {
-      await axios.post(`${API_BASE}/api/outbound/${outboundId}/cancel`);
-      fetchData();
-    } catch (err) {
-      alert('취소에 실패했습니다.');
+      const parsed = JSON.parse(t) as { owner?: string };
+      const o = parsed.owner || '';
+      setOwner(o);
+      setCallerNumber((prev) => (prev ? prev : o));
+    } catch {
+      router.push('/login');
+    }
+  }, [router]);
+
+  const loadStats = useCallback(async () => {
+    const res = await apiJson<OutboundStats>('/api/outbound/stats', { method: 'GET' });
+    if (res.ok) setStats(res.data);
+  }, []);
+
+  const loadCalls = useCallback(async () => {
+    const q = stateFilter ? `?state=${encodeURIComponent(stateFilter)}` : '';
+    const res = await apiJson<{ calls: OutboundCallRecord[] }>(`/api/outbound${q}`, {
+      method: 'GET',
+    });
+    if (res.ok) setCalls(res.data.calls ?? []);
+    else setError(res.message);
+  }, [stateFilter]);
+
+  useEffect(() => {
+    if (!owner) return;
+    setLoading(true);
+    setError(null);
+    Promise.all([loadStats(), loadCalls()]).finally(() => setLoading(false));
+  }, [owner, loadStats, loadCalls]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const lines = questionsText
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!callerNumber.trim() || !calleeNumber.trim() || !purpose.trim() || lines.length === 0) {
+      setError('발신·착신·목적·질문(1줄 이상)을 입력하세요.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    const res = await apiJson<{ outbound_id: string }>('/api/outbound', {
+      method: 'POST',
+      body: JSON.stringify({
+        caller_number: callerNumber.trim(),
+        callee_number: calleeNumber.trim(),
+        purpose: purpose.trim(),
+        questions: lines,
+        max_duration: 180,
+        retry_on_no_answer: true,
+      }),
+    });
+    setSubmitting(false);
+    if (res.ok) {
+      setPurpose('');
+      setQuestionsText('안부 확인');
+      await loadStats();
+      await loadCalls();
+    } else {
+      setError(res.message);
     }
   };
 
-  const handleRetry = async (outboundId: string) => {
-    try {
-      await axios.post(`${API_BASE}/api/outbound/${outboundId}/retry`);
-      fetchData();
-    } catch (err) {
-      alert('재시도에 실패했습니다.');
+  const handleCancel = async (id: string) => {
+    if (!window.confirm('이 발신 요청을 취소할까요?')) return;
+    const res = await apiJson<{ status: string }>(`/api/outbound/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    });
+    if (res.ok) {
+      await loadStats();
+      await loadCalls();
+    } else {
+      alert(res.message);
     }
   };
 
-  const formatTime = (ts: string | null) => {
-    if (!ts) return '-';
-    const d = new Date(ts);
-    return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  };
-
-  const formatDuration = (entry: OutboundEntry) => {
-    if (entry.result?.duration_seconds) return `${entry.result.duration_seconds}초`;
-    if (entry.answered_at && entry.completed_at) {
-      const diff = (new Date(entry.completed_at).getTime() - new Date(entry.answered_at).getTime()) / 1000;
-      return `${Math.round(diff)}초`;
-    }
-    return '-';
-  };
+  const canCancel = (state: string) =>
+    ['queued', 'dialing', 'ringing'].includes(state);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-6">
-              <h1 className="text-2xl font-bold text-gray-900">
-                AI Voicebot Control Center
-              </h1>
-              <nav className="flex gap-4">
-                <a href="/dashboard" className="text-sm font-medium text-gray-600 hover:text-blue-600">대시보드</a>
-                <a href="/capabilities" className="text-sm font-medium text-gray-600 hover:text-blue-600">AI 서비스</a>
-                <a href="/transfers" className="text-sm font-medium text-gray-600 hover:text-blue-600">호 전환</a>
-                <a href="/outbound" className="text-sm font-medium text-blue-600">AI 발신</a>
-                <a href="/call-history" className="text-sm font-medium text-gray-600 hover:text-blue-600">통화 이력</a>
-              </nav>
-            </div>
-            <a
-              href="/outbound/new"
-              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              + 새 발신
-            </a>
-          </div>
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">발신 관리</h1>
+        <Link
+          href="/dashboard"
+          className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
+        >
+          대시보드로
+        </Link>
+      </div>
+
+      {error && (
+        <div className="mb-4 border border-red-200 bg-red-50 text-red-800 text-sm px-4 py-3 rounded-lg">
+          {error}
         </div>
-      </header>
+      )}
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* 통계 카드 */}
-        {stats && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
-            <div className="bg-white rounded-lg shadow p-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">{stats.total_calls}</p>
-              <p className="text-sm text-gray-500">전체</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 text-center">
-              <p className="text-2xl font-bold text-emerald-600">{stats.task_completed_count}</p>
-              <p className="text-sm text-gray-500">태스크 완료</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 text-center">
-              <p className="text-2xl font-bold text-blue-600">{stats.active_count}</p>
-              <p className="text-sm text-gray-500">진행중</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 text-center">
-              <p className="text-2xl font-bold text-orange-600">{stats.no_answer_count}</p>
-              <p className="text-sm text-gray-500">미응답</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">{(stats.success_rate * 100).toFixed(1)}%</p>
-              <p className="text-sm text-gray-500">성공률</p>
-            </div>
+      {/* 통계 카드 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        {[
+          { label: '전체 요청', value: stats?.total_calls ?? '—' },
+          { label: '활성/진행', value: stats?.active_count ?? '—' },
+          { label: '대기 큐', value: stats?.queue_size ?? '—' },
+          { label: '완료', value: stats?.completed_count ?? '—' },
+        ].map((c) => (
+          <div key={c.label} className="bg-white rounded-lg shadow p-4">
+            <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">{c.label}</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{c.value}</p>
           </div>
-        )}
+        ))}
+      </div>
 
-        {/* 필터 */}
-        <div className="flex items-center gap-4 mb-6">
+      {/* 발신 폼 */}
+      <div className="bg-white rounded-lg shadow p-6 mb-8">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">새 발신 요청</h2>
+        <form onSubmit={handleSubmit} className="space-y-4 max-w-xl">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">발신 번호</label>
+            <input
+              type="text"
+              value={callerNumber}
+              onChange={(e) => setCallerNumber(e.target.value)}
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              placeholder={getTenantOwner() || '010-xxxx'}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">착신 번호</label>
+            <input
+              type="text"
+              value={calleeNumber}
+              onChange={(e) => setCalleeNumber(e.target.value)}
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">목적</label>
+            <input
+              type="text"
+              value={purpose}
+              onChange={(e) => setPurpose(e.target.value)}
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              placeholder="예: 고객 안내"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              질문 목록 (줄바꿈으로 구분, 1줄 이상)
+            </label>
+            <textarea
+              value={questionsText}
+              onChange={(e) => setQuestionsText(e.target.value)}
+              rows={4}
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {submitting ? '등록 중…' : '발신 요청 등록'}
+          </button>
+        </form>
+      </div>
+
+      {/* 목록 */}
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-gray-900">요청 목록</h2>
           <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            value={stateFilter}
+            onChange={(e) => setStateFilter(e.target.value)}
+            className="border border-gray-300 rounded-md px-2 py-1 text-sm"
           >
             <option value="">전체 상태</option>
-            <option value="queued">대기</option>
-            <option value="dialing">발신중</option>
-            <option value="ringing">링 중</option>
-            <option value="connected">통화중</option>
-            <option value="completed">완료</option>
-            <option value="no_answer">미응답</option>
-            <option value="failed">실패</option>
+            <option value="queued">queued</option>
+            <option value="dialing">dialing</option>
+            <option value="ringing">ringing</option>
+            <option value="connected">connected</option>
+            <option value="completed">completed</option>
+            <option value="cancelled">cancelled</option>
+            <option value="no_answer">no_answer</option>
           </select>
         </div>
-
-        {/* 목록 테이블 */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">시간</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">착신번호</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">통화 목적</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">상태</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">시도</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">통화시간</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">작업</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {loading ? (
+        {loading ? (
+          <div className="p-8 text-center text-gray-500">로딩 중…</div>
+        ) : calls.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">등록된 발신 요청이 없습니다.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">로딩 중...</td>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">발신</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">착신</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">목적</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">상태</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-24">작업</th>
                 </tr>
-              ) : calls.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">아웃바운드 콜 이력이 없습니다.</td>
-                </tr>
-              ) : calls.map((call) => {
-                const stateInfo = STATE_LABELS[call.state] || { label: call.state, color: 'bg-gray-100 text-gray-800', icon: '?' };
-                return (
-                  <tr key={call.outbound_id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900">{formatTime(call.created_at)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">{call.callee_number}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">{call.purpose}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${stateInfo.color}`}>
-                        {stateInfo.icon} {stateInfo.label}
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {calls.map((row) => (
+                  <tr key={row.outbound_id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-xs font-mono text-gray-700 max-w-[120px] truncate">
+                      {row.outbound_id}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{row.caller_number}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{row.callee_number}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{row.purpose}</td>
+                    <td className="px-4 py-3 text-sm">
+                      <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                        {row.state}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">{call.attempt_count}회</td>
-                    <td className="px-4 py-3 text-sm text-gray-600">{formatDuration(call)}</td>
-                    <td className="px-4 py-3 text-sm">
-                      {call.state === 'completed' && call.result ? (
-                        <a href={`/outbound/${call.outbound_id}`} className="text-blue-600 hover:text-blue-800 font-medium">
-                          결과 보기
-                        </a>
-                      ) : ['no_answer', 'busy', 'failed', 'rejected'].includes(call.state) ? (
-                        <button onClick={() => handleRetry(call.outbound_id)} className="text-orange-600 hover:text-orange-800 font-medium">
-                          재시도
-                        </button>
-                      ) : ['queued', 'dialing', 'ringing', 'connected'].includes(call.state) ? (
-                        <button onClick={() => handleCancel(call.outbound_id)} className="text-red-600 hover:text-red-800 font-medium">
+                    <td className="px-4 py-3">
+                      {canCancel(row.state) ? (
+                        <button
+                          type="button"
+                          onClick={() => handleCancel(row.outbound_id)}
+                          className="text-sm text-red-600 hover:text-red-800 font-medium"
+                        >
                           취소
                         </button>
                       ) : (
-                        <span className="text-gray-400">-</span>
+                        <span className="text-xs text-gray-400">—</span>
                       )}
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </main>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

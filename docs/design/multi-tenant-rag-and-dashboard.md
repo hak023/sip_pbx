@@ -62,6 +62,7 @@ metadata:
   business_hours: "평일 09:00-18:00"
   system_prompt_template: "당신은 {tenant_name}의 친절한 AI 통화 비서입니다..."
   greeting_templates: '["안녕하세요. 기상청 AI 비서입니다...", ...]'  # JSON 문자열
+  closing_templates: '["감사합니다. 필요하시면 다시 연락 주세요.", ...]'  # farewell 시 TTS 마무리 멘트
 ```
 
 #### 2.1.2 기존 doc_type (변경 없음, owner 필수화)
@@ -112,6 +113,7 @@ metadata:
 3. OrganizationInfoManager → VectorDB에서 tenant_config 로드 (owner=1004)
 4. Greeting Phase 1: tenant_config의 greeting_templates에서 랜덤 선택
 5. Greeting Phase 2: capabilities (owner=1004) 조회 → 안내문 생성
+6. Farewell(감사합니다 등): tenant_config의 closing_templates에서 랜덤 선택 → TTS 마무리 멘트 재생
 6. 대화 중 RAG 검색: owner_filter=1004
 7. 지식 추출: 새 지식 저장 시 owner=1004
 ```
@@ -334,6 +336,10 @@ async def seed_initial_data(knowledge_service):
     "이탈리안 비스트로에 전화 주셔서 감사합니다. AI 비서가 안내해 드리겠습니다.",
     "안녕하세요. 이탈리안 비스트로 AI 상담원입니다. 어떤 것이 궁금하신가요?"
   ],
+  "closing_templates": [
+    "감사합니다. 또 방문해 주세요. 좋은 하루 되세요.",
+    "감사합니다. 필요하시면 언제든 연락 주세요."
+  ],
   "system_prompt_template": "당신은 {tenant_name}의 친절한 AI 전화 비서입니다.\n\n## 역할\n- 고객의 메뉴, 예약, 영업시간 등 문의에 친절하게 답변\n- 간결하고 명확하게 1-2문장으로 답변\n- 예약은 날짜, 시간, 인원을 확인\n\n## 제공 가능한 서비스\n{capabilities}\n\n## 제약 사항\n- 레스토랑과 관련 없는 주제는 정중히 거절\n- 실제 결제나 주문 처리는 불가 (안내만 가능)"
 }
 ```
@@ -395,6 +401,10 @@ async def seed_initial_data(knowledge_service):
     "안녕하세요. 기상청 AI 상담원입니다. 어떤 도움이 필요하신가요?",
     "기상청에 전화해 주셔서 감사합니다. AI 비서가 도와드리겠습니다.",
     "안녕하세요. 기상청입니다. 날씨와 관련된 문의를 도와드리겠습니다."
+  ],
+  "closing_templates": [
+    "감사합니다. 기상 정보가 필요하시면 언제든 연락 주세요. 좋은 하루 되세요.",
+    "감사합니다. 필요하시면 다시 전화 주세요."
   ],
   "system_prompt_template": "당신은 {tenant_name}의 친절하고 전문적인 AI 통화 비서입니다.\n\n## 역할과 책임\n- 발신자의 질문에 정확하고 친절하게 답변\n- {tenant_name}의 서비스와 정보를 명확하게 안내\n- 필요시 적절한 부서나 담당자에게 연결 제안\n\n## 제공 가능한 서비스\n{capabilities}\n\n## 대화 원칙\n1. 간결하고 명확하게 답변 (1-2문장)\n2. 전문 용어는 쉽게 풀어서 설명\n3. 모르는 것은 솔직히 인정하고 대안 제시\n\n## 제약 사항\n- {tenant_name}과 관련 없는 주제는 정중히 거절\n- 실시간 날씨 정보는 기상청 웹사이트나 담당자 연결을 안내"
 }

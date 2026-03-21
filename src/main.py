@@ -47,6 +47,11 @@ if sys.platform == "win32":
         kernel32.SetConsoleMode(stdout_handle, mode.value | 0x0004)
         kernel32.GetConsoleMode(stderr_handle, ctypes.byref(mode))
         kernel32.SetConsoleMode(stderr_handle, mode.value | 0x0004)
+        
+        # ✅ SelectorEventLoop 설정 (UDP Datagram Transport 안정화)
+        # ProactorEventLoop는 UDP에서 'Fatal write error on datagram transport' 발생
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        print("[32mINFO[0m: Windows SelectorEventLoop 설정 완료 (UDP 안정화)")
     except Exception:
         pass  # 실패해도 계속 진행
 
@@ -233,16 +238,19 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
 
 
 def initialize_logging(config: Config) -> None:
-    """로깅 초기화"""
+    """로깅 초기화 (동기 컨텍스트에서 호출).
+
+    structlog를 app.log(또는 stdout)로 설정합니다.
+    비동기 로그 워커(start_async_logging)는 이벤트 루프가 시작된 후
+    run_server() 내에서 별도로 시작합니다.
+    """
     setup_logging(
         level=config.logging.level,
         format_type=config.logging.format,
-        output=config.logging.output
+        output=config.logging.output,
+        file_path=getattr(config.logging, "file_path", None),
     )
-    
-    # 비동기 로깅 시작 (비동기 로그 워커만 초기화, main.py는 동기 로거 사용)
-    start_async_logging(queue_size=1000)
-    
+
     global logger
     # ✅ 동기 로거 사용 (get_async_logger는 이벤트 루프 블로킹 시 로그 누락됨)
     logger = get_logger(__name__)
@@ -283,12 +291,18 @@ async def run_server(config: Config) -> int:
         int: 종료 코드 (0 = 성공, 1 = 실패)
     """
     import time
+
+    # ✅ 비동기 로그 워커 시작 (이벤트 루프 내에서만 create_task 가능)
+    # initialize_logging()은 동기 컨텍스트에서 호출되므로 여기서 시작합니다.
+    start_async_logging(queue_size=1000)
+
     start_time = time.time()
     
     sip_endpoint = None
     ai_orchestrator = None
     pipecat_builder = None  # Pipecat Pipeline Builder (Phase 1)
     ai_ready = False  # AI 준비 상태
+    ai_voicebot_config = getattr(config, 'ai_voicebot', None)  # ⭐ 외부 스코프로 이동
     
     # 백그라운드 AI Voicebot 초기화
     async def initialize_ai_in_background():
@@ -311,7 +325,7 @@ async def run_server(config: Config) -> int:
             from src.ai_voicebot.factory import create_ai_orchestrator
             
             # Pydantic 모델을 dict로 변환
-            ai_voicebot_config = getattr(config, 'ai_voicebot', None)
+            # ai_voicebot_config는 이미 외부 스코프에 정의됨
             if hasattr(ai_voicebot_config, 'model_dump'):
                 ai_config_dict = ai_voicebot_config.model_dump()
             elif hasattr(ai_voicebot_config, 'dict'):
@@ -342,6 +356,26 @@ async def run_server(config: Config) -> int:
                 
                 # ✅ Pipecat Pipeline Builder 초기화 (Phase 1)
                 try:
+                    # 🔥 Google STT/TTS Service 사전 초기화 (통화 시 19초 지연 제거)
+                    from src.ai_voicebot.factory import get_or_create_google_stt_service, get_or_create_google_tts_service
+                    
+                    stt_warmup_start = time.time()
+                    print_immediate("🔥 [AI Background] Google STT/TTS Service 사전 초기화 중... (19초 예상)")
+                    
+                    # STT/TTS를 병렬로 초기화 (설정에서 language_code 등 반영 — 한글 인식 정확도)
+                    stt_cfg = (ai_config_dict or {}).get("google_cloud", {}).get("stt", {}) or {}
+                    if isinstance(stt_cfg, dict) and "language_code" not in stt_cfg:
+                        stt_cfg = {**stt_cfg, "language_code": "ko-KR"}
+                    stt_task = asyncio.create_task(get_or_create_google_stt_service(stt_cfg))
+                    tts_task = asyncio.create_task(get_or_create_google_tts_service())
+                    await asyncio.gather(stt_task, tts_task)
+                    
+                    warmup_elapsed = time.time() - stt_warmup_start
+                    logger.info("google_services_warmup_complete",
+                               elapsed=f"{warmup_elapsed:.2f}s",
+                               note="통화 시 즉시 사용 가능 (지연 없음)")
+                    print_immediate(f"✅ [AI Background] Google STT/TTS Service 준비 완료 ({warmup_elapsed:.1f}s)")
+                    
                     from src.ai_voicebot.factory import create_pipecat_pipeline_builder
                     pipecat_builder = await create_pipecat_pipeline_builder(ai_config_dict)
                     if pipecat_builder and sip_endpoint and sip_endpoint.call_manager:
@@ -360,6 +394,13 @@ async def run_server(config: Config) -> int:
                            ai_ready=True,
                            pipeline_engine="pipecat" if pipecat_builder else "legacy",
                            features=["AI 통화 기능", "VectorDB 지식 베이스", "실시간 STT/TTS"])
+                # 부재중 터크오버 시 ai_orchestrator_not_available 원인 점검용: "AI 준비 완료" 명시 로그
+                if sip_endpoint and sip_endpoint.call_manager:
+                    cm = sip_endpoint.call_manager
+                    logger.info("ai_readiness_after_background_init",
+                               ai_orchestrator_set=cm.ai_orchestrator is not None,
+                               pipecat_builder_set=cm.pipecat_builder is not None,
+                               note="이 로그가 있으면 부재중 시 AI 터크오버 가능. 없으면 초기화 타임아웃/실패.")
                 print_immediate(f"🎉 [AI Background] AI Voicebot 준비 완료! ({ai_elapsed:.1f}s)")
             else:
                 logger.warning("ai_voicebot_init_failed",
@@ -377,47 +418,14 @@ async def run_server(config: Config) -> int:
             print_immediate(f"❌ [AI Background] AI Voicebot 초기화 예외: {type(e).__name__}: {e}")
     
     try:
-        # AI Voicebot 백그라운드 초기화 시작
-        ai_voicebot_config = getattr(config, 'ai_voicebot', None)
-        logger.info("🔍 [DEBUG] ai_voicebot_config check",
-                   has_config=ai_voicebot_config is not None,
-                   config_type=type(ai_voicebot_config).__name__ if ai_voicebot_config else "None",
-                   enabled=getattr(ai_voicebot_config, 'enabled', None) if ai_voicebot_config else None)
-        
-        if ai_voicebot_config:
-            logger.info("🚀 [MAIN] Starting AI Voicebot background initialization...")
-            print_immediate("🚀 [MAIN] AI Voicebot 백그라운드 초기화 태스크 생성...")
-            ai_bg_task = asyncio.create_task(initialize_ai_in_background())
-            
-            # ✅ 태스크 예외 콜백 (조용한 실패 방지)
-            def _on_ai_bg_done(task: asyncio.Task):
-                try:
-                    exc = task.exception()
-                    if exc:
-                        logger.error("ai_background_task_exception",
-                                   error=str(exc),
-                                   error_type=type(exc).__name__,
-                                   exc_info=True)
-                        print_immediate(f"❌ [AI Background Task] 비정상 종료: {type(exc).__name__}: {exc}")
-                except asyncio.CancelledError:
-                    logger.warning("ai_background_task_cancelled")
-                    print_immediate("⚠️  [AI Background Task] 취소됨")
-                except Exception:
-                    pass  # task가 정상 완료된 경우
-            
-            ai_bg_task.add_done_callback(_on_ai_bg_done)
-        else:
-            logger.info("ai_voicebot_disabled", message="AI Voicebot 비활성화됨 (config.ai_voicebot is None)")
-        
         # SIP Endpoint 생성 (AI Orchestrator 전달)
         logger.info("sip_endpoint_creation_starting", message="SIP Endpoint 생성 시작")
         sip_start = time.time()
         
         logger.info("creating_sip_endpoint", message="Creating SIP endpoint")
         
-        # config에 ai_orchestrator 추가
+        # config에 ai_orchestrator 추가 (아직 None일 수 있음)
         if ai_orchestrator:
-            # 임시로 config에 추가 (향후 개선 필요)
             config._ai_orchestrator = ai_orchestrator
         
         sip_endpoint = create_sip_endpoint(config)
@@ -427,7 +435,37 @@ async def run_server(config: Config) -> int:
                    elapsed=f"{sip_elapsed:.3f}s",
                    message="SIP Endpoint 생성 완료")
         
-        # SIP 서버 시작 (UDP 소켓 바인딩)
+        # ⭐ AI Voicebot 백그라운드 초기화 (대기)
+        if ai_voicebot_config:
+            logger.info("🚀 [MAIN] Starting AI Voicebot initialization...")
+            print_immediate("🚀 [MAIN] AI Voicebot 초기화 중... (최대 60초 대기)")
+            ai_bg_task = asyncio.create_task(initialize_ai_in_background())
+            
+            try:
+                # ⭐ AI 준비 대기 (최대 60초)
+                await asyncio.wait_for(ai_bg_task, timeout=60.0)
+                logger.info("✅ [MAIN] AI Voicebot 준비 완료, SIP 서버 시작")
+                print_immediate("✅ [MAIN] AI Voicebot 준비 완료!")
+            except asyncio.TimeoutError:
+                logger.warning("ai_init_timeout_60s",
+                             message="AI Voicebot 초기화 60초 타임아웃, SIP 서버 강제 시작",
+                             note="부재중 터크오버 시 ai_orchestrator_not_available 원인. AI 초기화가 60초 초과 시 발생.")
+                print_immediate("⚠️ [MAIN] AI 초기화 타임아웃, 서버는 AI 없이 시작됩니다")
+            except Exception as e:
+                logger.error("❌ [MAIN] AI Voicebot 초기화 실패", error=str(e), exc_info=True)
+                print_immediate(f"❌ [MAIN] AI 초기화 실패: {e}")
+        else:
+            logger.info("ai_voicebot_disabled", message="AI Voicebot 비활성화됨 (config.ai_voicebot is None)")
+        
+        # ✅ AI 준비 여부 명시 로그 (no_answer 시 ai_orchestrator_not_available 원인 점검용)
+        if sip_endpoint and sip_endpoint.call_manager:
+            cm = sip_endpoint.call_manager
+            logger.info("ai_readiness_at_startup",
+                       ai_orchestrator_set=cm.ai_orchestrator is not None,
+                       pipecat_builder_set=cm.pipecat_builder is not None,
+                       note="둘 다 False면 부재중 타임아웃 시 ai_orchestrator_not_available 발생. docs/reports/AI_ORCHESTRATOR_NONE_ROOT_CAUSE.md 참고.")
+        
+        # SIP 서버 시작 (UDP 소켓 바인딩) - AI 준비 완료 후
         logger.info("sip_server_starting", message="UDP 소켓 바인딩 시작")
         server_start = time.time()
         
@@ -449,18 +487,47 @@ async def run_server(config: Config) -> int:
         except Exception as e:
             logger.warning("call_manager_inject_failed", error=str(e), message="대시보드 활성 통화 목록이 동작하지 않을 수 있음")
 
-        # HITL: timeout 시 통화 종료 콜백 등록 + config 반영 (설계 TTS_RTP_AND_HITL_DESIGN.md)
+        # HITL: timeout 시 AI가 다시 연결받아 안내 메시지 전달 (통화 종료하지 않음)
+        async def handle_hitl_timeout(call_id: str):
+            """HITL 타임아웃 시 AI가 다시 연결받아 안내 메시지 전달"""
+            try:
+                import structlog
+                timeout_logger = structlog.get_logger(__name__)
+                timeout_logger.warning("hitl_timeout_ai_reconnect", call_id=call_id,
+                                      message="운영자 미응답 - AI가 다시 연결받아 안내")
+                
+                # 응답 큐에 timeout 메시지 전달 (RAGProcessor가 소비)
+                from src.services.hitl import get_hitl_service
+                response_queue = get_hitl_service().get_response_queue(call_id)
+                
+                if response_queue:
+                    # LLM에게 상황 설명 요청하여 자연스러운 안내 메시지 생성
+                    timeout_message = {
+                        "type": "hitl_timeout",
+                        "text": "담당자 연결을 시도했으나 현재 확인이 어려운 상황입니다. 확인 후 다시 연락드리도록 하겠습니다.",
+                        "call_id": call_id,
+                        "needs_llm_refinement": True,  # LLM으로 다듬기 필요
+                    }
+                    await response_queue.put(timeout_message)
+                    timeout_logger.info("hitl_timeout_message_queued", call_id=call_id)
+                else:
+                    timeout_logger.warning("hitl_timeout_no_queue", call_id=call_id)
+            except Exception as e:
+                import structlog
+                timeout_logger = structlog.get_logger(__name__)
+                timeout_logger.error("hitl_timeout_handler_failed", call_id=call_id, error=str(e))
+        
         try:
             from src.services.hitl import get_hitl_service
             hitl_svc = get_hitl_service()
-            hitl_svc.register_on_hitl_timeout(sip_endpoint.call_manager.request_hangup)
+            hitl_svc.register_on_hitl_timeout(handle_hitl_timeout)
             ai_cfg = getattr(config, "ai_voicebot", None)
             hitl_cfg = getattr(ai_cfg, "hitl", None) if ai_cfg else None
             if isinstance(hitl_cfg, dict):
                 ts = hitl_cfg.get("timeout_seconds")
                 msg = hitl_cfg.get("timeout_message") or hitl_cfg.get("away_message")
                 hitl_svc.set_config(timeout_seconds=ts, timeout_message=msg)
-            logger.info("hitl_timeout_callback_registered")
+            logger.info("hitl_timeout_callback_registered", behavior="ai_reconnect")
         except Exception as e:
             logger.warning("hitl_timeout_register_failed", error=str(e))
         
@@ -472,11 +539,27 @@ async def run_server(config: Config) -> int:
             await seed_initial_data(_ks)
             logger.info("seed_data_run_from_main")
         except Exception as e:
-            logger.warning("seed_data_from_main_failed", error=str(e))
+            err_msg = str(e)
+            logger.warning("seed_data_from_main_failed", error=err_msg)
+            if "collections.topic" in err_msg:
+                logger.warning(
+                    "chromadb_schema_fix_hint",
+                    hint="pip install 'chromadb>=0.5.0' 또는 data/chroma 폴더 삭제 후 재시작. docs/reports/CHROMA_COLLECTIONS_TOPIC_ERROR.md",
+                )
         
         # 같은 프로세스에서 API 서버 기동 (GET /api/calls/active가 CallManager를 사용하려면 필요)
         _api_port = getattr(config, 'api_port', None) or getattr(getattr(config, 'api', None), 'port', None) or 8000
         try:
+            # 🔥 Knowledge API용 embedder 설정
+            try:
+                from src.api.knowledge_router import set_knowledge_embedder
+                from src.ai_voicebot.knowledge.embedder import get_text_embedder
+                _embedder = get_text_embedder()
+                set_knowledge_embedder(_embedder)
+                logger.info("knowledge_embedder_configured_for_api")
+            except Exception as emb_err:
+                logger.warning("knowledge_embedder_config_failed", error=str(emb_err))
+            
             import threading
             def _run_api_server():
                 import uvicorn

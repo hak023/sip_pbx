@@ -26,6 +26,8 @@ from .entity_extractor import EntityExtractor
 from .hallucination_checker import HallucinationChecker
 from .semantic_deduplicator import SemanticDeduplicator
 from .quality_gate import QualityGate
+from .extraction_category import normalize_extraction_category
+from src.common.sip_owner import normalize_owner_username
 
 logger = structlog.get_logger(__name__)
 
@@ -173,6 +175,16 @@ class ExtractionPipeline:
         result = ExtractionResult(call_id=call_id, success=False)
 
         try:
+            owner_raw = owner_id or ""
+            owner_id = normalize_owner_username(owner_id)
+            if owner_id != owner_raw.strip():
+                logger.info(
+                    "pipeline_owner_normalized",
+                    call_id=call_id,
+                    owner_raw_preview=(owner_raw[:80] if owner_raw else ""),
+                    owner_normalized=owner_id,
+                )
+
             # ── Stage 1: 전처리 ──
             logger.info("📋 [Pipeline v2] Stage 1: 전처리", call_id=call_id)
 
@@ -238,10 +250,11 @@ class ExtractionPipeline:
                         entity_speaker=ent.get("speaker", ""),
                     ))
 
-            # Step 2-4: 지식 정제 — 설계서: 맥락 위해 전체 전사 전달, 저장은 착신자 발화만
+            # Step 2-4: 지식 정제 — 설계서: 맥락 위해 전체 전사 전달, 저장은 착신자 발화만 (extracted_info는 복수 건 지원)
             judgment = await self.llm.judge_usefulness(full_transcript, speaker, call_id=call_id)
+            extracted_list = judgment.get("extracted_info") or []
             if judgment.get("is_useful") and judgment.get("confidence", 0) >= self.min_confidence:
-                for info in judgment.get("extracted_info", []):
+                for info in extracted_list:
                     info_text = info.get("text", "")
                     if info_text and len(info_text) >= 10:
                         items.append(ExtractionItem(
@@ -251,6 +264,11 @@ class ExtractionPipeline:
                             confidence=judgment["confidence"],
                             keywords=info.get("keywords", []),
                         ))
+            if extracted_list:
+                logger.info("judgment_extracted_info_count",
+                            call_id=call_id,
+                            count=len(extracted_list),
+                            note="LLM이 반환한 extracted_info 건수 (복수 건 처리)")
 
             # 요약 결과 수집
             if summary_task:
@@ -318,7 +336,11 @@ class ExtractionPipeline:
                 # 3-3: 중복 검증
                 if self.enable_dedup:
                     embedding = await self.embedder.embed(item.text)
-                    dedup = await self.deduplicator.check(item.text, embedding)
+                    dedup = await self.deduplicator.check(
+                        item.text,
+                        embedding,
+                        owner_filter=owner_id,
+                    )
                     item.dedup_status = dedup.status
                     item.merged_with = dedup.similar_doc_id
                     if dedup.action == "skip":
@@ -356,10 +378,19 @@ class ExtractionPipeline:
                     if item.hallucination_passed:
                         review_status = "approved"
 
+                store_category = normalize_extraction_category(item.category, item.doc_type)
+                if store_category != (item.category or "").strip():
+                    logger.debug(
+                        "pipeline_category_normalized",
+                        call_id=call_id,
+                        doc_type=item.doc_type,
+                        category_raw=item.category,
+                        category_stored=store_category,
+                    )
                 metadata = {
                     # 기본
                     "doc_type": item.doc_type,
-                    "category": item.category,
+                    "category": store_category,
                     "keywords": ",".join(item.keywords) if item.keywords else "",
                     # 추출 출처
                     "extraction_source": "call",

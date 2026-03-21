@@ -38,6 +38,10 @@ class ConversationState(TypedDict, total=False):
     needs_human: bool             # 운영자 개입 필요 여부
     hitl_reason: str              # HITL 사유
 
+    # ── 후처리(확인 필요) ──
+    needs_follow_up: bool         # 모르는 내용 응답 시, 나중에 확인·연락 필요
+    follow_up_user_query: str     # 사용자가 물어본 내용 (확인할 사항)
+
     # ── 내부 참조 (노드 간 공유) ──
     _llm_client: object           # LLM 클라이언트 참조
     _rag_engine: object           # RAG 엔진 참조

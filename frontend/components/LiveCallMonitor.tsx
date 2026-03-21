@@ -18,6 +18,10 @@ export function LiveCallMonitor({ callId }: LiveCallMonitorProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // callId 변경 시 이전 메시지 초기화
+    setMessages([]);
+    setCurrentInterim('');
+    setIsAISpeaking(false);
     setSubscribeError(null);
     setIsSubscribed(false);
 
@@ -32,50 +36,65 @@ export function LiveCallMonitor({ callId }: LiveCallMonitorProps) {
       }
     });
 
+    type STTPayload = { call_id: string; text: string; is_final: boolean; timestamp?: string };
+    type TTSPayload = { call_id: string; text: string; timestamp?: string };
+    type GreetingPayload = { call_id: string; text?: string; timestamp?: string };
+
     // STT 트랜스크립트 이벤트 리스너
-    const handleSTT = (data: any) => {
+    const handleSTT = (data: STTPayload) => {
       if (data.call_id !== callId) return;
 
       if (data.is_final) {
-        // 최종 결과 - 메시지 추가
         const newMessage: ConversationMessage = {
           role: 'user',
           content: data.text,
-          timestamp: new Date(data.timestamp),
-          isFinal: true
+          timestamp: new Date(data.timestamp ?? Date.now()),
+          isFinal: true,
         };
         setMessages(prev => [...prev, newMessage]);
         setCurrentInterim('');
       } else {
-        // 중간 결과 - 미리보기
         setCurrentInterim(data.text);
       }
     };
 
     // TTS 시작 이벤트
-    const handleTTSStart = (data: any) => {
+    const handleTTSStart = (data: TTSPayload) => {
       if (data.call_id !== callId) return;
 
       setIsAISpeaking(true);
       const newMessage: ConversationMessage = {
         role: 'assistant',
         content: data.text,
-        timestamp: new Date(data.timestamp),
-        isFinal: true
+        timestamp: new Date(data.timestamp ?? Date.now()),
+        isFinal: true,
       };
       setMessages(prev => [...prev, newMessage]);
     };
 
     // TTS 완료 이벤트
-    const handleTTSComplete = (data: any) => {
+    const handleTTSComplete = (data: TTSPayload) => {
       if (data.call_id !== callId) return;
       setIsAISpeaking(false);
+    };
+
+    // AI 인사말 Phase1/Phase2 (서버에서 실시간 전송)
+    const handleAIGreeting = (data: GreetingPayload) => {
+      if (data.call_id !== callId || !data.text) return;
+      const newMessage: ConversationMessage = {
+        role: 'assistant',
+        content: data.text,
+        timestamp: new Date(data.timestamp ?? Date.now()),
+        isFinal: true,
+      };
+      setMessages(prev => [...prev, newMessage]);
     };
 
     // 이벤트 등록
     wsClient.on('stt_transcript', handleSTT);
     wsClient.on('tts_started', handleTTSStart);
     wsClient.on('tts_completed', handleTTSComplete);
+    wsClient.on('ai_greeting', handleAIGreeting);
 
     return () => {
       // 정리
@@ -83,6 +102,7 @@ export function LiveCallMonitor({ callId }: LiveCallMonitorProps) {
       wsClient.off('stt_transcript', handleSTT);
       wsClient.off('tts_started', handleTTSStart);
       wsClient.off('tts_completed', handleTTSComplete);
+      wsClient.off('ai_greeting', handleAIGreeting);
     };
   }, [callId]);
 

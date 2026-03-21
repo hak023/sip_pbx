@@ -1,153 +1,121 @@
-"""인증 관련 API
-
-착신번호(extension) 기반 로그인.
-패스워드 없이 착신번호만으로 로그인하여 해당 테넌트의 대시보드에 접근한다.
 """
-from fastapi import APIRouter, HTTPException, Header, Depends
-from datetime import datetime
-from typing import Optional
-import structlog
+Auth API - 인증 및 로그인
 
-from ..models import LoginRequest, LoginResponse, User, TenantInfo
-from ..auth_utils import create_jwt, decode_jwt, JWTExpiredError, JWTInvalidError
-from src.services.seed_data import get_tenant_list, _get_tenant_config
-from src.services.knowledge_service import get_knowledge_service
+Frontend 로그인 처리
+"""
 
-logger = structlog.get_logger(__name__)
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Dict, Any
+import secrets
 
-router = APIRouter()
-
-knowledge_service = get_knowledge_service()
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
-    """착신번호 기반 로그인
+class LoginRequest(BaseModel):
+    """로그인 요청"""
+    extension: str  # 착신번호 (예: "1004")
 
-    패스워드 불필요. 등록된 착신번호(extension)를 선택하면 로그인된다.
 
-    Request: { "extension": "1004" }
-    Response: { "access_token": "...", "user": {...}, "tenant": {...} }
+# 하드코딩된 테넌트 정보 (tenants.py와 동기화)
+TENANTS_DATA = {
+    "1004": {
+        "owner": "1004",
+        "name": "기상청",
+        "name_en": "Korea Meteorological Administration",
+        "type": "government_agency",
+        "description": "날씨 정보 및 기상 예보",
+        "is_active": True,
+    },
+    "1005": {
+        "owner": "1005",
+        "name": "기상청 담당부서",
+        "name_en": "KMA Department",
+        "type": "government_agency",
+        "description": "기상청 전문 상담",
+        "is_active": True,
+    },
+    "1006": {
+        "owner": "1006",
+        "name": "일반 상담원",
+        "name_en": "General Support",
+        "type": "default",
+        "description": "일반 고객 상담",
+        "is_active": True,
+    },
+}
+
+
+@router.post("/login")
+async def login(request: LoginRequest) -> Dict[str, Any]:
+    """
+    로그인
+    
+    Frontend에서 착신번호(extension) 선택 시 호출
+    
+    Args:
+        request: { "extension": "1004" }
+    
+    Returns:
+        {
+            "access_token": "...",
+            "tenant": { ... },
+            "user": { ... }
+        }
     """
     extension = request.extension
-
-    if not extension:
-        raise HTTPException(status_code=400, detail="Extension number is required")
-
-    # VectorDB에서 테넌트 확인
-    tenant_config = await _get_tenant_config(knowledge_service, extension)
-
-    if not tenant_config:
-        # 정적 목록에서 확인 (시드 데이터 투입 전이라도 허용)
-        static_tenants = {t["owner"]: t for t in get_tenant_list()}
-        if extension not in static_tenants:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Extension {extension} is not registered"
-            )
-        tenant_name = static_tenants[extension]["name"]
-        tenant_type = static_tenants[extension]["type"]
-    else:
-        metadata = tenant_config.get("metadata", {})
-        tenant_name = metadata.get("tenant_name", extension)
-        tenant_type = metadata.get("tenant_type", "unknown")
-
-    # JWT 토큰 생성
-    access_token = create_jwt(
-        extension=extension,
-        role="operator",
-        tenant_name=tenant_name,
-        tenant_type=tenant_type
-    )
-
-    user = User(
-        id=extension,
-        email=f"{extension}@voicebot.local",
-        name=f"{tenant_name} 운영자",
-        role="operator",
-        is_active=True,
-        created_at=datetime.now(),
-        last_login=datetime.now(),
-    )
-
-    tenant_info = TenantInfo(
-        owner=extension,
-        name=tenant_name,
-        type=tenant_type,
-    )
-
-    logger.info("tenant_login",
-               extension=extension,
-               tenant_name=tenant_name)
-
-    return LoginResponse(
-        access_token=access_token,
-        user=user,
-        tenant=tenant_info,
-    )
+    
+    # 테넌트 확인
+    if extension not in TENANTS_DATA:
+        raise HTTPException(status_code=404, detail=f"테넌트를 찾을 수 없습니다: {extension}")
+    
+    tenant = TENANTS_DATA[extension]
+    
+    # 테넌트가 비활성화된 경우
+    if not tenant.get("is_active", True):
+        raise HTTPException(status_code=403, detail="비활성화된 테넌트입니다")
+    
+    # 액세스 토큰 생성 (간단한 랜덤 토큰)
+    # TODO: 실제 JWT 토큰 구현 필요
+    access_token = f"tok_{extension}_{secrets.token_urlsafe(32)}"
+    
+    # 사용자 정보 생성
+    user = {
+        "id": extension,
+        "extension": extension,
+        "name": tenant["name"],
+        "role": "operator",  # operator, admin 등
+    }
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "tenant": tenant,
+        "user": user,
+    }
 
 
 @router.post("/logout")
-async def logout():
-    """사용자 로그아웃"""
-    return {"message": "Logged out successfully"}
-
-
-async def get_current_extension(authorization: Optional[str] = Header(None)) -> str:
-    """JWT에서 extension 추출 (Dependency)
-    
-    Args:
-        authorization: "Bearer <JWT>" 형식의 헤더
-        
-    Returns:
-        str: extension
-        
-    Raises:
-        HTTPException: 토큰 없음/만료/무효 시 401
+async def logout() -> Dict[str, str]:
     """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+    로그아웃
     
-    token = authorization.replace("Bearer ", "")
-    
-    try:
-        payload = decode_jwt(token)
-        extension = payload.get("extension") or payload.get("sub")
-        if not extension:
-            raise HTTPException(status_code=401, detail="Invalid token: missing extension")
-        return extension
-    except JWTExpiredError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except JWTInvalidError as e:
-        raise HTTPException(status_code=401, detail=str(e))
-
-
-@router.get("/me", response_model=User)
-async def get_current_user(extension: str = Depends(get_current_extension)):
-    """현재 로그인한 사용자 정보 (JWT 기반)
-    
-    Args:
-        extension: JWT에서 추출한 extension (Depends로 자동 주입)
+    현재는 클라이언트에서 토큰 삭제만 수행
     """
-    # VectorDB에서 테넌트 확인
-    tenant_config = await _get_tenant_config(knowledge_service, extension)
+    return {
+        "message": "Logged out successfully"
+    }
+
+
+@router.get("/me")
+async def get_current_user() -> Dict[str, Any]:
+    """
+    현재 로그인한 사용자 정보 조회
     
-    if not tenant_config:
-        static_tenants = {t["owner"]: t for t in get_tenant_list()}
-        if extension in static_tenants:
-            tenant_name = static_tenants[extension]["name"]
-        else:
-            tenant_name = extension
-    else:
-        metadata = tenant_config.get("metadata", {})
-        tenant_name = metadata.get("tenant_name", extension)
-    
-    return User(
-        id=extension,
-        email=f"{extension}@voicebot.local",
-        name=f"{tenant_name} 운영자",
-        role="operator",
-        is_active=True,
-        created_at=datetime.now(),
-        last_login=datetime.now(),
-    )
+    TODO: JWT 토큰 검증 및 사용자 정보 반환 구현 필요
+    """
+    # TODO: Authorization 헤더에서 토큰 추출 및 검증
+    return {
+        "message": "Not implemented yet",
+        "note": "JWT 인증 구현 필요"
+    }

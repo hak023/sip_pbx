@@ -78,12 +78,58 @@ class LLMClient:
                    model=model_name,
                    temperature=config.get("temperature"))
     
+    async def generate_simple(self, prompt: str, max_tokens: Optional[int] = None, timeout_seconds: float = 10.0) -> str:
+        """
+        간단한 프롬프트로 LLM 응답 생성 (HITL 응답 다듬기 등).
+        
+        Args:
+            prompt: 프롬프트 텍스트
+            max_tokens: 최대 토큰 수 (기본값은 설정값 사용)
+            timeout_seconds: API 타임아웃 (기본 10초)
+            
+        Returns:
+            생성된 텍스트
+        """
+        try:
+            gen_config = self.generation_config
+            if max_tokens:
+                gen_config = genai.types.GenerationConfig(
+                    temperature=self.config.get("temperature", 0.7),
+                    top_p=self.config.get("top_p", 1.0),
+                    top_k=self.config.get("top_k", 1),
+                    max_output_tokens=max_tokens,
+                )
+            
+            # ✅ 타임아웃 추가
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self.model.generate_content,
+                        prompt,
+                        generation_config=gen_config,
+                    ),
+                    timeout=timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                logger.error("llm_generate_simple_timeout",
+                           timeout_seconds=timeout_seconds,
+                           note="간단한 LLM 호출 타임아웃")
+                return ""
+            
+            self.total_requests += 1
+            return response.text.strip() if response and response.text else ""
+            
+        except Exception as e:
+            logger.error("llm_generate_simple_failed", error=str(e))
+            return ""
+    
     async def generate_response(
         self, 
         user_text: str, 
         context_docs: List[str],
         system_prompt: Optional[str] = None,
-        call_id: Optional[str] = None  # DB 로깅용
+        call_id: Optional[str] = None,  # DB 로깅용
+        timeout_seconds: float = 30.0  # ✅ API 타임아웃 설정
     ) -> str:
         """
         사용자 입력에 대한 답변 생성
@@ -93,6 +139,7 @@ class LLMClient:
             context_docs: RAG 검색 결과 (관련 문서)
             system_prompt: 시스템 프롬프트 (선택)
             call_id: 통화 ID (DB 로깅용, 선택)
+            timeout_seconds: Gemini API 타임아웃 (기본 30초)
             
         Returns:
             생성된 답변 텍스트
@@ -108,18 +155,57 @@ class LLMClient:
                 system_prompt
             )
             
-            # Gemini API 호출 (비동기)
+            # ✅ Gemini API 호출 (비동기 + 타임아웃)
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.model.generate_content(
-                    prompt,
-                    generation_config=self.generation_config
+            try:
+                response = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: self.model.generate_content(
+                            prompt,
+                            generation_config=self.generation_config
+                        )
+                    ),
+                    timeout=timeout_seconds
                 )
-            )
+            except asyncio.TimeoutError:
+                logger.error("llm_api_timeout",
+                           call=True,
+                           call_id=call_id or "",
+                           timeout_seconds=timeout_seconds,
+                           note="Gemini API 타임아웃 → Fallback 응답 사용")
+                # Fallback 응답
+                return "죄송합니다. 일시적으로 처리가 지연되고 있습니다. 잠시 후 다시 질문해 주시거나, 담당자 연결이 필요하시면 말씀해 주세요."
             
             # 응답 텍스트 추출
-            answer = response.text.strip()
+            answer = (response.text or "").strip()
+
+            # 종료 사유 로깅 (MAX_TOKENS 시 응답 잘림 원인 파악용)
+            finish_reason = None
+            try:
+                if getattr(response, "candidates", None) and len(response.candidates) > 0:
+                    finish_reason = getattr(response.candidates[0], "finish_reason", None)
+            except Exception:
+                pass
+            if finish_reason is not None:
+                fr_map = {1: "STOP", 2: "MAX_TOKENS", 3: "SAFETY", 4: "RECITATION"}
+                fr_desc = fr_map.get(int(finish_reason), str(finish_reason))
+                # STOP(정상)일 때는 info 로그 생략 — note의 'MAX_TOKENS=잘림'으로 오해 방지
+                if fr_desc != "STOP":
+                    logger.info("llm_generate_response_finish_reason",
+                               call=True,
+                               call_id=call_id or "",
+                               finish_reason=fr_desc,
+                               response_len=len(answer),
+                               max_output_tokens=getattr(self.generation_config, "max_output_tokens", self.config.get("max_output_tokens")),
+                               note="STOP=정상, MAX_TOKENS=해당 시 잘림")
+                if fr_desc == "MAX_TOKENS":
+                    logger.warning("llm_response_truncated_max_tokens",
+                                  call=True,
+                                  call_id=call_id or "",
+                                  response_len=len(answer),
+                                  max_output_tokens=getattr(self.generation_config, "max_output_tokens", self.config.get("max_output_tokens")),
+                                  note="응답이 max_output_tokens에서 잘림. config max_output_tokens 상향 권장(예: 1024).")
             
             # 대화 히스토리 업데이트
             self.conversation_history.append({
@@ -210,6 +296,77 @@ class LLMClient:
         except Exception as e:
             logger.warning("format_for_customer_failed", error=str(e))
             return raw_text
+
+    async def format_hitl_reply_for_customer(
+        self,
+        customer_question: str,
+        operator_reply: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        """
+        HITL 운영자 답변 + 고객 질문 맥락 → 통화용 자연스러운 1~2문장 (TTS).
+        """
+        op = (operator_reply or "").strip()
+        if not op:
+            return operator_reply or ""
+        cq = (customer_question or "").strip()
+        prompt = (
+            "전화 통화 AI 비서입니다. 아래 [담당자 확인 내용]만 사실로 취급하고, "
+            "고객에게 말할 한국어 멘트를 1~2문장으로 작성하세요.\n\n"
+            "금지 표현(쓰지 마세요): "
+            '"확인해드렸습니다", "확인해 드렸습니다", "확인되어 알려드립니다", '
+            '"아까 문의 주신", "말씀하신 내용에 대해"\n'
+            "불필요한 사과·형식적 접두어는 줄이고, 정보를 담담하게 전달하세요.\n\n"
+            f"고객 질문:\n{cq if cq else '(생략)'}\n\n"
+            f"담당자 확인 내용:\n{op}\n\n"
+            "고객 멘트만 출력하세요."
+        )
+        gen_config = genai.types.GenerationConfig(
+            max_output_tokens=512,
+            temperature=0.35,
+        )
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.model.generate_content,
+                    prompt,
+                    generation_config=gen_config,
+                ),
+                timeout=timeout_seconds,
+            )
+            out = (response.text or "").strip() if response else ""
+            if not out:
+                logger.warning(
+                    "format_hitl_reply_empty",
+                    operator_len=len(op),
+                    note="LLM 빈 응답 → 담당자 원문 사용",
+                )
+                return op
+            finish_reason = None
+            try:
+                if getattr(response, "candidates", None) and len(response.candidates) > 0:
+                    finish_reason = getattr(response.candidates[0], "finish_reason", None)
+            except Exception:
+                pass
+            fr_is_max_tokens = False
+            if finish_reason is not None:
+                try:
+                    fr_is_max_tokens = int(finish_reason) == 2
+                except (TypeError, ValueError):
+                    fr_is_max_tokens = str(finish_reason).endswith("MAX_TOKENS")
+            if fr_is_max_tokens:
+                logger.warning(
+                    "format_hitl_reply_truncated_max_tokens",
+                    response_len=len(out),
+                    note="max_output_tokens 상향 검토",
+                )
+            return out
+        except asyncio.TimeoutError:
+            logger.warning("format_hitl_reply_timeout", timeout_seconds=timeout_seconds)
+            return op
+        except Exception as e:
+            logger.warning("format_hitl_reply_failed", error=str(e))
+            return op
 
     def _calculate_confidence(self, answer: str, context_docs: List[str]) -> float:
         """
@@ -356,7 +513,10 @@ AI:"""
         """
         result_text = ""
         json_text = ""
-        judgment_max_tokens = self.config.get("judgment_max_output_tokens") or self.config.get("max_output_tokens") or self.config.get("max_tokens") or 2048
+        # 지식 정제 전용 상한 (일반 max_tokens에 영향받지 않도록 judgment_max_output_tokens만 사용, 기본 4096)
+        judgment_max_tokens = self.config.get("judgment_max_output_tokens")
+        if judgment_max_tokens is None:
+            judgment_max_tokens = 4096
         # 설계서 2.2a: 긴 통화 토큰/길이 처리 — 설정 가능 문자 상한 (기본 6000)
         max_input_chars = self.config.get("judgment_max_input_chars", 6000)
         transcript_for_prompt = transcript[:max_input_chars]
@@ -410,10 +570,10 @@ AI:"""
 - 기타: 위에 해당하지 않으나 재사용 가능한 정보
 
 **필수 지침:**
-- reason은 50자 이내로 작성하세요.
-- extracted_info의 text는 **착신자가 말한 문장만** 넣으세요. 발신자 발화는 포함하지 마세요. 원문에 나온 내용만 사용하고, 임의로 요약하거나 지어내지 마세요. 한 항목은 하나의 재사용 가능한 지식 단위(예: 하나의 질문-답변 쌍, 하나의 약속)로 추출하세요.
+- reason은 **반드시 50자 이내**로 짧게 작성하세요. (토큰 한도 내에서 JSON이 잘리지 않도록)
+- extracted_info는 **최대 5개**만 추출하고, 각 text는 **200자 이내**로 하세요. 착신자가 말한 문장만 넣고, 발신자 발화는 포함하지 마세요. 원문에 나온 내용만 사용하고, 임의로 요약하거나 지어내지 마세요. 한 항목은 하나의 재사용 가능한 지식 단위(예: 하나의 질문-답변 쌍, 하나의 약속)로 추출하세요.
 - 개인을 특정할 수 있는 정보(이름·전화번호·주소 등)가 포함되면 해당 항목에 "contains_pii": true, 없으면 false로 표시하세요.
-- 반드시 유효한 JSON만 출력하세요.
+- 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록(```)이나 설명 문장 없이 **JSON 본문만** 출력하세요.
 
 JSON:"""
 
@@ -428,7 +588,7 @@ JSON:"""
                         speaker=speaker,
                         max_tokens=judgment_max_tokens,
                         prompt_length=len(prompt),
-                        prompt_preview=prompt[:200].replace("\n", " ") + "..." if len(prompt) > 200 else prompt[:200].replace("\n", " "),
+                        prompt_full=prompt,
                         note="지식 정제 요청 (전체 대화 맥락, 저장은 착신자 발화만)")
 
             loop = asyncio.get_event_loop()
@@ -445,26 +605,36 @@ JSON:"""
 
             result_text = (response.text or "").strip()
 
-            # Gemini 종료 사유 로깅 (1=STOP, 2=MAX_TOKENS, 3=SAFETY, 4=RECITATION 등 — 잘림 시 2)
+            # Gemini 종료 사유 및 실제 토큰 사용량 로깅
             finish_reason = None
             finish_reason_desc = None
+            output_token_count = None
+            prompt_token_count = None
             try:
                 if getattr(response, "candidates", None) and len(response.candidates) > 0:
                     finish_reason = getattr(response.candidates[0], "finish_reason", None)
                     if finish_reason is not None:
                         fr_map = {1: "STOP", 2: "MAX_TOKENS", 3: "SAFETY", 4: "RECITATION"}
                         finish_reason_desc = fr_map.get(int(finish_reason), str(finish_reason))
+                if getattr(response, "usage_metadata", None):
+                    um = response.usage_metadata
+                    output_token_count = getattr(um, "candidates_token_count", None) or getattr(um, "output_token_count", None)
+                    prompt_token_count = getattr(um, "prompt_token_count", None)
             except Exception:
                 pass
+            # response_full은 무조건 전체 출력 (잘림 없이). 로그 백엔드가 자르면 response_length로 원본 길이 확인 가능
             logger.info("llm_judgment_response",
                         call=True,
                         call_id=call_id or "",
                         category="llm",
                         progress="extraction",
+                        judgment_max_output_tokens=judgment_max_tokens,
+                        output_token_count=output_token_count,
+                        prompt_token_count=prompt_token_count,
                         response_length=len(result_text),
                         finish_reason=finish_reason_desc or str(finish_reason),
-                        response_full=result_text[:2000] if len(result_text) <= 2000 else result_text[:2000] + "...",
-                        note="유용성 판단 응답 (call 키로 필터)")
+                        response_full=result_text,
+                        note="유용성 판단 응답 (response_full 전체, 잘림 없음)")
             if finish_reason_desc == "MAX_TOKENS":
                 logger.warning("llm_judgment_truncated",
                               call=True,
@@ -499,11 +669,16 @@ JSON:"""
             try:
                 result = json.loads(json_text)
             except json.JSONDecodeError as parse_error:
+                # json_full은 무조건 전체 (잘림 없이). 파서에 넘긴 원본 문자열 그대로 로깅
                 logger.warning("JSON parse failed, attempting cleanup",
                              call=True,
                              call_id=call_id or "",
+                             judgment_max_output_tokens=judgment_max_tokens,
+                             response_length=len(result_text),
+                             json_length=len(json_text) if json_text else 0,
                              error=str(parse_error),
-                             json_preview=json_text[:200] if json_text else "None")
+                             json_preview=(json_text[:500] + "...") if json_text and len(json_text) > 500 else (json_text or "None"),
+                             json_full=json_text if json_text else "")
                 if json_text:
                     fixed = json_text.rstrip()
                     # 주석/후행 쉼표 정리
@@ -661,7 +836,8 @@ JSON:"""
                         category="llm",
                         progress="extraction",
                         is_useful=result["is_useful"],
-                        confidence=result["confidence"])
+                        confidence=result["confidence"],
+                        extracted_info_count=len(result.get("extracted_info", [])))
 
             return result
 
@@ -672,8 +848,8 @@ JSON:"""
                         category="llm",
                         progress="extraction",
                         error=str(e),
-                        raw_response_full=result_text[:2000] if result_text else "N/A",
-                        json_attempt_full=json_text[:2000] if json_text else "N/A")
+                        raw_response_full=result_text or "N/A",
+                        json_attempt_full=json_text or "N/A")
             return {
                 "is_useful": False,
                 "confidence": 0.0,

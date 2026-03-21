@@ -26,6 +26,9 @@ class HITLManager:
     Pipecat 파이프라인 외부에서 동작하며, RAGLLMProcessor가 호출한다.
     """
     
+    # HITL 지연 응답 설계: 모든 케이스에 통일된 응답 메시지
+    HITL_REQUEST_MESSAGE = "해당 내용은 제가 모르는 내용이라서 별도 확인 해보고 알려드리겠습니다."
+    
     def __init__(
         self,
         on_transfer_request: Optional[Callable] = None,
@@ -112,10 +115,20 @@ class HITLManager:
         
         if self._on_alert:
             try:
+                # 콜백 시그니처: (context) — context에 call_id, alert_type 등 포함. 호출측 _default_hitl_alert(context) 호환.
                 if asyncio.iscoroutinefunction(self._on_alert):
-                    await self._on_alert(call_id, alert_data)
+                    await self._on_alert(alert_data)
                 else:
-                    self._on_alert(call_id, alert_data)
+                    self._on_alert(alert_data)
+            except TypeError:
+                # (call_id, context) 시그니처 폴백
+                try:
+                    if asyncio.iscoroutinefunction(self._on_alert):
+                        await self._on_alert(call_id, alert_data)
+                    else:
+                        self._on_alert(call_id, alert_data)
+                except Exception as e:
+                    logger.error("hitl_alert_callback_error", error=str(e))
             except Exception as e:
                 logger.error("hitl_alert_callback_error", error=str(e))
         
@@ -130,16 +143,9 @@ class HITLManager:
                         self._on_transfer_request(call_id, hitl_reason)
                 except Exception as e:
                     logger.error("hitl_transfer_callback_error", error=str(e))
-            
-            return "담당자에게 연결해 드리겠습니다. 잠시만 기다려 주세요."
         
-        elif intent == "complaint":
-            return ("불편을 드려 죄송합니다. "
-                    "더 정확한 안내를 위해 담당자를 연결해 드릴까요?")
-        
-        else:
-            # 낮은 신뢰도 / RAG 부족 (설계: 해당 내용 확인 필요, 잠시만 기다려 달라)
-            return "해당 내용은 확인이 필요합니다. 잠시만 기다려 주세요."
+        # HITL 지연 응답 설계: intent 무관하게 통일된 메시지 반환
+        return self.HITL_REQUEST_MESSAGE
     
     @property
     def pending_transfer(self) -> bool:

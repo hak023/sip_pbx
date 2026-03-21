@@ -1,13 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+interface TenantInfo {
+  owner: string;
+  name: string;
+  type?: string;
+}
+
 export default function NewOutboundCallPage() {
   const router = useRouter();
+  const [tenant, setTenant] = useState<TenantInfo | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     caller_number: '',
@@ -18,6 +25,26 @@ export default function NewOutboundCallPage() {
     max_duration: 180,
     retry_on_no_answer: true,
   });
+
+  // 로그인한 테넌트 반영: 발신번호(owner), 발신자 표시명(name) — 입력 없이 자동 설정
+  useEffect(() => {
+    const tenantData = localStorage.getItem('tenant');
+    if (!tenantData) {
+      router.push('/login');
+      return;
+    }
+    try {
+      const t = JSON.parse(tenantData) as TenantInfo;
+      setTenant(t);
+      setForm((prev) => ({
+        ...prev,
+        caller_number: t.owner ?? '',
+        caller_display_name: t.name ?? '',
+      }));
+    } catch {
+      router.push('/login');
+    }
+  }, [router]);
 
   const addQuestion = () => {
     setForm({ ...form, questions: [...form.questions, ''] });
@@ -66,6 +93,14 @@ export default function NewOutboundCallPage() {
     }
   };
 
+  if (tenant === null) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-500">테넌트 정보 로드 중...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm">
@@ -81,7 +116,7 @@ export default function NewOutboundCallPage() {
 
       <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-6 space-y-6">
-          {/* 발신번호 */}
+          {/* 발신번호 — 로그인 테넌트 자동 반영, 입력 불필요 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               발신번호 <span className="text-red-500">*</span>
@@ -89,11 +124,12 @@ export default function NewOutboundCallPage() {
             <input
               type="text"
               required
+              readOnly
               value={form.caller_number}
-              onChange={(e) => setForm({ ...form, caller_number: e.target.value })}
-              placeholder="070-1234-5678"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="로그인한 테넌트 확장번호"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-gray-50 text-gray-700"
             />
+            {tenant && <p className="text-xs text-gray-500 mt-1">로그인한 테넌트({tenant.name})로 자동 설정됩니다.</p>}
           </div>
 
           {/* 착신번호 */}
@@ -111,19 +147,19 @@ export default function NewOutboundCallPage() {
             />
           </div>
 
-          {/* 발신자 표시명 */}
+          {/* 발신자 표시명 — 로그인 테넌트 자동 반영, 입력 불필요 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               발신자 표시명
             </label>
             <input
               type="text"
+              readOnly
               value={form.caller_display_name}
-              onChange={(e) => setForm({ ...form, caller_display_name: e.target.value })}
-              placeholder="ABC 주식회사"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="로그인한 테넌트명"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-gray-50 text-gray-700"
             />
-            <p className="text-xs text-gray-400 mt-1">AI가 전화할 때 &quot;{form.caller_display_name || '회사'} AI 비서입니다&quot;로 소개합니다.</p>
+            <p className="text-xs text-gray-400 mt-1">AI가 전화할 때 &quot;{form.caller_display_name || '회사'} AI 비서입니다&quot;로 소개합니다. (로그인 테넌트로 자동 설정)</p>
           </div>
 
           {/* 통화 목적 */}
@@ -210,7 +246,7 @@ export default function NewOutboundCallPage() {
           <div className="flex items-center gap-4 pt-4 border-t">
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !tenant}
               className="inline-flex items-center px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition-colors"
             >
               {submitting ? '요청 중...' : '발신 요청'}

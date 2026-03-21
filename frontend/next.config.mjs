@@ -3,12 +3,25 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/** 백엔드 REST (프론트 브라우저가 `/api/*`로 요청 시 Next가 프록시) */
+const API_PROXY_TARGET =
+  process.env.API_PROXY_TARGET || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+    // 비우면 브라우저에서 getApiUrl() → "" (동일 출처 + 아래 rewrites)
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? '',
     NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001',
+  },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${API_PROXY_TARGET.replace(/\/$/, '')}/api/:path*`,
+      },
+    ];
   },
   // ✅ 파일 탐색 루트를 프로젝트 디렉토리로 제한 (C:\ 루트 탐색 방지)
   experimental: {

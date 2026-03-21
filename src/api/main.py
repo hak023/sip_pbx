@@ -1,89 +1,116 @@
-"""FastAPI Gateway for Frontend Control Center"""
-import os
-from fastapi import FastAPI, HTTPException, Depends, Header
-from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime, timedelta
-from typing import List, Optional
-import structlog
+"""
+FastAPI 메인 앱 - REST API Gateway.
 
-from .routers import auth, calls, knowledge, hitl, metrics, operator, call_history, recordings, ai_insights, capabilities, extractions, transfers, outbound, tenants
-from .models import User
+- recordings: 녹음 파일 조회/스트리밍/다운로드
+- call_history: 통화 이력 목록·상세·메모·처리완료
+- calls: 통화 상세 조회 및 transcript
+
+실행: uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+"""
+
+import structlog
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 logger = structlog.get_logger(__name__)
 
-# FastAPI 앱 생성
+# 존재하는 라우터만 import (일부만 있어도 기동)
+def _load_routers():
+    loaded = {}
+    # ⚠️ knowledge는 제외: 구버전(src/api/routers/knowledge.py) 대신
+    #    신버전(src/api/knowledge_router.py)을 직접 로드
+    #    이유: Pydantic v2 호환 및 tenant_id 중복 제거
+    #    참고: docs/KNOWLEDGE_ROUTER_MIGRATION.md
+    for name in (
+        "auth",
+        "tenants",
+        "call_history",
+        "calls",
+        "metrics",
+        "operator",
+        "outbound",
+        "recordings",
+    ):
+        try:
+            mod = __import__(f"src.api.routers.{name}", fromlist=["router"])
+            loaded[name] = getattr(mod, "router", None)
+        except ImportError:
+            pass
+    return loaded
+
+_ROUTERS = _load_routers()
+
+# 🔥 신버전 knowledge_router 직접 로드 (v2_no_tenant_id)
+# 구버전과 달리 owner 필수, tenant_id 없음
+try:
+    from src.api import knowledge_router
+    _ROUTERS["knowledge"] = knowledge_router.router
+    logger.info("🔥 NEW knowledge_router loaded (v2_no_tenant_id)")
+except ImportError as e:
+    logger.warning("Failed to load new knowledge_router", error=str(e))
+
+ROUTERS_AVAILABLE = len(_ROUTERS) > 0
+if not ROUTERS_AVAILABLE:
+    print("Warning: No API routers found under src.api.routers")
+
 app = FastAPI(
-    title="AI Voicebot API Gateway",
-    description="Frontend Control Center용 REST API",
-    version="1.0.0"
+    title="AI Voicebot API",
+    version="2.0.0",
+    description="SmartPBX AI API - 통화 이력, 녹음, HITL 등",
 )
 
-# CORS 설정
+# 422 Validation Error Handler - 상세 로깅
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Pydantic validation 에러 시 상세 로그"""
+    errors = exc.errors()
+    logger.error("api_validation_error_422",
+                 method=request.method,
+                 url=str(request.url),
+                 path=request.url.path,
+                 query_params=dict(request.query_params),
+                 errors=errors,
+                 body=await request.body() if request.method in ["POST", "PUT", "PATCH"] else None)
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": errors},
+    )
+
+# CORS (Frontend 연동)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Frontend 개발 서버
-        "http://localhost:3001",
-        os.getenv("FRONTEND_URL", "http://localhost:3000")
-    ],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 라우터 등록
-app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(calls.router, prefix="/api/calls", tags=["Calls"])
-app.include_router(knowledge.router, prefix="/api/knowledge", tags=["Knowledge"])
-app.include_router(hitl.router, prefix="/api/hitl", tags=["HITL"])
-app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
-app.include_router(operator.router, tags=["Operator"])  # 신규: 운영자 상태 관리
-app.include_router(call_history.router, tags=["Call History"])  # 신규: 통화 이력
-app.include_router(recordings.router, tags=["Recordings"])  # 신규: 녹음 파일 제공
-app.include_router(ai_insights.router, tags=["AI Insights"])  # 신규: AI 처리 과정 조회
-app.include_router(capabilities.router, prefix="/api/capabilities", tags=["Capabilities"])  # 신규: AI 서비스 관리
-app.include_router(extractions.router, prefix="/api/extractions", tags=["Extractions"])  # 신규: 지식 추출 리뷰
-app.include_router(transfers.router, prefix="/api/transfers", tags=["Transfers"])  # 신규: 호 전환 관리
-app.include_router(outbound.router, prefix="/api/outbound", tags=["Outbound"])  # 신규: AI 아웃바운드 콜
-app.include_router(tenants.router, prefix="/api/tenants", tags=["Tenants"])  # 신규: 멀티테넌트 관리
-
-
-# Startup 이벤트
-@app.on_event("startup")
-async def startup_event():
-    """서버 시작 시 초기화"""
-    logger.info("API Gateway starting up...")
-    
-    # 멀티테넌트 시드 데이터 투입 (1003, 1004)
-    from src.services.seed_data import seed_initial_data
-    from src.services.knowledge_service import get_knowledge_service
-    knowledge_service = get_knowledge_service()
-    await seed_initial_data(knowledge_service)
-    
-    logger.info("API Gateway startup complete")
+# 라우터 등록 (있는 것만)
+if ROUTERS_AVAILABLE:
+    for name, router_obj in _ROUTERS.items():
+        if router_obj is not None:
+            # knowledge router는 /api prefix 추가 필요
+            if name == "knowledge":
+                app.include_router(router_obj, prefix="/api")
+                logger.info("Router registered with prefix", name=name, prefix="/api")
+            else:
+                app.include_router(router_obj)
+                logger.info("Router registered", name=name)
+    print("✅ Routers registered:", ", ".join(_ROUTERS.keys()))
 
 
 @app.get("/")
 async def root():
-    """루트 엔드포인트"""
     return {
-        "message": "AI Voicebot API Gateway",
-        "version": "1.0.0",
-        "status": "running",
-        "docs_url": "/docs"
+        "status": "ok",
+        "message": "AI Voicebot API",
+        "version": "2.0.0"
     }
 
 
 @app.get("/health")
-async def health_check():
-    """헬스 체크 엔드포인트"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat()
-    }
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
-
+async def health():
+    return {"status": "ok"}

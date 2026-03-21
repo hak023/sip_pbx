@@ -1,506 +1,472 @@
 """
-Voice AI Pipeline Builder for SIP PBX (Phase 3 + Smart Turn).
+Pipecat Voice Pipeline 조립.
 
-Pipecat 파이프라인을 구성하여 AI 통화 응대를 수행.
+SIP PBX RTP Worker와 연동해 통화당 Voice AI 파이프라인을 구성·실행한다.
+- callee(착신번호) → owner로 테넌트 식별, OrganizationInfoManager 생성
+- 레코딩: create_recording_processors(call_id)로 rec_input/rec_output 삽입
+- 파이프라인: input → rec_input → vad → stt → rag_llm → tts → rec_output → output
 
-Pipeline 구조 (완성):
-    RTPInput → SileroVAD(stop_secs=config) → [SmartTurn] → GoogleSTT → [SmartBargeIn] → RAG-LLM → [StreamingTTS] → GoogleTTS → RTPOutput
+사용:
+  from src.websocket import manager as ws_manager
+  from src.ai_voicebot.pipecat.pipeline_builder import PipelineBuilder  # 또는 VoiceAIPipelineBuilder (동일 클래스)
 
-주요 프로세서:
-  - Smart Turn v3.2 (발화 종료 판단: 문법/억양/속도 분석, 10ms CPU)
-  - SmartBargeInProcessor (3단계 필터: 키워드 + 단어수 + LLM)
-  - StreamingTTSGateway (첫 문장 즉시 TTS 발화)
+  builder = PipelineBuilder(on_call_ended=ws_manager.emit_call_ended)
+  await builder.build_and_run(
+      callee="1003",
+      rtp_worker=rtp_worker,
+      vad=vad, stt=stt, tts=tts, llm_client=llm_client,
+      knowledge_service=knowledge_service,
+      hitl_on_alert=...,
+  )
+
+  (VAD/STT/TTS/llm_client는 호출 측에서 생성해 전달. pipecat 또는 pipecat-services-* 패키지 사용.)
 """
 
 import asyncio
-import os
-from typing import Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.audio.vad_processor import VADProcessor
-from pipecat.services.google.stt import GoogleSTTService
-from pipecat.services.google.tts import GoogleTTSService
-
+from src.common.call_data_record_logger import log_call_data
 from src.ai_voicebot.pipecat.rtp_transport import SIPPBXTransport
+from src.ai_voicebot.pipecat.processors.recording_processor import create_recording_processors
 from src.ai_voicebot.pipecat.processors.rag_processor import RAGLLMProcessor
-from src.ai_voicebot.pipecat.processors.tts_complete_notifier import TTSCompleteNotifier
-from src.ai_voicebot.pipecat.processors.tts_end_frame_forwarder import TTSEndFrameForwarder
 
 logger = structlog.get_logger(__name__)
 
+# Graceful shutdown: Pipeline 취소 대기 타임아웃 (초)
+# Pipecat PipelineTask의 cancel_timeout(기본 20초)을 고려해 여유 있게 설정
+PIPELINE_SHUTDOWN_TIMEOUT_SECS = 25.0
 
-class VoiceAIPipelineBuilder:
+# Pipecat Pipeline / Task / Runner (선택 의존성)
+try:
+    from pipecat.pipeline.pipeline import Pipeline
+    from pipecat.pipeline.task import PipelineTask, PipelineParams
+    from pipecat.pipeline.runner import PipelineRunner
+    _PIPECAT_AVAILABLE = True
+except ImportError:
+    Pipeline = None
+    PipelineTask = None
+    PipelineParams = None
+    PipelineRunner = None
+    _PIPECAT_AVAILABLE = False
+
+# 바지인 제어: 새 API 사용 (DeprecationWarning 제거). 최소 N단어 말했을 때만 TTS 중단.
+try:
+    from pipecat.turns.user_start import MinWordsUserTurnStartStrategy
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+    _USER_TURN_STRATEGIES_AVAILABLE = True
+except ImportError:
+    MinWordsUserTurnStartStrategy = None
+    UserTurnStrategies = None
+    _USER_TURN_STRATEGIES_AVAILABLE = False
+
+
+class PipelineBuilder:
     """
-    AI 통화 응대를 위한 Pipecat Pipeline 생성 및 실행.
-    
-    Phase 1: 기본 파이프라인 (VAD + STT + RAG-LLM + TTS)
-    Phase 2: LangGraph Agent 통합
-    Phase 3: Smart Barge-in + Streaming TTS + Smart Turn v3.2
+    Voice AI 파이프라인 조립 및 실행.
+
+    callee(착신번호)를 owner로 사용해 테넌트별 org_manager·RAGLLMProcessor를 구성하고,
+    레코딩 프로세서를 포함한 Pipecat Pipeline을 빌드·실행한다.
     """
-    
-    def __init__(self, config: dict):
+
+    def __init__(
+        self,
+        *,
+        on_call_ended: Optional[Callable[[str], Any]] = None,
+    ):
         """
         Args:
-            config: AI 설정 딕셔너리 (config.yaml의 ai_voicebot 섹션)
+            on_call_ended: 통화 종료 시 호출할 콜백 (call_id). 예: emit_call_ended(call_id)
         """
-        self.config = config
-        self._runner: Optional[PipelineRunner] = None
-    
+        self._on_call_ended = on_call_ended
+        self._greeting_tasks: Dict[str, asyncio.Task] = {}  # call_id -> greeting task
+
+    def build_pipeline(
+        self,
+        rtp_worker: Any,
+        *,
+        vad: Any,
+        stt: Any,
+        tts: Any,
+        llm_client: Any,
+        rag_engine: Optional[Any] = None,
+        org_manager: Optional[Any] = None,
+        embedder: Optional[Any] = None,
+        vector_db: Optional[Any] = None,
+        knowledge_service: Optional[Any] = None,
+        system_prompt: str = "",
+        max_history_turns: int = 10,
+        owner: Optional[str] = None,
+        call_id: Optional[str] = None,
+        hitl_on_alert: Optional[Callable[..., Any]] = None,
+        stt_post_filter_config: Optional[Dict[str, Any]] = None,
+        tts_sync_context: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """
+        Voice 파이프라인 인스턴스 생성 (실행하지 않음).
+
+        Args:
+            rtp_worker: RTP Worker (media_session.call_id, get_caller_audio_stream, send_audio_to_caller 제공)
+            vad, stt, tts: Pipecat VAD/STT/TTS 프로세서
+            llm_client: LLM 클라이언트 (RAGLLMProcessor용)
+            rag_engine, org_manager, embedder, vector_db, knowledge_service: RAG/테넌트 옵션
+            owner: 테넌트 ID (미지정 시 rtp_worker.media_session에서 추출 시도)
+            call_id: 통화 ID (미지정 시 rtp_worker.media_session.call_id)
+            hitl_on_alert: HITL 알림 콜백
+            stt_post_filter_config, tts_sync_context: RAGLLMProcessor 옵션
+
+        Returns:
+            Pipeline 인스턴스 (pipecat.pipeline.Pipeline)
+        """
+        if not _PIPECAT_AVAILABLE:
+            raise RuntimeError("pipecat.pipeline not available. Install pipecat-ai.")
+
+        call_id = call_id or getattr(getattr(rtp_worker, "media_session", None), "call_id", "") or ""
+        owner = owner or getattr(getattr(rtp_worker, "media_session", None), "callee", None) or call_id
+        try:
+            from src.common.sip_owner import normalize_owner_username
+            owner = normalize_owner_username(owner) or owner
+        except Exception:
+            pass
+
+        tts_sync_context = tts_sync_context or {}
+        tts_sync_context["_call_id"] = call_id  # Notifier/Output 로그용 (Phase1→Phase2 연동)
+
+        transport = SIPPBXTransport(rtp_worker, tts_sync_context=tts_sync_context)
+        _, rec_input, rec_output = create_recording_processors(call_id)
+
+        rag_llm = RAGLLMProcessor(
+            llm_client=llm_client,
+            rag_engine=rag_engine,
+            org_manager=org_manager,
+            embedder=embedder,
+            vector_db=vector_db,
+            system_prompt=system_prompt,
+            max_history_turns=max_history_turns,
+            owner=owner,
+            call_id=call_id or None,
+            hitl_on_alert=hitl_on_alert,
+            tts_sync_context=tts_sync_context,
+            stt_post_filter_config=stt_post_filter_config,
+        )
+
+        # TTS 완료 감지 프로세서 (Phase 1/2 인사말 동기화용)
+        from src.ai_voicebot.pipecat.processors.tts_complete_notifier import TTSCompleteNotifier
+        tts_complete_notifier = TTSCompleteNotifier(sync_context=tts_sync_context)
+
+        # VAD 래퍼 추가 (로깅 및 모니터링)
+        from src.ai_voicebot.pipecat.processors.vad_wrapper import wrap_vad_with_logging
+        # 바지인 켬: 3단어 이상 시 AI 말 멈춤 (allow_interruptions=True + user_turn_strategies와 연동)
+        vad_wrapped = wrap_vad_with_logging(vad, call_id=call_id, enable_barge_in=True)
+
+        # 바지인 켬: Interruption* 프레임을 TTS까지 전달 (3단어 조건은 user_turn_strategies에서 MinWordsUserTurnStartStrategy로 시도)
+        # LLMUserAggregator 미사용 시 VAD 기준으로 동작할 수 있음 — 필요 시 BargeInSuppressProcessor 재도입 가능
+        processor_names = [
+            "transport.input()",
+            "rec_input",
+            "vad_wrapped",
+            "stt",
+            "rag_llm",
+            "tts",
+            "tts_complete_notifier",
+            "rec_output",
+            "transport.output()",
+        ]
+        pipeline = Pipeline([
+            transport.input(),
+            rec_input,
+            vad_wrapped,
+            stt,
+            rag_llm,
+            tts,
+            tts_complete_notifier,
+            rec_output,
+            transport.output(),
+        ])
+        logger.info(
+            "pipeline_built",
+            call_id=call_id,
+            owner=owner,
+            has_rag=rag_engine is not None,
+            has_org_manager=org_manager is not None,
+            processor_chain=processor_names,
+            note="바지인 활성화 (allow_interruptions=True, enable_barge_in=True)",
+        )
+        
+        # rag_llm 인스턴스를 반환하기 위해 pipeline에 속성으로 저장
+        pipeline._rag_llm = rag_llm
+        
+        return pipeline
+
     async def build_and_run(
         self,
-        rtp_worker,
-        call_context: dict,
-        llm_client=None,
-        rag_engine=None,
-        org_manager=None,
-        embedder=None,
-        vector_db=None,
-    ) -> Optional[PipelineTask]:
+        callee: str,
+        rtp_worker: Any,
+        *,
+        vad: Any,
+        stt: Any,
+        tts: Any,
+        llm_client: Any,
+        rag_engine: Optional[Any] = None,
+        org_manager: Optional[Any] = None,
+        embedder: Optional[Any] = None,
+        vector_db: Optional[Any] = None,
+        knowledge_service: Optional[Any] = None,
+        system_prompt: str = "",
+        max_history_turns: int = 10,
+        hitl_on_alert: Optional[Callable[..., Any]] = None,
+        stt_post_filter_config: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
         """
-        파이프라인 구축 및 실행.
-        
+        파이프라인 빌드 후 실행. 종료 시 on_call_ended(call_id) 호출.
+
         Args:
-            rtp_worker: RTPRelayWorker 인스턴스
-            call_context: 통화 컨텍스트 {call_id, caller, callee, system_prompt}
-            llm_client: LLM 클라이언트 (기존 llm_client.py)
-            rag_engine: RAG 엔진 (기존 rag_engine.py)
-            org_manager: 기관 정보 관리자
-            embedder: TextEmbedder 인스턴스 (Phase 2: Semantic Cache용)
-            vector_db: VectorDB 인스턴스 (Phase 2: Semantic Cache용)
-        
-        Returns:
-            실행 중인 PipelineTask
+            callee: 착신번호 (owner로 사용)
+            rtp_worker: RTP Worker
+            vad, stt, tts, llm_client: 필수 Voice/AI 컴포넌트
+            나머지: build_pipeline와 동일 (rag_engine, org_manager 등)
         """
-        import time
-        build_start = time.time()
-        call_id = call_context.get("call_id", "unknown")
-        callee = call_context.get("callee", "")  # 착신번호 = owner
-        
-        try:
-            # 0. 착신번호 기반 OrganizationInfoManager 생성 (VectorDB에서 로드)
-            if callee:
-                try:
-                    from src.ai_voicebot.knowledge.organization_info import create_org_manager
-                    from src.services.knowledge_service import get_knowledge_service
-                    ks = get_knowledge_service()
-                    if ks:
-                        org_manager = await create_org_manager(owner=callee, knowledge_service=ks)
-                        logger.info("pipecat_org_manager_created_from_vectordb",
-                                   call_id=call_id, owner=callee,
-                                   tenant_name=org_manager.get_organization_name())
-                    else:
-                        logger.warning("pipecat_knowledge_service_unavailable",
-                                     call_id=call_id)
-                except Exception as e:
-                    logger.warning("pipecat_org_manager_creation_failed",
-                                 call_id=call_id, owner=callee, error=str(e))
-            
-            # 1. RTP Relay를 Pipecat 모드로 전환
-            rtp_worker.enable_pipecat_mode()
-            
-            # Phase1/Phase2 인사말 + TTS 완료 시그널 공유 컨텍스트 (Notifier·Output 불일치 경고용)
-            tts_sync_context = {"_call_id": call_id or ""}
-            
-            # 2. Transport 생성 (tts_sync_context 전달 → TTS vs RTP 전송량 불일치 시 경고)
-            transport = SIPPBXTransport(rtp_worker, tts_sync_context=tts_sync_context)
-            
-            # 3. VAD 프로세서 (Silero VAD)
-            #    stop_secs: 침묵 이 길어져야 "발화 종료". 사람-AI 대화에서는 0.5~0.8초 권장 (config: silero_vad)
-            vad_cfg = self.config.get("silero_vad", {})
-            vad_stop_secs = vad_cfg.get("stop_secs", 0.7)
-            vad_start_secs = vad_cfg.get("start_secs", 0.25)
-            vad_confidence = vad_cfg.get("confidence", 0.6)
-            vad_min_volume = vad_cfg.get("min_volume", 0.5)
-            
-            vad_analyzer = SileroVADAnalyzer(
-                params=VADParams(
-                    confidence=vad_confidence,
-                    start_secs=vad_start_secs,
-                    stop_secs=vad_stop_secs,
-                    min_volume=vad_min_volume,
-                )
-            )
-            vad_processor = VADProcessor(vad_analyzer=vad_analyzer)
-            
-            # 3.5. Smart Turn Processor (설계서 Phase 1: Smart Turn v3.2)
-            smart_turn_processor = self._create_smart_turn_processor()
-            
-            # 4. Google STT
-            stt = self._create_stt_service()
-            
-            # 5. Smart Barge-in Processor (Phase 3)
-            barge_in_processor = self._create_barge_in_processor(llm_client)
-            
-            # HITL: 운영자 응답을 해당 통화 TTS로 넣기 위한 큐 + on_alert 콜백
-            hitl_response_queue: Optional[asyncio.Queue] = None
-            hitl_on_alert = None
+        call_id = getattr(getattr(rtp_worker, "media_session", None), "call_id", "") or ""
+
+        if not org_manager and knowledge_service:
+            try:
+                from src.ai_voicebot.knowledge.organization_info import OrganizationInfoManager
+                org_manager = OrganizationInfoManager(owner=callee, knowledge_service=knowledge_service)
+                await org_manager.load()
+            except Exception as e:
+                logger.warning("org_manager_load_failed", callee=callee, error=str(e))
+                org_manager = None
+
+        tts_sync_context: Dict[str, Any] = {}
+        pipeline = self.build_pipeline(
+            rtp_worker,
+            vad=vad,
+            stt=stt,
+            tts=tts,
+            llm_client=llm_client,
+            rag_engine=rag_engine,
+            org_manager=org_manager,
+            embedder=embedder,
+            vector_db=vector_db,
+            knowledge_service=knowledge_service,
+            system_prompt=system_prompt,
+            max_history_turns=max_history_turns,
+            owner=callee,
+            call_id=call_id or None,
+            hitl_on_alert=hitl_on_alert,
+            stt_post_filter_config=stt_post_filter_config,
+            tts_sync_context=tts_sync_context,
+            **kwargs,
+        )
+
+        # HITL 응답 큐는 RAGLLMProcessor.__init__(동기)에서 등록되어 루프가 비어 있을 수 있음 →
+        # WebSocket 스레드에서 enqueue 시 run_coroutine_threadsafe 하려면 여기(파이프라인 루프)에서 루프 고정
+        if call_id:
             try:
                 from src.services.hitl import get_hitl_service
-                hitl_svc = get_hitl_service()
-                hitl_response_queue = asyncio.Queue()
-                hitl_svc.register_hitl_response_queue(call_id, hitl_response_queue)
 
-                def _make_on_alert(ctx: dict):
-                    async def _on_hitl_alert(cid: str, alert_data: dict):
-                        await hitl_svc.request_human_help(
-                            call_id=cid,
-                            question=alert_data.get("question", ""),
-                            context={
-                                "caller_id": ctx.get("caller", ""),
-                                "callee_id": ctx.get("callee", ""),
-                                "conversation_history": [],
-                                "rag_results": [],
-                                "ai_confidence": alert_data.get("confidence", 0.0),
-                            },
-                            urgency="high" if (alert_data.get("confidence", 1.0) < 0.3) else "medium",
-                        )
-                    return _on_hitl_alert
-
-                hitl_on_alert = _make_on_alert(call_context)
+                get_hitl_service().ensure_queue_loop(call_id)
             except Exception as e:
-                logger.warning("hitl_callbacks_not_attached", call_id=call_id, error=str(e))
-            
-            # 6. RAG + LLM 프로세서 (Phase 2: LangGraph Agent)
-            rag_llm = RAGLLMProcessor(
-                llm_client=llm_client,
-                rag_engine=rag_engine,
-                org_manager=org_manager,
-                embedder=embedder,
-                vector_db=vector_db,
-                system_prompt=call_context.get("system_prompt", ""),
-                owner=callee,
-                tts_sync_context=tts_sync_context,
-                call_id=call_id,  # 통화 ID 전달 (WebSocket 이벤트용)
-                hitl_on_alert=hitl_on_alert,
-                hitl_response_queue=hitl_response_queue,
-                name="RAG-LLM",
-            )
-            
-            # 7. Streaming TTS Gateway (Phase 3)
-            streaming_gateway = self._create_streaming_gateway()
-            
-            # 8. Google TTS
-            tts = self._create_tts_service()
-            
-            # 9. Pipeline 조립 (Phase 3 + Smart Turn)
-            pipeline_components = [
-                transport.input(),       # RTP → PCM 16kHz
-                vad_processor,           # Silero VAD (음성 감지, 0.2s)
-            ]
-            
-            # Smart Turn (VAD 뒤, STT 앞에 삽입)
-            if smart_turn_processor:
-                pipeline_components.append(smart_turn_processor)
-            
-            pipeline_components.append(
-                stt,                     # Google STT (Streaming)
-            )
-            
-            # Smart Barge-in (Phase 3) - 있으면 추가
-            if barge_in_processor:
-                pipeline_components.append(barge_in_processor)
-            
-            pipeline_components.extend([
-                rag_llm,                 # RAG + LLM (LangGraph Agent)
-            ])
-            
-            # Streaming TTS Gateway (Phase 3) - 있으면 추가
-            if streaming_gateway:
-                pipeline_components.append(streaming_gateway)
-            
-            pipeline_components.extend([
-                tts,                     # Google TTS (음성 합성)
-                TTSEndFrameForwarder(    # Pipecat TTS가 EndFrame 미전달 시 TTSStopped 후 synthetic EndFrame 전달
-                    name="TTSEndFrameForwarder",
-                ),
-                TTSCompleteNotifier(     # Phase1 TTS 완료 시그널 (인사말 순차 재생)
-                    sync_context=tts_sync_context,
-                    name="TTSCompleteNotifier",
-                ),
-                transport.output(),      # PCM → RTP → Caller
-            ])
-            
-            pipeline = Pipeline(pipeline_components)
-            
-            # 10. PipelineTask 생성
-            task = PipelineTask(
-                pipeline,
-                params=PipelineParams(
-                    allow_interruptions=True,
-                    enable_metrics=False,
-                    enable_usage_metrics=False,
-                ),
-            )
-            
-            component_names = [
-                "SIPPBXTransport", f"SileroVAD(stop={vad_stop_secs}s)",
-            ]
-            if smart_turn_processor:
-                component_names.append("SmartTurnV3")
-            component_names.append("GoogleSTT")
-            if barge_in_processor:
-                component_names.append("SmartBargeIn")
-            component_names.append("RAG-LLM(LangGraph)")
-            if streaming_gateway:
-                component_names.append("StreamingTTSGateway")
-            component_names.extend(["GoogleTTS", "TTSEndFrameForwarder", "TTSCompleteNotifier", "SIPPBXOutput"])
-            
-            build_elapsed = time.time() - build_start
-            logger.info("⏱️ [TIMING] pipecat_pipeline_built",
+                logger.debug("hitl_ensure_queue_loop_failed", call_id=call_id, error=str(e))
+
+        # 바지인 켬: 3단어 이상 말했을 때만 TTS 중단 (새 API: user_turn_strategies, DeprecationWarning 없음)
+        if PipelineParams is None:
+            _params = None
+            task = PipelineTask(pipeline)
+        else:
+            _user_turn_strategies = None
+            if _USER_TURN_STRATEGIES_AVAILABLE and MinWordsUserTurnStartStrategy is not None and UserTurnStrategies is not None:
+                try:
+                    _user_turn_strategies = UserTurnStrategies(
+                        start=[MinWordsUserTurnStartStrategy(min_words=3)],
+                    )
+                except Exception as e:
+                    logger.debug("user_turn_strategies_init_skip", error=str(e))
+            # PipelineParams: allow_interruptions=True로 바지인 활성화 (interruption_strategies는 deprecated, 사용 안 함)
+            _params = PipelineParams(allow_interruptions=True)
+            try:
+                if _user_turn_strategies is not None:
+                    task = PipelineTask(pipeline, params=_params, user_turn_strategies=_user_turn_strategies)
+                else:
+                    task = PipelineTask(pipeline, params=_params)
+            except TypeError:
+                task = PipelineTask(pipeline, params=_params)
+        logger.info(
+            "pipecat_task_created",
+            call_id=call_id,
+            allow_interruptions=getattr(_params, "allow_interruptions", None) if _params else None,
+            note="Task 생성 — 프레임은 processor_chain 순서로 흐름",
+        )
+        # StartFrame 미수신 시 STT 큐 백업 방지: 2초 후 Input Transport에서 오디오 루프 강제 시작
+        # Pipecat Pipeline은 _processors = [source] + processors + [sink] 이므로,
+        # 우리가 넘긴 첫 프로세서(transport.input())는 procs[1] (procs[0]=PipelineSource)
+        async def _input_consumption_fallback():
+            await asyncio.sleep(2.0)
+            procs = getattr(pipeline, "processors", None)
+            if not procs or len(procs) < 2:
+                logger.warning("input_fallback_skipped",
+                              call_id=call_id,
+                              procs_len=len(procs) if procs else 0,
+                              note="Pipeline processors 수 부족 — Input Transport 폴백 미실행")
+                return
+            # procs[1] = 우리가 넘긴 첫 번째 프로세서 = SIPPBXInputTransport
+            input_proc = procs[1]
+            has_ensure = hasattr(input_proc, "ensure_audio_loop_started")
+            logger.info("input_fallback_check",
                        call_id=call_id,
-                       phase=3,
-                       components=component_names,
-                       build_elapsed=f"{build_elapsed:.3f}s")
-            
-            # 11. 인사말 전송 예약
-            async def _send_greeting_after_start():
-                """파이프라인 시작 후 인사말 전송 (최소 대기)"""
-                # ✅ 0.5초 → 0.1초로 단축 (LangGraph 그래프는 이미 캐싱됨)
-                await asyncio.sleep(0.1)
-                greeting_start = time.time()
-                await rag_llm.send_greeting()
-                greeting_elapsed = time.time() - greeting_start
-                logger.info("⏱️ [TIMING] greeting_total",
-                           call_id=call_id,
-                           elapsed=f"{greeting_elapsed:.3f}s")
-            
-            # 12. 파이프라인 실행
-            self._runner = PipelineRunner(handle_sigint=False)
-            
-            asyncio.create_task(_send_greeting_after_start())
-            
+                       proc_index=1,
+                       proc_type=type(input_proc).__name__,
+                       has_ensure_audio_loop_started=has_ensure,
+                       note="2초 폴백: Input Transport 오디오 루프 강제 시작 시도")
+            if has_ensure:
+                input_proc.ensure_audio_loop_started()
+                logger.info("input_fallback_applied",
+                            call_id=call_id,
+                            note="Input Transport ensure_audio_loop_started() 호출 완료 — 큐 소비 시작 예상")
+            else:
+                logger.warning("input_fallback_no_method",
+                               call_id=call_id,
+                               proc_type=type(input_proc).__name__,
+                               note="ensure_audio_loop_started 없음 — STT 큐 백업 가능성")
+        asyncio.create_task(_input_consumption_fallback())
+        # handle_sigint=False: 서버에서 여러 통화가 동시에 있으면 각 PipelineRunner가
+        # 자체 SIGINT 핸들러를 등록해 서로 덮어쓰므로, 앱 레벨에서 shutdown 처리
+        runner = PipelineRunner(handle_sigint=False)
+
+        # 인사말 자동 전송 (Pipeline 시작 후) - 취소 가능하도록 Task 보관
+        greeting_task: Optional[asyncio.Task] = None
+
+        async def _send_initial_greeting():
+            """Pipeline 시작 후 초기 인사말 자동 전송"""
+            await asyncio.sleep(0.5)  # Pipeline 초기화 대기
             try:
-                await self._runner.run(task)
-            finally:
-                # HITL 응답 큐 해제 (통화 종료 시)
-                if hitl_response_queue is not None:
-                    try:
-                        from src.services.hitl import get_hitl_service
-                        get_hitl_service().unregister_hitl_response_queue(call_id)
-                    except Exception as ex:
-                        logger.debug("hitl_unregister_failed", call_id=call_id, error=str(ex))
-            
-            logger.info("pipecat_pipeline_completed", call_id=call_id)
-            return task
-            
-        except Exception as e:
-            logger.error("pipecat_pipeline_error",
-                        call_id=call_id,
-                        error=str(e),
-                        exc_info=True)
+                if hasattr(pipeline, 'processors'):
+                    for proc in pipeline.processors:
+                        if hasattr(proc, 'send_greeting'):
+                            await proc.send_greeting()
+                            logger.info("initial_greeting_sent", call_id=call_id)
+                            break
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning("initial_greeting_failed", call_id=call_id, error=str(e))
+
+        greeting_task = asyncio.create_task(_send_initial_greeting())
+        self._greeting_tasks[call_id] = greeting_task
+
+        procs = getattr(pipeline, "processors", None)
+        logger.info("pipeline_runner_about_to_start",
+                    call_id=call_id,
+                    processor_count=len(procs) if procs else 0,
+                    first_user_proc=type(procs[1]).__name__ if procs and len(procs) > 1 else None,
+                    note="PipelineRunner.run() 진입 — StartFrame은 procs[0](Source)에서 procs[1](Input)으로 전달 예상")
+        if call_id:
+            log_call_data(call_id, "call_event", "call_connected", callee=callee or "")
             try:
-                rtp_worker.stop_pipecat_mode()
+                from src.api.routers.calls import register_active_call
+                register_active_call(call_id, callee=callee or "", is_ai_handled=True)
             except Exception:
                 pass
-            return None
-    
-    def _create_barge_in_processor(self, llm_client=None):
-        """
-        Smart Barge-in Processor 생성 (Phase 3).
-        
-        pipecat-ai가 설치되지 않았거나 비활성화 시 None 반환 (graceful fallback).
-        """
-        barge_in_config = self.config.get("barge_in", {})
-        if not barge_in_config.get("enabled", True):
-            logger.info("smart_barge_in_disabled_by_config")
-            return None
-        
         try:
-            from src.ai_voicebot.pipecat.barge_in_strategy import (
-                SmartBargeInStrategy,
-                SmartBargeInProcessor,
-            )
-            
-            strategy = SmartBargeInStrategy(
-                min_words=barge_in_config.get("min_words", 3),
-                keywords=barge_in_config.get("keywords", None),
-                llm_client=llm_client,
-            )
-            
-            processor = SmartBargeInProcessor(
-                strategy=strategy,
-                name="SmartBargeIn",
-            )
-            
-            logger.info("smart_barge_in_processor_created",
-                       min_words=barge_in_config.get("min_words", 3),
-                       has_llm=llm_client is not None)
-            return processor
-            
+            await runner.run(task)
+        except asyncio.CancelledError:
+            # PipelineRunner.run()이 CancelledError를 흡수하므로 여기 도달하지 않을 수 있음.
+            # 외부에서 task.cancel() 시 runner가 내부적으로 정리 후 정상 반환.
+            logger.info("pipeline_cancelled", call_id=call_id)
         except Exception as e:
-            logger.warning("smart_barge_in_creation_failed",
-                          error=str(e),
-                          message="Falling back to Pipecat default interruption")
-            return None
-    
-    def _create_streaming_gateway(self):
-        """
-        Streaming TTS Gateway 생성 (Phase 3).
-        
-        비활성화 시 None 반환 (TextFrame이 바로 TTS로 전달됨).
-        """
-        streaming_config = self.config.get("streaming_tts", {})
-        if not streaming_config.get("enabled", True):
-            logger.info("streaming_tts_gateway_disabled_by_config")
-            return None
-        
-        try:
-            from src.ai_voicebot.pipecat.processors.streaming_tts_processor import (
-                StreamingTTSGateway,
-            )
-            
-            gateway = StreamingTTSGateway(
-                min_chunk_chars=streaming_config.get("min_chunk_chars", 15),
-                max_buffer_chars=streaming_config.get("max_buffer_chars", 200),
-                flush_timeout=streaming_config.get("flush_timeout", 1.0),
-                name="StreamingTTSGateway",
-            )
-            
-            logger.info("streaming_tts_gateway_created",
-                       min_chars=streaming_config.get("min_chunk_chars", 15),
-                       max_buffer=streaming_config.get("max_buffer_chars", 200))
-            return gateway
-            
-        except Exception as e:
-            logger.warning("streaming_tts_gateway_creation_failed",
-                          error=str(e))
-            return None
-    
-    def _is_smart_turn_enabled(self) -> bool:
-        """Smart Turn 활성화 여부 확인"""
-        smart_turn_config = self.config.get("smart_turn", {})
-        return smart_turn_config.get("enabled", True)
-    
-    def _create_smart_turn_processor(self):
-        """
-        Smart Turn v3.2 Processor 생성.
-        
-        Pipecat의 LocalSmartTurnAnalyzerV3를 사용하여 발화 종료를 판단.
-        VAD stop_secs(설정) 침묵 후 모델이 문법/억양/속도를 분석하여 진짜 발화 완료인지 판단.
-        
-        미설치/비활성화 시 None 반환 (VAD-only fallback, config.silero_vad.stop_secs 사용).
-        """
-        smart_turn_config = self.config.get("smart_turn", {})
-        if not smart_turn_config.get("enabled", True):
-            logger.info("smart_turn_disabled_by_config")
-            return None
-        
-        try:
-            from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
-                LocalSmartTurnAnalyzerV3,
-            )
-            from src.ai_voicebot.pipecat.processors.smart_turn_processor import (
-                SmartTurnProcessor,
-            )
-            
-            # Smart Turn 모델 초기화
-            model_path = smart_turn_config.get("model_path", None)
-            if model_path:
-                analyzer = LocalSmartTurnAnalyzerV3(
-                    smart_turn_model_path=model_path
-                )
-            else:
-                # Pipecat 번들 모델 사용 (기본)
-                analyzer = LocalSmartTurnAnalyzerV3()
-            
-            processor = SmartTurnProcessor(
-                turn_analyzer=analyzer,
-                max_hold_secs=smart_turn_config.get("max_hold_secs", 2.0),
-                name="SmartTurnV3",
-            )
-            
-            logger.info("smart_turn_processor_created",
-                       model="LocalSmartTurnAnalyzerV3",
-                       max_hold_secs=smart_turn_config.get("max_hold_secs", 2.0),
-                       custom_model=model_path is not None)
-            return processor
-            
-        except ImportError as e:
-            logger.warning("smart_turn_import_failed",
-                          error=str(e),
-                          message="Smart Turn v3.2 not available. "
-                                  "Falling back to VAD-only (stop_secs=0.5). "
-                                  "Install: pip install pipecat-ai[smart-turn]")
-            return None
-        except Exception as e:
-            logger.warning("smart_turn_creation_failed",
-                          error=str(e),
-                          message="Falling back to VAD-only")
-            return None
-    
-    def _create_stt_service(self) -> GoogleSTTService:
-        """Google STT 서비스 생성"""
-        stt_config = self.config.get("google_cloud", {}).get("stt", {})
-        
-        # 언어 코드 설정 (Language enum 사용 필수)
-        from pipecat.frames.frames import Language
-        language_code = stt_config.get("language_code", "ko-KR")
-        lang_map = {
-            "ko-KR": Language.KO_KR,
-            "ko": Language.KO,
-            "en-US": Language.EN_US,
-            "en": Language.EN,
-        }
-        stt_language = lang_map.get(language_code, Language.KO_KR)
-        
-        # STT 모델 설정
-        stt_model = stt_config.get("model", "telephony")
-        
-        return GoogleSTTService(
-            credentials_path=stt_config.get(
-                "credentials_path",
-                os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-            ),
-            sample_rate=16000,
-            params=GoogleSTTService.InputParams(
-                languages=[stt_language],
-                model=stt_model,
-                enable_automatic_punctuation=stt_config.get("enable_automatic_punctuation", True),
-                enable_interim_results=True,
-            ),
-        )
-    
-    def _create_tts_service(self) -> GoogleTTSService:
-        """Google TTS 서비스 생성"""
-        tts_config = self.config.get("google_cloud", {}).get("tts", {})
-        
-        # 언어 코드 설정 (voice와 language가 일치해야 함)
-        from pipecat.frames.frames import Language
-        language_code = tts_config.get("language_code", "ko")
-        # language_code → Language enum 매핑
-        lang_map = {
-            "ko": Language.KO,
-            "ko-KR": Language.KO_KR,
-            "en": Language.EN,
-        }
-        language = lang_map.get(language_code, Language.KO)
-        
-        return GoogleTTSService(
-            credentials_path=tts_config.get(
-                "credentials_path",
-                os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-            ),
-            voice_id=tts_config.get("voice_name", "ko-KR-Chirp3-HD-Kore"),
-            sample_rate=16000,
-            # 문장 단위 재분할 방지: Gateway에서 넘어온 청크를 그대로 한 덩어리로 합성 (인사말 Phase1 잘림 방지)
-            aggregate_sentences=False,
-            push_text_frames=True,  # LLMFullResponseEndFrame을 하류(TTSCompleteNotifier)로 전달
-            params=GoogleTTSService.InputParams(
-                language=language,
-                speaking_rate=tts_config.get("speaking_rate", 1.0),
-            ),
-        )
-    
-    async def stop(self):
-        """파이프라인 중지"""
-        if self._runner:
-            try:
-                await self._runner.stop_when_done()
-            except Exception as e:
-                logger.warning("pipecat_runner_stop_error", error=str(e))
+            logger.exception("pipeline_run_error", call_id=call_id, error=str(e))
+        finally:
+            # Greeting task 정리 (취소 시 즉시 종료)
+            greeting_task = self._greeting_tasks.pop(call_id, None)
+            if greeting_task and not greeting_task.done():
+                greeting_task.cancel()
+                try:
+                    await greeting_task
+                except asyncio.CancelledError:
+                    pass
+
+            # 프로세서 cleanup (VADWrapperProcessor 등 __input_frame_task_handler 정리로 dangling task 방지)
+            procs = getattr(pipeline, "processors", None)
+            if procs:
+                for proc in procs:
+                    cleanup = getattr(proc, "cleanup", None)
+                    if callable(cleanup):
+                        try:
+                            await cleanup()
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as e:
+                            try:
+                                logger.warning("processor_cleanup_failed",
+                                               call_id=call_id,
+                                               proc_type=type(proc).__name__,
+                                               error=str(e))
+                            except (ValueError, OSError):
+                                pass
+
+            stop_pipecat = getattr(rtp_worker, "stop_pipecat_mode", None)
+            if callable(stop_pipecat):
+                try:
+                    stop_pipecat()
+                except Exception as e:
+                    try:
+                        logger.warning("stop_pipecat_mode_failed", call_id=call_id, error=str(e))
+                    except (ValueError, OSError):
+                        pass  # 서버 종료 시 로그가 이미 닫혀 있을 수 있음
+            if call_id:
+                log_call_data(call_id, "call_event", "call_ended", callee=callee or "")
+                try:
+                    from src.api.routers.calls import unregister_active_call
+                    unregister_active_call(call_id)
+                except Exception:
+                    pass
+                # BYE/cleanup 시 해당 통화의 HITL 타임아웃 타이머 취소 (통화 종료 후 타임아웃 메시지 방지)
+                try:
+                    from src.services.hitl import get_hitl_service
+                    get_hitl_service().cancel_timer(call_id)
+                    get_hitl_service().unregister_call(call_id)
+                except Exception:
+                    pass
+            if call_id and self._on_call_ended:
+                try:
+                    if asyncio.iscoroutinefunction(self._on_call_ended):
+                        await self._on_call_ended(call_id)
+                    else:
+                        self._on_call_ended(call_id)
+                except Exception as e:
+                    logger.warning("on_call_ended_failed", call_id=call_id, error=str(e))
+
+
+# 호출부에서 사용하는 이름 호환용 (import VoiceAIPipelineBuilder 시 동일 클래스 참조)
+VoiceAIPipelineBuilder = PipelineBuilder
+
+
+def build_pipeline(
+    rtp_worker: Any,
+    *,
+    vad: Any,
+    stt: Any,
+    tts: Any,
+    llm_client: Any,
+    callee: Optional[str] = None,
+    call_id: Optional[str] = None,
+    **kwargs: Any,
+) -> Any:
+    """
+    편의 함수: Pipeline만 빌드해 반환 (실행하지 않음).
+
+    owner/callee 미지정 시 rtp_worker.media_session에서 추출 시도.
+    """
+    builder = PipelineBuilder()
+    return builder.build_pipeline(
+        rtp_worker,
+        vad=vad,
+        stt=stt,
+        tts=tts,
+        llm_client=llm_client,
+        owner=callee,
+        call_id=call_id,
+        **kwargs,
+    )

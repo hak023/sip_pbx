@@ -73,6 +73,14 @@ def is_jwt_format(token: str) -> bool:
     return len(parts) == 3 and all(len(p) > 0 for p in parts)
 
 
+def is_extension_token(token: str) -> bool:
+    """백엔드 발급 extension 토큰(tok_*) 여부. 이 토큰은 JWT가 아니어도 연결 허용용으로 사용."""
+    if not token or not isinstance(token, str):
+        return False
+    t = token.strip()
+    return t.startswith("tok_") and len(t) > 4
+
+
 def decode_jwt(token: str) -> Dict[str, Any]:
     """JWT 토큰 검증 및 파싱
     
@@ -116,6 +124,34 @@ def extract_extension_from_jwt(token: str) -> Optional[str]:
     try:
         payload = decode_jwt(token)
         return payload.get("extension") or payload.get("sub")
+    except JWTError:
+        return None
+
+
+def is_connection_token_acceptable(token: str) -> bool:
+    """WebSocket/실시간 연결 수락 여부. JWT 유효 또는 tok_* 이면 True."""
+    if not token or not isinstance(token, str):
+        return False
+    if is_extension_token(token):
+        return True
+    try:
+        decode_jwt(token)
+        return True
+    except JWTError:
+        return False
+
+
+def extract_extension_from_token(token: str) -> Optional[str]:
+    """JWT 또는 tok_* 토큰에서 extension 추출. WebSocket 등 연결 허용 시 사용.
+    - JWT: payload에서 extension/sub 반환.
+    - tok_*: JWT가 아니므로 decode하지 않고, extension으로 쓸 값이 없으면 None 반환(연결은 허용).
+    """
+    if not token or not isinstance(token, str):
+        return None
+    if is_extension_token(token):
+        return None  # tok_*는 extension 정보 없음, 연결만 허용
+    try:
+        return extract_extension_from_jwt(token)
     except JWTError:
         return None
 

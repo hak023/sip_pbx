@@ -21,6 +21,7 @@ KST = timezone(timedelta(hours=9))
 _log_queue: Optional[asyncio.Queue] = None
 _log_worker_task: Optional[asyncio.Task] = None
 _sync_logger: Optional[structlog.BoundLogger] = None
+_log_file_stream: Optional[Any] = None  # ⭐ 로그 파일 핸들 저장
 
 
 def add_kst_timestamp(logger: Any, method_name: str, event_dict: Dict) -> Dict:
@@ -89,14 +90,22 @@ def reorder_keys(logger: Any, method_name: str, event_dict: Dict) -> Dict:
     return ordered
 
 
-def setup_logging(level: str = "INFO", format_type: str = "json", output: str = "stdout") -> None:
+def setup_logging(
+    level: str = "INFO",
+    format_type: str = "json",
+    output: str = "stdout",
+    file_path: Optional[str] = None,
+) -> None:
     """로깅 설정 초기화
-    
+
     Args:
         level: 로그 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         format_type: 로그 포맷 (json, text)
         output: 로그 출력 (stdout, file)
+        file_path: 로그 파일 경로 (output=="file"일 때 사용, None이면 logs/app.log)
     """
+    global _log_file_stream  # ⭐ 함수 시작 부분에 선언
+    
     # 프로세서 체인 구성
     processors = [
         structlog.contextvars.merge_contextvars,
@@ -119,17 +128,26 @@ def setup_logging(level: str = "INFO", format_type: str = "json", output: str = 
         # 개발용 컬러 텍스트 포맷
         processors.append(structlog.dev.ConsoleRenderer(colors=True))
 
-    # 파일 출력 설정
+    # 파일 출력 설정 — 항상 프로젝트 루트 기준으로 해서 실행 위치(cwd)에 영향받지 않음
     log_file_path = None
+    log_stream = None  # ⭐ 파일 핸들 저장
     if output == "file":
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
-        log_file_path = log_dir / "app.log"
-        # ⭐ 즉시 쓰기: buffering=1 (라인 버퍼링)
-        # ✅ write 모드로 변경 (서버 시작 시 새로 생성)
-        log_stream = open(log_file_path, "w", encoding="utf-8", buffering=1)
+        # 프로젝트 루트 = src/common/logger.py → src → 루트
+        _project_root = Path(__file__).resolve().parent.parent.parent
+        if file_path:
+            p = Path(file_path)
+            resolved = p if p.is_absolute() else (_project_root / p)
+        else:
+            resolved = _project_root / "logs" / "app.log"
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        log_file_path = resolved
+        # ⭐ append 모드로 변경 (기존 내용 유지, NULL 바이트 방지)
+        # ⭐ unbuffered 모드 (buffering=0는 binary만 가능하므로 line buffering=1 사용)
+        log_stream = open(log_file_path, "a", encoding="utf-8", buffering=1)
+        _log_file_stream = log_stream  # ⭐ 즉시 전역 변수에 저장
     else:
         log_stream = sys.stdout
+        _log_file_stream = None  # ⭐ stdout 사용 시 None
     
     # structlog 설정
     structlog.configure(
@@ -175,17 +193,17 @@ def _setup_loguru_integration(level: str, log_file_path: Optional[Path]) -> None
             colorize=True,
         )
         
-        # app.log 파일에도 기록
-        if log_file_path:
-            loguru_logger.add(
-                str(log_file_path),
-                level=level.upper(),
-                format="[PIPECAT] {time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-                       "{name}:{function}:{line} - {message}",
-                rotation=None,  # structlog이 관리하므로 rotation 없음
-                mode="a",  # append 모드 (structlog이 먼저 write로 생성)
-                encoding="utf-8",
-            )
+        # app.log 파일에도 기록 - ⚠️ 주석 처리: structlog과 파일 핸들 충돌로 NULL 바이트 발생
+        # if log_file_path:
+        #     loguru_logger.add(
+        #         str(log_file_path),
+        #         level=level.upper(),
+        #         format="[PIPECAT] {time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+        #                "{name}:{function}:{line} - {message}",
+        #         rotation=None,  # structlog이 관리하므로 rotation 없음
+        #         mode="a",  # append 모드 (structlog이 먼저 write로 생성)
+        #         encoding="utf-8",
+        #     )
     except ImportError:
         pass  # loguru가 없으면 스킵 (Pipecat 미설치 환경)
     except Exception:
@@ -280,47 +298,70 @@ async def _log_worker(queue: asyncio.Queue) -> None:
 
 
 def start_async_logging(queue_size: int = 1000) -> None:
-    """비동기 로깅 시작
-    
+    """비동기 로깅 시작 (반드시 실행 중인 이벤트 루프 내에서 호출해야 함).
+
     Args:
         queue_size: 로그 큐 크기 (기본값: 1000)
+
+    Raises:
+        RuntimeError: 이벤트 루프가 실행 중이지 않은 경우 (asyncio.run() 내부에서 호출하세요)
     """
     global _log_queue, _log_worker_task
-    
+
     if _log_queue is not None:
         # 이미 시작됨
         return
-    
+
+    # 실행 중인 이벤트 루프 확인 (3.7+)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        raise RuntimeError(
+            "start_async_logging()은 실행 중인 이벤트 루프 내에서 호출해야 합니다. "
+            "asyncio.run() 내부(run_server 등 async 함수)에서 호출하세요."
+        )
+
     _log_queue = asyncio.Queue(maxsize=queue_size)
-    
-    # 워커 태스크 시작
-    loop = asyncio.get_event_loop()
     _log_worker_task = loop.create_task(_log_worker(_log_queue))
 
 
 async def stop_async_logging() -> None:
     """비동기 로깅 중지"""
-    global _log_queue, _log_worker_task
+    global _log_queue, _log_worker_task, _log_file_stream
     
-    if _log_queue is None:
-        return
-    
-    # 종료 신호 전송
-    await _log_queue.put(None)
-    
-    # 워커 태스크 완료 대기
-    if _log_worker_task:
-        try:
-            await asyncio.wait_for(_log_worker_task, timeout=5.0)
-        except asyncio.TimeoutError:
-            _log_worker_task.cancel()
+    # 큐 종료
+    if _log_queue is not None:
+        # 종료 신호 전송
+        await _log_queue.put(None)
+        
+        # 워커 태스크 완료 대기
+        if _log_worker_task:
             try:
-                await _log_worker_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(_log_worker_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                _log_worker_task.cancel()
+                try:
+                    await _log_worker_task
+                except asyncio.CancelledError:
+                    pass
+        
+        _log_queue = None
+        _log_worker_task = None
     
-    _log_queue = None
-    _log_worker_task = None
+    # ⭐ 로그 파일 안전하게 닫기 (큐 없어도 실행)
+    if _log_file_stream is not None:
+        # stdout/stderr는 닫지 않음
+        if _log_file_stream not in (sys.stdout, sys.stderr):
+            try:
+                _log_file_stream.flush()  # 버퍼 비우기
+                _log_file_stream.close()  # 파일 닫기
+                print("✅ Log file closed successfully", file=sys.stderr)
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to close log file: {e}", file=sys.stderr)
+            finally:
+                _log_file_stream = None
+        else:
+            _log_file_stream = None
 
 
 def get_async_logger(name: str) -> structlog.BoundLogger:

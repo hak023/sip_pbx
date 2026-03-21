@@ -1,7 +1,10 @@
 """
-Barge-in Controller
+Barge-in Controller (Legacy — Orchestrator 경로 전용)
 
-TTS 발화 중 사용자 음성 감지(Barge-in)를 제어하는 모듈
+TTS 발화 중 사용자 음성 감지(Barge-in)를 제어하는 모듈.
+Orchestrator(AIOrchestrator)가 사용하며, Pipecat 경로에서는
+pipecat/processors/barge_in_suppress.py 등으로 동일 기능을 처리합니다.
+config.pipeline_engine = "legacy" 일 때만 이 모듈이 사용됩니다.
 """
 
 import asyncio
@@ -14,10 +17,10 @@ logger = structlog.get_logger(__name__)
 
 class BargeInController:
     """
-    Barge-in 제어기
-    
-    TTS 발화 중에는 사용자 음성을 무시하고,
-    TTS 완료 후에만 사용자 음성을 처리합니다.
+    Barge-in 제어기 (Legacy Orchestrator 전용).
+
+    TTS 발화 중에는 사용자 음성을 무시하고, TTS 완료 후에만 사용자 음성을 처리합니다.
+    Pipecat 경로에서는 BargeInSuppressProcessor 등이 대신 사용됩니다.
     """
     
     def __init__(self, silence_threshold: float = 2.0):

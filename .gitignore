@@ -122,4 +122,8 @@ junit.xml
 *.sqlite
 *.sqlite3
 
+# 로컬 런타임 데이터 (통화 녹음·벡터 DB 등 — GitHub에 올리지 않음)
+recordings/
+data/
+
 config/gcp-key.json

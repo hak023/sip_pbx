@@ -1,16 +1,8 @@
-"""API 라우터"""
+"""
+API 라우터 패키지
+"""
 
-from . import auth, calls, knowledge, hitl, metrics, operator, call_history, recordings, ai_insights
+from . import calls
+from . import call_history
 
-__all__ = [
-    "auth",
-    "calls", 
-    "knowledge",
-    "hitl",
-    "metrics",
-    "operator",
-    "call_history",
-    "recordings",
-    "ai_insights",
-]
-
+__all__ = ['calls', 'call_history']

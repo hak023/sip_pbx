@@ -9,7 +9,7 @@ import structlog
 from datetime import datetime
 
 from src.ai_voicebot.knowledge.vector_db import VectorDB
-from src.ai_voicebot.knowledge.chromadb_client import get_chromadb_client, DEFAULT_PERSIST_DIRECTORY
+from src.ai_voicebot.knowledge.chromadb_client import get_vector_db
 from src.ai_voicebot.knowledge.embedder import TextEmbedder
 
 logger = structlog.get_logger(__name__)
@@ -34,13 +34,9 @@ class KnowledgeService:
             embedder: TextEmbedder 인스턴스 (None이면 생성)
             extraction_pending_file: 검토 대기열 JSONL 경로 (§7 PII/검토 워크플로)
         """
-        # VectorDB 초기화 (단일 DB: get_chromadb_client 사용)
+        # VectorDB (단일 DB: get_vector_db 사용. None이면 lazy 시 초기화 실패 시 None 반환)
         if vector_db is None:
-            self.vector_db = get_chromadb_client(
-                persist_directory=DEFAULT_PERSIST_DIRECTORY,
-                collection_name="knowledge_base",
-                client_mode="local",
-            )
+            self.vector_db = get_vector_db()
         else:
             self.vector_db = vector_db
         
@@ -64,8 +60,9 @@ class KnowledgeService:
             return
         
         try:
-            # VectorDB 초기화
-            await self.vector_db.initialize()
+            # VectorDB 초기화 (get_vector_db()로 받은 _VectorDbWrapper는 이미 초기화됨 → skip)
+            if callable(getattr(self.vector_db, "initialize", None)):
+                await self.vector_db.initialize()
             
             self._initialized = True
             logger.info("KnowledgeService initialized")
@@ -96,8 +93,8 @@ class KnowledgeService:
             if not self._initialized:
                 await self.initialize()
             
-            # 임베딩 생성
-            embedding = await self.embedder.embed(text)
+            # 임베딩 생성 (동기 함수)
+            embedding = self.embedder.embed_text(text)
             
             # 문서 ID 생성
             doc_id = f"kb_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
@@ -114,12 +111,12 @@ class KnowledgeService:
                 for key, value in metadata.items():
                     doc_metadata[key] = str(value)
             
-            # VectorDB에 저장
-            await self.vector_db.upsert(
-                doc_id=doc_id,
-                embedding=embedding,
-                text=text,
-                metadata=doc_metadata
+            # VectorDB에 저장 (ChromaDB collection 직접 접근)
+            self.vector_db.collection.upsert(
+                ids=[doc_id],
+                embeddings=[embedding],
+                documents=[text],
+                metadatas=[doc_metadata],
             )
             
             logger.info("Knowledge added", 
@@ -147,9 +144,11 @@ class KnowledgeService:
         call_id: str,
         operator_id: str,
         category: str = "faq",
-        owner_id: Optional[str] = None,
+        owner: Optional[str] = None,
     ) -> Dict:
         """HITL(사람 개입)로 운영자가 알려준 Q&A를 지식 베이스에 저장.
+        
+        KNOWLEDGE_DOC_TYPE_DESIGN 설계: 통화로 적재되는 경우 doc_type = knowledge 고정
         
         Args:
             question: 발신자 질문(또는 HITL 요청 시 질문)
@@ -157,7 +156,7 @@ class KnowledgeService:
             call_id: 통화 ID
             operator_id: 운영자 ID
             category: 카테고리 (기본 faq)
-            owner_id: 착신자/소유자 ID (착신자별 지식 분리용)
+            owner: 착신자/소유자 ID (착신자별 지식 분리용)
             
         Returns:
             {"success": True, "doc_id": str, "category": str} 또는
@@ -168,23 +167,24 @@ class KnowledgeService:
                 await self.initialize()
             # 검색에 활용되도록 질문+답변을 한 텍스트로 저장
             text = f"Q: {question}\nA: {answer}"
-            embedding = await self.embedder.embed(text)
+            embedding = self.embedder.embed_text(text)
             doc_id = f"hitl_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
             doc_metadata = {
                 "category": category,
                 "keywords": "",
                 "created_at": datetime.now().isoformat(),
+                "doc_type": "knowledge",  # 통화로 인한 적재이므로 knowledge 고정
                 "source": "hitl",
                 "call_id": call_id,
                 "operator_id": operator_id,
             }
-            if owner_id:
-                doc_metadata["owner_id"] = owner_id
-            await self.vector_db.upsert(
-                doc_id=doc_id,
-                embedding=embedding,
-                text=text,
-                metadata=doc_metadata,
+            if owner:
+                doc_metadata["owner"] = owner  # owner로 통일
+            self.vector_db.collection.upsert(
+                ids=[doc_id],
+                embeddings=[embedding],
+                documents=[text],
+                metadatas=[doc_metadata],
             )
             logger.info(
                 "HITL knowledge added",
@@ -222,8 +222,8 @@ class KnowledgeService:
             if not self._initialized:
                 await self.initialize()
             
-            # 쿼리 임베딩 생성
-            query_embedding = await self.embedder.embed(query)
+            # 쿼리 임베딩 생성 (동기 함수)
+            query_embedding = self.embedder.embed_text(query)
             
             # VectorDB 검색
             filter_dict = {"category": category} if category else None
@@ -369,7 +369,8 @@ class KnowledgeService:
             if not self._initialized:
                 await self.initialize()
 
-            embedding = await self.embedder.embed(text)
+            # TextEmbedder.embed_text()는 동기 함수
+            embedding = self.embedder.embed_text(text)
 
             metadata = {
                 "doc_type": "capability",
@@ -701,12 +702,12 @@ class KnowledgeService:
                 meta["reviewed_at"] = now
 
             # 업데이트 (text 변경 시 임베딩도 재생성)
-            embedding = await self.embedder.embed(text)
-            await self.vector_db.upsert(
-                doc_id=doc_id,
-                embedding=embedding,
-                text=text,
-                metadata=meta,
+            embedding = self.embedder.embed_text(text)
+            self.vector_db.collection.upsert(
+                ids=[doc_id],
+                embeddings=[embedding],
+                documents=[text],
+                metadatas=[meta],
             )
 
             logger.info("extraction_reviewed", doc_id=doc_id, action=action)
@@ -803,7 +804,7 @@ class KnowledgeService:
                 category = edited_category if edited_category is not None else item.get("category", "기타")
                 if not self._initialized:
                     await self.initialize()
-                embedding = await self.embedder.embed(text)
+                embedding = self.embedder.embed_text(text)
                 doc_id = f"approved_{pending_id}" if action == "approve" else f"edited_{pending_id}"
                 meta = {
                     "call_id": item.get("call_id", ""),
@@ -819,11 +820,11 @@ class KnowledgeService:
                     "reviewed_by": reviewer,
                     "reviewed_at": datetime.now().isoformat(),
                 }
-                await self.vector_db.upsert(
-                    doc_id=doc_id,
-                    embedding=embedding,
-                    text=text,
-                    metadata=meta,
+                self.vector_db.collection.upsert(
+                    ids=[doc_id],
+                    embeddings=[embedding],
+                    documents=[text],
+                    metadatas=[meta],
                 )
             new_status = "approved" if action == "approve" else ("edited" if action == "edit" else "rejected")
             await store.update_status(

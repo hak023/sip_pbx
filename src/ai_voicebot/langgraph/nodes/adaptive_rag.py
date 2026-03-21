@@ -8,10 +8,69 @@ Small-to-Big Retrieval + Contextual Compression:
 """
 
 import structlog
-from typing import List, Dict
+from typing import Dict, List
 from src.ai_voicebot.langgraph.state import ConversationState
+from src.common.call_data_record_logger import log_call_data
+from src.common.sip_owner import normalize_owner_username
 
 logger = structlog.get_logger(__name__)
+
+
+def _merge_dialog_context_for_rag(state: ConversationState, base_query: str) -> str:
+    """
+    STT가 '때 어떻게 가야…'처럼 앞맥락을 떼고 넘기는 경우 RAG 임베딩이 약해지므로
+    최근 고객 발화(또는 직전 AI 한 줄)를 앞에 붙여 검색 쿼리를 보강한다.
+    """
+    q = (base_query or "").strip()
+    if not q:
+        return q
+    words = q.split()
+    # 짧은 조각·대명사성 시작 → 컨텍스트 병합
+    needs_context = (
+        len(words) < 7
+        or q.startswith("때 ")
+        or q.startswith("그래서 ")
+        or q.startswith("거기 ")
+        or ("어떻게" in q and len(q) < 24)
+    )
+    if not needs_context:
+        return q
+    messages = state.get("messages") or []
+    user_snips: List[str] = []
+    for m in messages[-10:]:
+        if (m.get("role") or "").strip() != "user":
+            continue
+        content = (m.get("content") or "").strip()
+        if not content or content == q:
+            continue
+        if len(content) > 200:
+            content = content[:200] + "…"
+        user_snips.append(content)
+    prev_user = user_snips[-1] if user_snips else ""
+    last_ai = ""
+    if not prev_user:
+        for m in reversed(messages[-6:]):
+            if (m.get("role") or "").strip() not in ("assistant", "ai"):
+                continue
+            last_ai = (m.get("content") or "").strip()
+            if last_ai:
+                if len(last_ai) > 140:
+                    last_ai = last_ai[:140] + "…"
+                break
+    prefix = prev_user or last_ai
+    if not prefix:
+        return q
+    merged = f"{prefix} {q}".strip()[:450]
+    if merged != q:
+        logger.info(
+            "adaptive_rag_query_context_merged",
+            call_id=state.get("_call_id") or "",
+            query_preview=q[:80],
+            merged_preview=merged[:120],
+            note="RAG 검색용 쿼리에 최근 대화 맥락 병합",
+        )
+    return merged
+
 
 # 검색 파라미터
 SENTENCE_TOP_K = 6      # 문장 레벨 검색 수
@@ -29,29 +88,36 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
     4. confidence 점수 산출
     """
     import time
-    node_start = time.time()
+    _start = time.time()
 
-    query = state.get("rewritten_query") or state.get("user_query", "")
+    base_q = state.get("rewritten_query") or state.get("user_query", "")
+    query = _merge_dialog_context_for_rag(state, base_q)
     rag_engine = state.get("_rag_engine")
     owner = state.get("_owner")  # 착신번호 기반 테넌트 격리
     call_id = state.get("_call_id") or ""
+    intent = state.get("intent")  # intent별 category 필터 (CHROMADB_CATEGORY_DESIGN)
 
     if not rag_engine or not query:
+        elapsed = time.time() - _start
+        logger.info("timing_segment", segment="adaptive_rag", elapsed_sec=round(elapsed, 3), skip=True)
         return {"rag_results": [], "confidence": 0.0}
 
     try:
-        # 1단계: Small (Sentence) Retrieval (owner_filter로 테넌트 격리)
+        # 1단계: Small (Sentence) Retrieval (owner + intent→category 필터)
         search_start = time.time()
         search_results = await rag_engine.search(
             query,
             owner_filter=owner,
             call_id=call_id or None,
             top_k_override=SENTENCE_TOP_K,
+            intent=intent,
         )
         search_elapsed = time.time() - search_start
 
         if not search_results:
-            elapsed = time.time() - node_start
+            elapsed = time.time() - _start
+            owner_norm = normalize_owner_username(owner or "")
+            logger.info("timing_segment", segment="adaptive_rag", elapsed_sec=round(elapsed, 3), path="no_results")
             logger.info("adaptive_rag_no_results",
                         call=True,
                         call_id=call_id,
@@ -62,6 +128,24 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
                         search_elapsed=f"{search_elapsed:.3f}s",
                         total_elapsed=f"{elapsed:.3f}s",
                         note="Vector 검색 결과 없음")
+            logger.info(
+                "adaptive_rag_empty_debug",
+                call_id=call_id or "",
+                owner_state=owner or "",
+                owner_normalized=owner_norm,
+                intent=intent or "",
+                note="Chroma metadata.owner·의도별 category 필터·임계값 점검",
+            )
+            log_call_data(
+                call_id or "",
+                "rag",
+                "rag_search_done",
+                query=query[:300],
+                result_count=0,
+                owner_filter=owner,
+                confidence=0.0,
+                search_elapsed_sec=round(search_elapsed, 3),
+            )
             return {"rag_results": [], "confidence": 0.0}
 
         # 2단계: Small-to-Big Expansion
@@ -79,7 +163,8 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
         avg_score = sum(scores) / len(scores) if scores else 0.0
         confidence = min(1.0, avg_score * 1.1)
 
-        elapsed = time.time() - node_start
+        elapsed = time.time() - _start
+        logger.info("timing_segment", segment="adaptive_rag", elapsed_sec=round(elapsed, 3), search_elapsed_sec=round(search_elapsed, 3))
         top_doc_preview = ""
         if compressed:
             first_text = compressed[0].get("text", "") if isinstance(compressed[0], dict) else getattr(compressed[0], "text", "")
@@ -113,6 +198,19 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
                    confidence=f"{confidence:.3f}",
                    search_elapsed=f"{search_elapsed:.3f}s",
                    total_elapsed=f"{elapsed:.3f}s")
+        log_call_data(
+            call_id or "",
+            "rag",
+            "rag_search_done",
+            query=query[:300],
+            result_count=len(search_results),
+            expanded_count=len(expanded_docs),
+            compressed_count=len(compressed),
+            owner_filter=owner,
+            confidence=round(confidence, 3),
+            search_elapsed_sec=round(search_elapsed, 3),
+            total_elapsed_sec=round(elapsed, 3),
+        )
 
         return {
             "rag_results": compressed,
@@ -120,6 +218,8 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
         }
 
     except Exception as e:
+        elapsed = time.time() - _start
+        logger.info("timing_segment", segment="adaptive_rag", elapsed_sec=round(elapsed, 3), error=str(e))
         logger.error("adaptive_rag_error", call=True, progress="rag", error=str(e), exc_info=True)
         return {"rag_results": [], "confidence": 0.0}
 

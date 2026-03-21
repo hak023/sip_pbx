@@ -2,14 +2,46 @@
 Google Cloud Text-to-Speech gRPC Client
 
 텍스트 → 음성 스트리밍 생성
+- Chirp 등 ko-KR 전용 보이스는 language_code가 반드시 ko-KR/ko-kr이어야 하므로,
+  설정값 "ko" 등은 한 곳에서 정규화합니다.
 """
 
 from google.cloud import texttospeech
 import asyncio
+import re
 from typing import AsyncGenerator, Optional
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+# 한국어 locale 정규형 (Google TTS/Chirp는 ko-kr만 허용)
+TTS_LANGUAGE_KO_KR = "ko-KR"
+
+# "ko" 계열로 볼 값들 (정규화 시 ko-KR로 통일)
+_KO_VARIANTS_PATTERN = re.compile(
+    r"^ko[-_]?kr$|^ko$",
+    re.IGNORECASE
+)
+
+
+def normalize_tts_language_code(language_code: Optional[str], voice_name: Optional[str] = None) -> str:
+    """TTS용 language_code 정규화. Chirp 등 ko-KR 전용 보이스와 맞추기 위함.
+
+    - None/빈 문자열/공백만 → "ko-KR"
+    - "ko", "ko-kr", "ko_kr", "koKR", "Ko-KR" 등 → "ko-KR"
+    - voice_name이 "ko-KR-..." 또는 "ko-kr-..." 이고 language가 ko 계열이면 → "ko-KR"
+    - 그 외는 그대로 반환 (이미 올바른 경우).
+    """
+    raw = (language_code or "").strip()
+    if not raw:
+        return TTS_LANGUAGE_KO_KR
+    if _KO_VARIANTS_PATTERN.match(raw):
+        return TTS_LANGUAGE_KO_KR
+    voice = (voice_name or "").strip()
+    if voice and (voice.startswith("ko-KR-") or voice.startswith("ko-kr-")):
+        if raw.lower() in ("ko", "ko-kr", "ko_kr", "kokr"):
+            return TTS_LANGUAGE_KO_KR
+    return raw
 
 
 class TTSClient:
@@ -32,9 +64,12 @@ class TTSClient:
         self.config = config
         self.client = texttospeech.TextToSpeechClient()
         
-        # 음성 설정
+        # 음성 설정 (language_code는 정규화 함수로 한 곳에서 통일)
         voice_name = config.get("voice_name", "ko-KR-Chirp3-HD-Kore")
-        language_code = config.get("language_code", "ko-KR")
+        language_code = normalize_tts_language_code(
+            config.get("language_code") or "ko-KR",
+            voice_name=voice_name,
+        )
         
         # SSML Gender 자동 결정
         # Chirp3 HD 음성은 이름 기반으로 성별 결정
@@ -98,10 +133,11 @@ class TTSClient:
         self._stop_flag = False
         
         try:
-            # TTS 요청
+            # TTS 요청 (동기 API를 executor에서 실행해 이벤트 루프 블로킹 방지)
             synthesis_input = texttospeech.SynthesisInput(text=text)
             
-            # 동기 API를 비동기로 실행
+            import time as _time
+            _t0 = _time.monotonic()
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
@@ -111,10 +147,17 @@ class TTSClient:
                     audio_config=self.audio_config
                 )
             )
+            _tts_api_ms = int((_time.monotonic() - _t0) * 1000)
             
             # 오디오 데이터를 청크로 분할하여 스트리밍
             audio_data = response.audio_content
             
+            logger.info("TTS synthesis done, streaming chunks",
+                       text_length=len(text),
+                       audio_bytes=len(audio_data),
+                       api_latency_ms=_tts_api_ms)
+            
+            first_chunk = True
             for i in range(0, len(audio_data), chunk_size):
                 # 중지 플래그 확인 (Barge-in)
                 if self._stop_flag:
@@ -122,6 +165,11 @@ class TTSClient:
                     break
                 
                 chunk = audio_data[i:i + chunk_size]
+                if first_chunk:
+                    logger.info("TTS first chunk yielding",
+                               chunk_size=len(chunk),
+                               api_latency_ms=_tts_api_ms)
+                    first_chunk = False
                 yield chunk
                 
                 # 스트리밍 효과를 위한 짧은 대기

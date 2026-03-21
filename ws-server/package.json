@@ -1,0 +1,14 @@
+{
+  "name": "ai-voicebot-ws-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Socket.IO 서버 - 대시보드 실시간 연결 (포트 8001)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "socket.io": "^4.7.0"
+  }
+}

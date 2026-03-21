@@ -79,7 +79,7 @@ class SIPEndpoint:
         # 녹음 설정 (config.yaml에서 가져오기)
         # recording 설정은 ai_voicebot 하위에 있음
         ai_voicebot_config = getattr(config, 'ai_voicebot', None)
-        logger.info("config_debug_step1", has_ai_voicebot=ai_voicebot_config is not None)
+        logger.debug("config_debug_step1", has_ai_voicebot=ai_voicebot_config is not None)
         
         recording_config = None
         gcp_credentials_path = None
@@ -88,18 +88,18 @@ class SIPEndpoint:
         
         if ai_voicebot_config:
             recording_config = getattr(ai_voicebot_config, 'recording', None)
-            logger.info("config_debug_step2", has_recording=recording_config is not None)
+            logger.debug("config_debug_step2", has_recording=recording_config is not None)
             
             # GCP 인증 파일 경로
             google_cloud_config = getattr(ai_voicebot_config, 'google_cloud', None)
             if google_cloud_config:
                 gcp_credentials_path = getattr(google_cloud_config, 'credentials_path', None)
-                logger.info("config_debug_step3", gcp_path=gcp_credentials_path)
+                logger.debug("config_debug_step3", gcp_path=gcp_credentials_path)
         
         # STT 설정
         if recording_config:
             post_stt_config = getattr(recording_config, 'post_processing_stt', None)
-            logger.info("config_debug_step4", has_post_stt=post_stt_config is not None)
+            logger.debug("config_debug_step4", has_post_stt=post_stt_config is not None)
             
             if post_stt_config:
                 enable_post_stt = getattr(post_stt_config, 'enabled', False)
@@ -144,7 +144,7 @@ class SIPEndpoint:
                     logger.info(f"✅ [Knowledge Import] Step 3/4 completed ({step3_time:.3f}s)")
                     
                     logger.info("🔄 [Knowledge Import] Step 4/4: Importing get_chromadb_client...")
-                    from src.ai_voicebot.knowledge.chromadb_client import get_chromadb_client
+                    from src.ai_voicebot.knowledge.chromadb_client import get_vector_db, get_chroma_persist_path
                     step4_time = time.time() - import_start - step1_time - step2_time - step3_time
                     logger.info(f"✅ [Knowledge Import] Step 4/4 completed ({step4_time:.3f}s)")
                     
@@ -172,7 +172,7 @@ class SIPEndpoint:
                         "temperature": _get('temperature', 0.5),
                         "max_tokens": _get('max_output_tokens', 150),
                         "max_output_tokens": _get('max_output_tokens', 150),
-                        "judgment_max_output_tokens": _get('judgment_max_output_tokens', 1024),
+                        "judgment_max_output_tokens": _get('judgment_max_output_tokens', 2048),
                         "judgment_max_input_chars": _get('judgment_max_input_chars', 6000),
                         "top_p": _get('top_p', 1.0),
                         "top_k": _get('top_k', 1),
@@ -199,29 +199,20 @@ class SIPEndpoint:
                         )
                     logger.info("🔧 [Knowledge Extraction] Embedder initialized")
                     
-                    # VectorDB 초기화
+                    # VectorDB 초기화 (단일 클라이언트: get_vector_db()가 동기 초기화 수행)
                     logger.info("🔧 [Knowledge Extraction] Initializing ChromaDB...")
                     chromadb_init_start = time.time()
-                    
-                    vector_db_config = getattr(config.ai_voicebot, 'vector_db', None)
-                    # vector_db도 dict일 수 있음
-                    if isinstance(vector_db_config, dict):
-                        chromadb_config = vector_db_config.get('chromadb', {})
-                        persist_dir = chromadb_config.get('persist_directory', './data/chromadb')
-                    else:
-                        chromadb_config = getattr(vector_db_config, 'chromadb', None) if vector_db_config else None
-                        persist_dir = getattr(chromadb_config, 'persist_directory', './data/chromadb') if chromadb_config else './data/chromadb'
-                    
+                    persist_dir = get_chroma_persist_path()
                     logger.info("🔄 [ChromaDB Init] Using single ChromaDB client (get_chromadb_client)...",
                                persist_directory=persist_dir)
-                    
-                    vector_db = get_chromadb_client(
-                        persist_directory=persist_dir,
-                        collection_name="knowledge_base",
-                        client_mode="local",
-                    )
-                    
+                    vector_db = get_vector_db()
                     chromadb_elapsed = time.time() - chromadb_init_start
+                    if not vector_db:
+                        raise RuntimeError(
+                            "ChromaDB sync init failed (get_vector_db returned None). "
+                            "위 직전 로그에 'ChromaDB sync init failed' 원인 표시. "
+                            "스키마 오류(no such column: collections.topic) 시: pip install 'chromadb>=0.5.0' 또는 data/chroma 폴더 삭제 후 재시작. docs/reports/CHROMA_COLLECTIONS_TOPIC_ERROR.md"
+                        )
                     logger.info("✅ [Knowledge Extraction] ChromaDB initialized",
                                elapsed=f"{chromadb_elapsed:.3f}s")
                     
@@ -284,10 +275,14 @@ class SIPEndpoint:
                              has_config=knowledge_extraction_config is not None,
                              enabled=getattr(knowledge_extraction_config, 'enabled', None) if knowledge_extraction_config else None)
         
+        # ⭐ AI Orchestrator 전달 (config._ai_orchestrator에서 가져오기)
+        ai_orchestrator_from_config = getattr(config, '_ai_orchestrator', None)
+        
         self._call_manager = CallManager(
             call_repository=self._call_repository,
             media_session_manager=self._media_session_manager,
             b2bua_ip=config.sip.listen_ip,
+            ai_orchestrator=ai_orchestrator_from_config,  # ⭐ AI Orchestrator 전달
             no_answer_timeout=config.sip.timers.no_answer_timeout,
             knowledge_extractor=knowledge_extractor,  # ⭐ Knowledge Extractor 전달
             gcp_credentials_path=gcp_credentials_path,
@@ -376,9 +371,18 @@ class SIPEndpoint:
             t4=config.sip.timers.t4
         )
         
-        # CDR Writer 초기화 (통화 이력 기록)
-        self._cdr_writer = CDRWriter(output_dir="./cdr")
-        logger.info("CDR writer initialized for SIP Endpoint", output_dir="./cdr")
+        # CDR Writer 초기화 (통화 이력 기록, config에서 pretty_json 반영)
+        cdr_output_dir = getattr(config.cdr, "output_dir", "./cdr") or "./cdr"
+        cdr_pretty_json = getattr(config.cdr, "pretty_json", False)
+        self._cdr_writer = CDRWriter(
+            output_dir=cdr_output_dir,
+            pretty_json=cdr_pretty_json,
+        )
+        logger.info(
+            "CDR writer initialized for SIP Endpoint",
+            output_dir=cdr_output_dir,
+            pretty_json=cdr_pretty_json,
+        )
         
         # SIP 트래픽 로그 파일 설정
         self._setup_sip_traffic_log()
@@ -945,12 +949,16 @@ class SIPEndpoint:
                     from src.websocket import manager as ws_manager
                     caller_uri = f"sip:{call_info.get('caller_username', '')}@{call_info.get('caller_addr', ('', 0))[0]}"
                     callee_uri = f"sip:{call_info.get('callee_username', '')}@{call_info.get('callee_addr', ('', 0))[0]}"
+                    _now = datetime.now().isoformat()
+                    _at = call_info.get("answer_time")
                     asyncio.create_task(ws_manager.emit_call_started(
                         original_call_id,
                         {
                             "caller": caller_uri,
                             "callee": callee_uri,
                             "is_ai_handled": call_info.get("ai_mode_activated", False),
+                            "timestamp": _now,
+                            "started_at": _at.isoformat() if _at and hasattr(_at, "isoformat") else _now,
                         },
                     ))
                 except Exception as e:
@@ -1477,6 +1485,9 @@ class SIPEndpoint:
                            call_id=call_id,
                            caller=call_info.get('caller_username'),
                            callee='AI')
+                # AI 인사말이 ACK 이후에 재생되도록 대기 중인 이벤트 해제
+                if self.call_manager:
+                    self.call_manager.notify_call_established(call_id)
                 
                 return  # callee에게 ACK를 relay하지 않음
             
@@ -1679,7 +1690,7 @@ class SIPEndpoint:
                 caller_endpoint=caller_rtp_endpoint,
                 callee_endpoint=callee_rtp_endpoint,
                 bind_ip=rtp_bind_ip,  # ✅ 설정 가능한 bind IP
-                ai_orchestrator=None,  # 사용자간 통화는 AI 미사용
+                ai_orchestrator=self.call_manager.ai_orchestrator if self.call_manager else None,  # AI 전달
                 sip_recorder=sip_recorder  # ✅ 녹음 활성화!
             )
             
@@ -2045,6 +2056,15 @@ class SIPEndpoint:
         
         logger.info("cleanup_call_start", call_id=call_id, original_call_id=original_call_id, b2bua_call_id=new_call_id)
 
+        # ⭐ BYE 수신 시 Pipecat Pipeline 즉시 취소 (LLM/TTS 계속 동작 방지)
+        if self._call_manager:
+            try:
+                cancelled = await self._call_manager.cancel_pipeline(original_call_id)
+                if cancelled:
+                    logger.info("pipecat_pipeline_cancelled_on_bye", call_id=original_call_id)
+            except Exception as e:
+                logger.warning("pipecat_cancel_on_cleanup_error", call_id=original_call_id, error=str(e))
+
         # 대시보드 실시간 통화: Repository에서 제거 (활성 목록에서 사라지도록)
         if self.call_manager:
             self.call_manager.remove_b2bua_call(original_call_id)
@@ -2096,58 +2116,73 @@ class SIPEndpoint:
                              transaction_id=bye_transaction_id,
                              error=str(e))
         
-        # CDR 작성 (통화 이력 기록)
+        # CDR 작성 (통화 이력 기록) — 항상 original_call_id 사용(대시보드·녹음·인사말과 일치)
         try:
-            # 통화 시작/종료 시간 계산
             start_time = call_info.get('start_time', datetime.now())
             end_time = datetime.now()
-            
-            # start_time이 문자열인 경우 처리
             if isinstance(start_time, str):
                 try:
                     start_time = datetime.fromisoformat(start_time)
-                except:
+                except Exception:
                     start_time = datetime.now()
-            
+
             duration_seconds = (end_time - start_time).total_seconds()
-            
-            caller_uri = f"sip:{call_info.get('caller_username', 'unknown')}@{call_info.get('caller_addr', ['unknown'])[0]}"
-            callee_uri = f"sip:{call_info.get('callee_username', 'unknown')}@{call_info.get('callee_addr', ['unknown'])[0]}"
-            
+            answer_time = call_info.get('answer_time')
+            setup_time = (answer_time - start_time).total_seconds() if (answer_time and start_time) else None
+
+            caller_addr = call_info.get('caller_addr')
+            callee_addr = call_info.get('callee_addr')
+            caller_ip = str(caller_addr[0]) if (caller_addr and len(caller_addr) > 0) else None
+            callee_ip = str(callee_addr[0]) if (callee_addr and len(callee_addr) > 0) else None
+            caller_uri = f"sip:{call_info.get('caller_username', 'unknown')}@{caller_ip or 'unknown'}"
+            callee_uri = f"sip:{call_info.get('callee_username', 'unknown')}@{callee_ip or 'unknown'}"
+
             logger.info("cdr_flow_step_1_writing_cdr",
-                       call_id=call_id,
+                       call_id=original_call_id,
                        caller=caller_uri,
                        callee=callee_uri,
                        duration=duration_seconds,
                        message="[CDR Flow] Writing CDR from SIP Endpoint")
-            
+
             cdr = CDR(
-                call_id=call_id,
-                caller=caller_uri,  # ✅ caller_uri → caller
-                callee=callee_uri,  # ✅ callee_uri → callee
+                call_id=original_call_id,
+                caller=caller_uri,
+                callee=callee_uri,
                 start_time=start_time,
-                answer_time=call_info.get('answer_time'),
+                answer_time=answer_time,
                 end_time=end_time,
-                duration=duration_seconds,  # ✅ duration_seconds → duration
-                termination_reason=TerminationReason.NORMAL,  # ✅ 문자열 → Enum
-                # 🎙️ 녹음 정보 추가
+                duration=duration_seconds,
+                setup_time=setup_time,
+                termination_reason=TerminationReason.NORMAL,
+                caller_ip=caller_ip,
+                callee_ip=callee_ip,
                 has_recording=recording_metadata is not None,
                 recording_path=recording_metadata.get('files', {}).get('mixed') if recording_metadata else None,
                 recording_duration=recording_metadata.get('duration') if recording_metadata else None,
                 recording_type=recording_metadata.get('type') if recording_metadata else None,
             )
-            
+            # AI 인사말 Phase1/Phase2 (원본 call_id 기준으로 저장됨)
+            try:
+                from src.ai_voicebot.greeting_store import pop_greeting
+                greeting = pop_greeting(original_call_id)
+                if greeting.get("greeting_phase1"):
+                    cdr.metadata["greeting_phase1"] = greeting["greeting_phase1"]
+                if greeting.get("greeting_phase2"):
+                    cdr.metadata["greeting_phase2"] = greeting["greeting_phase2"]
+            except Exception:
+                pass
             self._cdr_writer.write_cdr(cdr)
             
+            cdr_path = self._cdr_writer.output_dir / datetime.now().strftime(self._cdr_writer.filename_pattern)
             logger.info("cdr_flow_step_2_cdr_written_successfully",
-                       call_id=call_id,
-                       cdr_file=f"./cdr/cdr-{datetime.now().strftime('%Y-%m-%d')}.jsonl",
+                       call_id=original_call_id,
+                       cdr_file=cdr_path.as_posix(),
                        duration=duration_seconds,
                        message="[CDR Flow] CDR written successfully")
-            
+        
         except Exception as e:
             logger.error("cdr_flow_error_cdr_write_failed",
-                        call_id=call_id,
+                        call_id=original_call_id,
                         error=str(e),
                         message="[CDR Flow] CDR write error from SIP Endpoint",
                         exc_info=True)
@@ -2935,11 +2970,17 @@ class SIPEndpoint:
                 return
             
             caller_username = call_info.get('caller_username')
-            callee_username = call_info.get('callee_username')
+            callee_username = (
+                call_info.get('callee_username')
+                or call_info.get('callee')
+                or call_info.get('to_username')
+                or ""
+            )
             
             logger.warning("no_answer_timeout_activating_ai",
                           call_id=call_id,
                           callee=callee_username,
+                          callee_from_call_info=call_info.get('callee_username'),
                           timeout=self.config.sip.timers.no_answer_timeout)
             
             # B2BUA IP 가져오기
@@ -3028,14 +3069,33 @@ class SIPEndpoint:
                 logger.info("🔄 [AI Takeover] Enabling AI mode on RTP Worker",
                            call_id=call_id)
                 
-                # RTP Worker에 AI 모드 연결
+                # ✅ P0 FIX: AI 모드에서는 Callee 측 RTP/RTCP remote_endpoint를 Caller로 명시적 재설정
+                # AI TTS 출력이 Caller로 가도록 보장 + rtp_relay_skip_invalid_remote 방지
+                # (상담원 takeover 시 switch_to_bridge_mode → set_bridge_mode에서 별도 bridge 소켓 사용하므로
+                #  이 설정은 AI 모드 전용이며, takeover 후에는 relay_mode=BRIDGE로 bridge_callee_transport만 사용)
+                if "callee_audio_rtp" in rtp_worker.protocols:
+                    rtp_worker.protocols["callee_audio_rtp"].remote_endpoint = rtp_worker.caller_endpoint
+                    rtp_worker.protocols["callee_audio_rtp"].remote_port = rtp_worker.caller_endpoint.port
+                if "callee_audio_rtcp" in rtp_worker.protocols:
+                    rtp_worker.protocols["callee_audio_rtcp"].remote_endpoint = rtp_worker.caller_rtcp_endpoint
+                    rtp_worker.protocols["callee_audio_rtcp"].remote_port = rtp_worker.caller_rtcp_endpoint.port
+                if "callee_audio_rtp" in rtp_worker.protocols:
+                    logger.info("✅ [AI Takeover] Callee Transport redirected to Caller",
+                               call_id=call_id,
+                               caller_endpoint=f"{rtp_worker.caller_endpoint.ip}:{rtp_worker.caller_endpoint.port}",
+                               note="TTS 오디오가 Caller로 정확히 전송되도록 설정")
+                
+                # ✅ P0: AI takeover 시 항상 ai_mode=True 설정 (Caller RTP → on_packet_received → 파이프라인 전달)
+                # ai_orchestrator/pipecat_builder가 None이어도 200 OK를 보내면 Caller RTP가 오므로,
+                # relay 대상(callee)이 없을 때 relay 시도하지 않고 on_packet_received로 넘기려면 ai_mode 필수
+                rtp_worker.ai_mode = True
+                
+                # RTP Worker에 파이프라인 연결 (있으면 Pipecat/Legacy 연결)
                 if self.call_manager and self.call_manager.ai_orchestrator:
                     # Pipecat Pipeline Builder가 있으면 Pipecat 모드
                     if self.call_manager.pipecat_builder:
                         # Pipecat은 call_manager.handle_no_answer_timeout에서
-                        # rtp_worker.enable_pipecat_mode()를 호출하므로
-                        # 여기서는 기본 ai_mode만 활성화
-                        rtp_worker.ai_mode = True
+                        # rtp_worker.enable_pipecat_mode()를 호출
                         logger.info("✅ [AI Takeover] Pipecat mode - RTP Worker ready",
                                    call_id=call_id)
                     else:
@@ -3044,16 +3104,18 @@ class SIPEndpoint:
                             self.call_manager.ai_orchestrator
                         )
                         
-                        # AI Orchestrator에 RTP 전송 콜백 연결
+                        # AI Orchestrator에 RTP 전송 콜백 연결 (동기 send_ai_audio를 executor에서 실행해 이벤트 루프 블로킹 방지)
+                        _worker = rtp_worker
+                        _loop = asyncio.get_event_loop()
                         async def _rtp_send_wrapper(audio_data: bytes):
-                            rtp_worker.send_ai_audio(audio_data)
+                            await _loop.run_in_executor(None, lambda: _worker.send_ai_audio(audio_data))
                         
                         self.call_manager.ai_orchestrator.set_rtp_callback(_rtp_send_wrapper)
                         
                         logger.info("✅ [AI Takeover] Legacy mode - RTP Worker + callback connected",
                                    call_id=call_id)
                 else:
-                    logger.warning("🔄 [AI Takeover] AI Orchestrator not available",
+                    logger.warning("🔄 [AI Takeover] AI Orchestrator not available (caller RTP will still go to on_packet_received)",
                                  call_id=call_id)
                 
                 # 🎯 Step 3.5-A: 200 OK 전송 **직전**에 STUN Binding Request를 UAC에게 전송

@@ -1,293 +1,151 @@
-"""AI Outbound Call API
-
-AI 아웃바운드 콜 요청 생성, 조회, 취소, 재시도 API
 """
+아웃바운드 콜 요청 API.
+
+- POST /api/outbound/: 발신 요청 생성
+- GET /api/outbound/: 목록 조회 (state 필터 지원)
+- GET /api/outbound/stats: 통계
+- POST /api/outbound/{outbound_id}/cancel: 취소
+
+발신 요청 생성 시 대시보드 활성 통화 목록에 등록하고 call_data_record 로그에 기록.
+취소 시 활성 통화에서 해제하고 로그 기록.
+"""
+
+import time
+import uuid
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, HTTPException, Query
-from typing import Optional, List
-from datetime import datetime
 from pydantic import BaseModel, Field
-import structlog
 
-logger = structlog.get_logger(__name__)
-router = APIRouter()
+router = APIRouter(prefix="/api/outbound", tags=["outbound"])
 
 
-# =========================================================================
-# Request / Response Models
-# =========================================================================
-
-class OutboundCallCreateRequest(BaseModel):
-    """아웃바운드 콜 요청 생성"""
-    caller_number: str = Field(..., description="발신번호")
-    callee_number: str = Field(..., description="착신번호")
-    purpose: str = Field(..., description="통화 목적")
-    questions: List[str] = Field(..., min_length=1, description="확인 필요 사항")
-    caller_display_name: Optional[str] = Field(default="", description="발신자 표시명")
-    max_duration: Optional[int] = Field(default=0, ge=0, le=1800, description="최대 통화 시간 (초)")
-    retry_on_no_answer: bool = Field(default=True, description="미응답 시 재시도")
-
-
-class OutboundCallCreateResponse(BaseModel):
-    """아웃바운드 콜 생성 응답"""
-    outbound_id: str
-    state: str
-    created_at: str
-    message: str
-
-
-class QuestionAnswerEntry(BaseModel):
-    """개별 확인 사항 응답"""
-    question_id: str
-    question_text: str
-    status: str
-    answer_text: Optional[str] = None
-    answer_summary: Optional[str] = None
-    confidence: float = 0.0
-
-
-class TranscriptEntryModel(BaseModel):
-    """대화록 엔트리"""
-    timestamp: float
-    speaker: str
-    text: str
-
-
-class OutboundCallResultModel(BaseModel):
-    """통화 결과"""
-    answers: List[QuestionAnswerEntry] = []
-    summary: str = ""
-    task_completed: bool = False
-    transcript: List[TranscriptEntryModel] = []
-    duration_seconds: int = 0
-    ai_turns: int = 0
-    customer_turns: int = 0
-
-
-class OutboundCallEntry(BaseModel):
-    """아웃바운드 콜 항목"""
-    outbound_id: str
-    call_id: Optional[str] = None
-    caller_number: str
-    callee_number: str
-    purpose: str
-    questions: List[str] = []
-    caller_display_name: str = ""
-    max_duration: int = 180
-    state: str
-    created_at: Optional[str] = None
-    started_at: Optional[str] = None
-    answered_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    result: Optional[OutboundCallResultModel] = None
-    attempt_count: int = 0
-    failure_reason: Optional[str] = None
-
-
-class OutboundCallListResponse(BaseModel):
-    """아웃바운드 콜 목록 응답"""
-    calls: List[OutboundCallEntry]
-    total: int
-    active_count: int
-
-
-class OutboundCallStatsResponse(BaseModel):
-    """아웃바운드 콜 통계"""
-    total_calls: int = 0
-    completed_count: int = 0
-    task_completed_count: int = 0
-    success_rate: float = 0.0
-    avg_duration_seconds: float = 0
-    no_answer_count: int = 0
-    busy_count: int = 0
-    active_count: int = 0
-    queue_size: int = 0
-
-
-# =========================================================================
-# Outbound Manager 접근 헬퍼
-# =========================================================================
-
-_outbound_manager_ref = None
-
-
-def set_outbound_manager(manager):
-    """OutboundCallManager 참조 설정"""
-    global _outbound_manager_ref
-    _outbound_manager_ref = manager
-    logger.info("outbound_api_manager_set")
-
-
-def _get_outbound_manager():
-    """OutboundCallManager 인스턴스 가져오기"""
-    return _outbound_manager_ref
-
-
-# =========================================================================
-# API Endpoints
-# =========================================================================
-
-@router.post("/", response_model=OutboundCallCreateResponse, status_code=202)
-async def create_outbound_call(request: OutboundCallCreateRequest):
-    """아웃바운드 콜 요청 생성"""
-    manager = _get_outbound_manager()
-    if not manager:
-        raise HTTPException(status_code=503, detail="Outbound call service not available")
-    
+def _register_outbound_as_active(outbound_id: str, caller_number: str, callee_number: str) -> None:
+    """대시보드 활성 통화 목록에 아웃바운드 요청 등록."""
     try:
-        record = await manager.create_call(
-            caller_number=request.caller_number,
-            callee_number=request.callee_number,
-            purpose=request.purpose,
-            questions=request.questions,
-            caller_display_name=request.caller_display_name or "",
-            max_duration=request.max_duration or 0,
-            retry_on_no_answer=request.retry_on_no_answer,
+        from src.api.routers.calls import register_active_call
+        register_active_call(
+            outbound_id,
+            caller=caller_number,
+            callee=callee_number,
+            is_ai_handled=True,
         )
-        
-        return OutboundCallCreateResponse(
-            outbound_id=record.outbound_id,
-            state=record.state.value,
-            created_at=record.created_at.isoformat(),
-            message="아웃바운드 콜이 요청되었습니다.",
-        )
-    except Exception as e:
-        logger.error("outbound_create_error", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        pass
 
 
-@router.get("/", response_model=OutboundCallListResponse)
-async def list_outbound_calls(
-    state: Optional[str] = Query(None, description="상태 필터"),
-    limit: int = Query(50, ge=1, le=200),
-):
-    """아웃바운드 콜 목록 조회 (활성 + 이력)"""
-    manager = _get_outbound_manager()
-    if not manager:
-        return OutboundCallListResponse(calls=[], total=0, active_count=0)
-    
-    active = manager.get_active_calls()
-    history = manager.get_call_history(limit=limit)
-    all_calls = active + history
-    
+def _unregister_outbound_from_active(outbound_id: str) -> None:
+    """대시보드 활성 통화 목록에서 아웃바운드 제거."""
+    try:
+        from src.api.routers.calls import unregister_active_call
+        unregister_active_call(outbound_id)
+    except Exception:
+        pass
+
+
+def _log_outbound_event(outbound_id: str, event: str, **kwargs: Any) -> None:
+    """call_data_record 로그에 아웃바운드 이벤트 기록."""
+    try:
+        from src.common.call_data_record_logger import log_call_data
+        log_call_data(outbound_id, "call_event", event, **kwargs)
+    except Exception:
+        pass
+
+# 인메모리 저장소 (실제 아웃바운드 엔진 연동 전)
+_store: Dict[str, Dict[str, Any]] = {}
+
+
+class OutboundCreate(BaseModel):
+    caller_number: str = Field(..., min_length=1)
+    callee_number: str = Field(..., min_length=1)
+    purpose: str = Field(..., min_length=1)
+    questions: List[str] = Field(default_factory=list, min_length=1)
+    caller_display_name: Optional[str] = None
+    max_duration: int = Field(default=180, ge=30, le=1800)
+    retry_on_no_answer: bool = True
+
+
+@router.post("/")
+async def create_outbound(body: OutboundCreate) -> Dict[str, Any]:
+    """아웃바운드 발신 요청 생성."""
+    outbound_id = str(uuid.uuid4())
+    now = time.time()
+    _store[outbound_id] = {
+        "outbound_id": outbound_id,
+        "call_id": None,
+        "caller_number": body.caller_number,
+        "callee_number": body.callee_number,
+        "purpose": body.purpose,
+        "questions": body.questions,
+        "caller_display_name": body.caller_display_name or "",
+        "state": "queued",
+        "created_at": now,
+        "started_at": None,
+        "answered_at": None,
+        "completed_at": None,
+        "attempt_count": 0,
+        "failure_reason": None,
+        "result": None,
+        "max_duration": body.max_duration,
+        "retry_on_no_answer": body.retry_on_no_answer,
+    }
+    # 대시보드 활성 통화 목록에 표시 + call_data_record 로그
+    _register_outbound_as_active(outbound_id, body.caller_number, body.callee_number)
+    _log_outbound_event(
+        outbound_id,
+        "outbound_request_created",
+        caller_number=body.caller_number,
+        callee_number=body.callee_number,
+        purpose=body.purpose,
+        caller_display_name=body.caller_display_name or "",
+    )
+    return {"outbound_id": outbound_id}
+
+
+@router.get("/")
+async def list_outbound(state: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """아웃바운드 목록 (state 필터 선택)."""
+    calls = list(_store.values())
     if state:
-        all_calls = [c for c in all_calls if c.get("state") == state]
-    
-    entries = []
-    for c in all_calls[:limit]:
-        try:
-            entries.append(OutboundCallEntry(**c))
-        except Exception:
-            pass
-    
-    return OutboundCallListResponse(
-        calls=entries,
-        total=len(all_calls),
-        active_count=len(active),
-    )
+        calls = [c for c in calls if c.get("state") == state]
+    # 최신순
+    calls.sort(key=lambda c: c.get("created_at") or 0, reverse=True)
+    return {"calls": calls}
 
 
-@router.get("/active", response_model=OutboundCallListResponse)
-async def list_active_outbound_calls():
-    """활성 아웃바운드 콜만 조회"""
-    manager = _get_outbound_manager()
-    if not manager:
-        return OutboundCallListResponse(calls=[], total=0, active_count=0)
-    
-    active = manager.get_active_calls()
-    entries = []
-    for c in active:
-        try:
-            entries.append(OutboundCallEntry(**c))
-        except Exception:
-            pass
-    
-    return OutboundCallListResponse(
-        calls=entries,
-        total=len(active),
-        active_count=len(active),
-    )
-
-
-@router.get("/stats", response_model=OutboundCallStatsResponse)
-async def get_outbound_stats():
-    """아웃바운드 콜 통계"""
-    manager = _get_outbound_manager()
-    if not manager:
-        return OutboundCallStatsResponse()
-    
-    stats = manager.get_stats()
-    return OutboundCallStatsResponse(**stats)
-
-
-@router.get("/{outbound_id}")
-async def get_outbound_call(outbound_id: str):
-    """개별 아웃바운드 콜 상세"""
-    manager = _get_outbound_manager()
-    if not manager:
-        raise HTTPException(status_code=404, detail="Outbound call not found")
-    
-    record = manager.get_call(outbound_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Outbound call not found")
-    
-    return record.to_dict()
-
-
-@router.get("/{outbound_id}/result")
-async def get_outbound_result(outbound_id: str):
-    """통화 결과 조회 (답변 + 대화록 + 요약)"""
-    manager = _get_outbound_manager()
-    if not manager:
-        raise HTTPException(status_code=404, detail="Outbound call not found")
-    
-    record = manager.get_call(outbound_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Outbound call not found")
-    
-    data = record.to_dict()
-    if not data.get("result"):
-        raise HTTPException(status_code=404, detail="Result not yet available")
-    
+@router.get("/stats")
+async def outbound_stats() -> Dict[str, Any]:
+    """아웃바운드 통계."""
+    calls = list(_store.values())
+    completed = [c for c in calls if c.get("state") == "completed"]
     return {
-        "outbound_id": data["outbound_id"],
-        "state": data["state"],
-        "caller_number": data["caller_number"],
-        "callee_number": data["callee_number"],
-        "purpose": data["purpose"],
-        **data["result"],
-        "created_at": data["created_at"],
-        "answered_at": data["answered_at"],
-        "completed_at": data["completed_at"],
+        "total_calls": len(calls),
+        "completed_count": len(completed),
+        "task_completed_count": len(completed),
+        "success_rate": len(completed) / len(calls) * 100 if calls else 0,
+        "avg_duration_seconds": 0,
+        "no_answer_count": len([c for c in calls if c.get("state") == "no_answer"]),
+        "busy_count": len([c for c in calls if c.get("state") == "busy"]),
+        "active_count": len([c for c in calls if c.get("state") in ("queued", "dialing", "ringing", "connected")]),
+        "queue_size": len([c for c in calls if c.get("state") == "queued"]),
     }
 
 
 @router.post("/{outbound_id}/cancel")
-async def cancel_outbound_call(outbound_id: str):
-    """아웃바운드 콜 취소"""
-    manager = _get_outbound_manager()
-    if not manager:
-        raise HTTPException(status_code=503, detail="Outbound call service not available")
-    
-    record = await manager.cancel_call(outbound_id, reason="operator_cancel")
-    if not record:
-        raise HTTPException(status_code=404, detail="Active outbound call not found")
-    
-    return {"outbound_id": outbound_id, "state": "cancelled", "message": "콜이 취소되었습니다."}
-
-
-@router.post("/{outbound_id}/retry")
-async def retry_outbound_call(outbound_id: str):
-    """아웃바운드 콜 재시도"""
-    manager = _get_outbound_manager()
-    if not manager:
-        raise HTTPException(status_code=503, detail="Outbound call service not available")
-    
-    new_record = await manager.retry_call(outbound_id)
-    if not new_record:
-        raise HTTPException(status_code=400, detail="Cannot retry this call (not in failed state or not found)")
-    
-    return {
-        "outbound_id": new_record.outbound_id,
-        "state": new_record.state.value,
-        "message": "재시도가 요청되었습니다.",
-    }
+async def cancel_outbound(outbound_id: str) -> Dict[str, str]:
+    """아웃바운드 요청 취소."""
+    if outbound_id not in _store:
+        raise HTTPException(status_code=404, detail="Not Found")
+    rec = _store[outbound_id]
+    if rec.get("state") not in ("queued", "dialing", "ringing"):
+        raise HTTPException(status_code=400, detail="이미 진행 중이거나 완료된 요청은 취소할 수 없습니다.")
+    rec["state"] = "cancelled"
+    # 대시보드 활성 통화 목록에서 제거 + call_data_record 로그
+    _unregister_outbound_from_active(outbound_id)
+    _log_outbound_event(
+        outbound_id,
+        "outbound_cancelled",
+        caller_number=rec.get("caller_number"),
+        callee_number=rec.get("callee_number"),
+    )
+    return {"status": "cancelled"}

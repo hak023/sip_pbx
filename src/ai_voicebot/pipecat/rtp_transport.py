@@ -20,15 +20,23 @@ from pipecat.frames.frames import (
     InputAudioRawFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    OutputAudioRawFrame,
     StartFrame,
     StartInterruptionFrame,
 )
-# TTS가 내보내는 오디오 프레임(Notifier는 누적하지만 Output이 처리 안 하면 RTP로 누락됨)
+# TTS가 내보내는 오디오 프레임 (GoogleTTSService 등이 출력)
 try:
     from pipecat.frames.frames import TTSAudioRawFrame
 except ImportError:
     TTSAudioRawFrame = type(None)  # 없으면 무시
+try:
+    from pipecat.frames.frames import OutputAudioRawFrame
+except ImportError:
+    OutputAudioRawFrame = type(None)  # 없으면 무시
+# TTS 입력 텍스트 프레임 (TTS로 전달되는 텍스트 로깅용)
+try:
+    from pipecat.frames.frames import TextFrame
+except ImportError:
+    TextFrame = type(None)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.base_transport import TransportParams
 
@@ -36,8 +44,11 @@ logger = structlog.get_logger(__name__)
 
 # TTS 완료 시 Notifier/Output이 설정하는 키 (Phase1→Phase2 대기·불일치 경고용)
 KEY_LAST_TTS_DURATION_SEC = "last_tts_duration_sec"
+KEY_LAST_TTS_FRAME_COUNT = "last_tts_audio_frame_count"  # Notifier가 EndFrame 시 설정 (mismatch 로그 강화)
 KEY_LAST_RTP_SENT_SEC = "last_rtp_sent_sec"
-TTS_RTP_MISMATCH_THRESHOLD = 0.10  # 10% 이상 차이 시 경고
+# EndFrame이 잔여 오디오보다 먼저 처리되면 Notifier·Output 프레임 수가 달라질 수 있어
+# 과도한 오탐을 줄이기 위해 임계값을 소폭 완화 (실제 끊김은 output_bytes·queue_empty와 병행 확인)
+TTS_RTP_MISMATCH_THRESHOLD = 0.18  # 18% 이상 차이 시 경고
 
 # ========== 변수 정의 (로그·동기화 해석용) ==========
 # - last_tts_duration_sec (Notifier): 해당 응답(Start~End) 구간에서 TTS가 내보낸 모든 오디오 프레임의
@@ -66,16 +77,85 @@ class SIPPBXInputTransport(FrameProcessor):
         self._rtp_worker = rtp_worker
         self._running = False
         self._audio_task: Optional[asyncio.Task] = None
+        self._fallback_task: Optional[asyncio.Task] = None
+        self._fallback_scheduled = False
+        self._first_frame_logged = False
+    
+    def _start_audio_loop_if_needed(self):
+        """Start _read_audio_loop if not already running (idempotent)."""
+        if self._audio_task is not None and not self._audio_task.done():
+            return
+        self._running = True
+        self._audio_task = asyncio.create_task(self._read_audio_loop())
+        logger.info("input_audio_loop_task_created",
+                    call_id=getattr(self._rtp_worker.media_session, "call_id", None),
+                    note="_read_audio_loop() 태스크 생성 — get_caller_audio_stream() 소비 시작 예상")
+
+    async def _delayed_start_audio_loop(self, delay: float = 0.05):
+        """StartFrame이 하류(BargeInSuppress 등)에 먼저 전달된 뒤 오디오 루프 시작."""
+        await asyncio.sleep(delay)
+        self._start_audio_loop_if_needed()
+    
+    def ensure_audio_loop_started(self):
+        """외부에서 호출: StartFrame 미수신 시에도 큐 소비를 시작 (STT 백업 방지)."""
+        call_id = getattr(self._rtp_worker.media_session, "call_id", None)
+        logger.info("input_ensure_audio_loop_called",
+                    call_id=call_id,
+                    already_running=self._audio_task is not None and not self._audio_task.done(),
+                    note="외부 폴백에서 ensure_audio_loop_started() 호출됨")
+        self._start_audio_loop_if_needed()
+    
+    async def _fallback_start_after_delay(self, delay: float = 2.0):
+        """Start audio loop after delay if StartFrame was never received (STT queue backup 방지)."""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        if self._audio_task is not None and not self._audio_task.done():
+            return
+        if self._running:
+            return
+        logger.warning("pipecat_input_transport_start_fallback",
+                      call_id=self._rtp_worker.media_session.call_id,
+                      note="StartFrame 미수신 — 폴백으로 오디오 루프 시작 (큐 소비)")
+        self._start_audio_loop_if_needed()
     
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        
+        # 디버깅: 파이프라인에서 Input에 도달하는 첫 프레임 로그 (StartFrame 수신 여부 확인)
+        if not self._first_frame_logged:
+            self._first_frame_logged = True
+            logger.info("input_transport_first_frame",
+                        call_id=getattr(self._rtp_worker.media_session, "call_id", None),
+                        frame_type=type(frame).__name__,
+                        is_start_frame=isinstance(frame, StartFrame),
+                        note="[STT 경로] Input Transport에 도달한 첫 프레임 — StartFrame이면 즉시 큐 소비 시작")
+        # StartFrame 미수신 시 큐 백업 방지: 첫 프레임 수신 시 폴백 타이머 예약
+        if not self._fallback_scheduled:
+            self._fallback_scheduled = True
+            self._fallback_task = asyncio.create_task(self._fallback_start_after_delay(2.0))
+
         if isinstance(frame, StartFrame):
-            self._running = True
-            self._audio_task = asyncio.create_task(self._read_audio_loop())
+            logger.info("input_transport_startframe_received",
+                        call_id=getattr(self._rtp_worker.media_session, "call_id", None),
+                        note="StartFrame 수신 — 먼저 push 후 오디오 루프 지연 시작 (StartFrame 선행 전달)")
+            if self._fallback_task and not self._fallback_task.done():
+                self._fallback_task.cancel()
+                try:
+                    await self._fallback_task
+                except asyncio.CancelledError:
+                    pass
+            self._fallback_task = None
             await self.push_frame(frame, direction)
+            asyncio.create_task(self._delayed_start_audio_loop(0.05))
         elif isinstance(frame, (EndFrame, CancelFrame)):
             self._running = False
+            if self._fallback_task and not self._fallback_task.done():
+                self._fallback_task.cancel()
+                try:
+                    await self._fallback_task
+                except asyncio.CancelledError:
+                    pass
             if self._audio_task:
                 self._audio_task.cancel()
                 try:
@@ -91,6 +171,7 @@ class SIPPBXInputTransport(FrameProcessor):
         logger.info("pipecat_input_transport_started",
                     call_id=self._rtp_worker.media_session.call_id)
         
+        frame_count = 0
         try:
             async for pcm_data in self._rtp_worker.get_caller_audio_stream():
                 if not self._running:
@@ -102,6 +183,25 @@ class SIPPBXInputTransport(FrameProcessor):
                         sample_rate=PIPECAT_SAMPLE_RATE,
                         num_channels=PIPECAT_NUM_CHANNELS,
                     )
+                    frame_count += 1
+                    
+                    # STT 경로 디버깅: 첫 프레임 시 한 번 (테스트 후 동작 여부 점검용)
+                    if frame_count == 1:
+                        logger.info("stt_path_input_first",
+                                   call_id=self._rtp_worker.media_session.call_id,
+                                   note="[STT 경로] Input → 파이프라인 첫 프레임 (큐 소비 시작)")
+                    # STT 디버깅: 첫 10개 프레임과 100개마다 로깅
+                    if frame_count <= 10 or frame_count % 100 == 0:
+                        logger.info("input_audio_frame_to_pipeline",
+                                   call_id=self._rtp_worker.media_session.call_id,
+                                   frame_count=frame_count,
+                                   audio_len=len(pcm_data),
+                                   note="Input Transport → Pipeline (VAD → STT)")
+                    if frame_count > 0 and frame_count % 200 == 0:
+                        logger.info("stt_path_input_to_pipeline",
+                                   call_id=self._rtp_worker.media_session.call_id,
+                                   frame_count=frame_count,
+                                   note="[STT 경로] Input Transport → 파이프라인(VAD→STT) 누적")
                     await self.push_frame(frame)
         except asyncio.CancelledError:
             pass
@@ -110,8 +210,15 @@ class SIPPBXInputTransport(FrameProcessor):
                         call_id=self._rtp_worker.media_session.call_id,
                         error=str(e))
         finally:
-            logger.info("pipecat_input_transport_stopped",
-                       call_id=self._rtp_worker.media_session.call_id)
+            try:
+                logger.info("pipecat_input_transport_stopped",
+                           call_id=self._rtp_worker.media_session.call_id)
+                logger.info("stt_path_input_total",
+                           call_id=self._rtp_worker.media_session.call_id,
+                           total_frames=frame_count,
+                           note="[STT 경로] Input Transport 종료 시까지 파이프라인에 넣은 총 프레임 수")
+            except (ValueError, OSError):
+                pass  # 로그 파일이 이미 닫힌 상태(서버 종료 시)에서 발생 가능
 
 
 class SIPPBXOutputTransport(FrameProcessor):
@@ -125,32 +232,95 @@ class SIPPBXOutputTransport(FrameProcessor):
         super().__init__(**kwargs)
         self._rtp_worker = rtp_worker
         self._tts_sync_context = tts_sync_context or {}
-        self._first_audio_sent = False  # 통화당 첫 오디오 RTP 전송 시점 로그용
+        self._first_audio_sent = False  # 응답마다 첫 오디오 RTP 전송 시점 로그용
+        self._session_has_sent_audio = False  # 통화에서 한 번이라도 오디오 전송했으면 True (Phase1 flush 방지)
+        self._first_response_endframe_logged = True  # Phase1(첫 응답) EndFrame 시 phase1_rtp_summary 1회 로깅용
         self._response_bytes = 0  # 현재 응답(Phase) 단위 RTP 전송 바이트 (Phase1 잘림 디버깅)
+        self._response_duration_sec = 0.0  # 프레임 sample_rate 기준 누적 재생 길이(초) — Notifier와 일치용
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
+        # TTS 입력 텍스트 로깅 (전체 길이·60자 청크 — 로그 필드 잘림 시에도 추적 가능)
+        if TextFrame is not type(None) and isinstance(frame, TextFrame):
+            text_content = getattr(frame, "text", None)
+            if text_content:
+                _t = text_content
+                _chunks = [_t[i : i + 60] for i in range(0, min(len(_t), 300), 60)]  # 앞 300자만 청크
+                logger.info("tts_text_input",
+                            call_id=self._rtp_worker.media_session.call_id,
+                            progress="tts",
+                            category="tts",
+                            text_len=len(text_content),
+                            text_chunk_0=_chunks[0] if _chunks else "",
+                            text_chunk_1=_chunks[1] if len(_chunks) > 1 else "",
+                            text_chunk_2=_chunks[2] if len(_chunks) > 2 else "",
+                            text_suffix_60=_t[-60:] if len(_t) > 60 else _t,
+                            note="TTS로 전달된 텍스트. text_len·text_chunk_*·text_suffix_60 로 잘림 확인")
+
         if isinstance(frame, LLMFullResponseStartFrame):
             self._response_bytes = 0
+            self._response_duration_sec = 0.0
+            self._response_audio_frame_count = 0  # 인사말 중간 끊김 추적: 이 응답에서 받은 오디오 프레임 수
+            self._first_audio_sent = False  # 응답마다 로그 남기기 위해 리셋
+            # (flush 비활성화) 새 TTS 시작 시에도 PCM 큐를 비우지 않음 — 준비된 내용을 순차 재생.
+            # _greeting_phase2_no_flush 등은 사용하지 않음. 필요 시 나중에 flush 기능 재도입.
+            self._tts_sync_context.pop("_greeting_phase2_no_flush", None)
+            # ✅ TTS 활성 플래그 설정 (STT 처리 중 TTS 상태 확인용)
+            self._tts_sync_context["_tts_active"] = True
+            self._tts_sync_context["_tts_pending_pcm_bytes"] = 0
             await self.push_frame(frame, direction)
             return
         if isinstance(frame, LLMFullResponseEndFrame):
+            # EndFrame 수신 시점의 큐 적재량 (원인 파악: Notifier와 순서 비교용)
+            call_id = getattr(self._rtp_worker.media_session, "call_id", "")
+            # ✅ TTS 활성 플래그 해제
+            self._tts_sync_context["_tts_active"] = False
+            self._tts_sync_context["_tts_pending_pcm_bytes"] = 0
+            response_frames = getattr(self, "_response_audio_frame_count", 0)
+            logger.info("output_endframe_processed",
+                        call=True,
+                        call_id=call_id,
+                        category="tts",
+                        progress="tts",
+                        response_bytes=self._response_bytes,
+                        response_audio_frame_count=response_frames,
+                        ts_iso=datetime.now().isoformat(timespec="milliseconds"),
+                        note="Output이 EndFrame 수신 — 이 응답에서 큐에 넣은 PCM 바이트·프레임 수. TTS audio_bytes와 비교해 중간 끊김 추적")
             if self._response_bytes > 0:
-                duration_sec = self._response_bytes / (PIPECAT_SAMPLE_RATE * 2)
-                duration_sec_rounded = round(duration_sec, 3)
+                # Notifier와 동일한 기준: 프레임별 sample_rate로 누적한 재생 길이 사용 (일치 시 mismatch 경고 감소)
+                duration_sec_rounded = round(self._response_duration_sec, 3)
+                if duration_sec_rounded <= 0:
+                    duration_sec_rounded = round(
+                        self._response_bytes / (PIPECAT_SAMPLE_RATE * 2), 3
+                    )
                 self._tts_sync_context[KEY_LAST_RTP_SENT_SEC] = duration_sec_rounded
+                # Phase1(첫 응답) 검증: 2문장 인사말이 한 TextFrame으로 순차 전송됨. 3초 기준 기대 바이트 ≈ 96000 (16kHz*2)
+                is_first_response = getattr(self, "_first_response_endframe_logged", True) is True
+                if is_first_response:
+                    self._first_response_endframe_logged = False
+                    expected_bytes_3s = PIPECAT_SAMPLE_RATE * 2 * 3  # 16kHz 16bit 3초
+                    logger.info("phase1_rtp_summary",
+                                call_id=call_id,
+                                call=True,
+                                progress="tts",
+                                category="tts",
+                                response_bytes=self._response_bytes,
+                                duration_sec=duration_sec_rounded,
+                                expected_bytes_3s=expected_bytes_3s,
+                                note="Phase1(첫 응답) RTP 큐 투입량. 2문장 인사말 1개 TextFrame 순차 재생. 3초면 약 96000바이트 기대")
                 logger.info("tts_rtp_sent_for_response",
-                            call_id=self._rtp_worker.media_session.call_id,
+                            call_id=call_id,
                             call=True,
                             progress="tts",
                             category="tts",
                             bytes_sent=self._response_bytes,
                             duration_sec=duration_sec_rounded,
                             ts_iso=datetime.now().isoformat(timespec="milliseconds"),
-                            note="해당 응답(Phase)까지 큐에 넣은 PCM 바이트 합 → duration_sec=bytes/(16k*2). 실제 전송은 발송 루프가 20ms 간격 수행")
+                            note="해당 응답(Phase)까지 큐에 넣은 PCM 바이트 합. duration_sec=프레임 sample_rate 기준 누적(Notifier와 동일 기준)")
                 # TTSCompleteNotifier가 설정한 재생 길이와 RTP 전송량 불일치 시 경고 (Phase1 잘림 등 디버깅용)
                 last_tts_sec = self._tts_sync_context.get(KEY_LAST_TTS_DURATION_SEC)
+                last_tts_frames = self._tts_sync_context.get(KEY_LAST_TTS_FRAME_COUNT)
                 if last_tts_sec is not None and last_tts_sec > 0:
                     diff_ratio = abs(duration_sec_rounded - last_tts_sec) / last_tts_sec
                     if diff_ratio >= TTS_RTP_MISMATCH_THRESHOLD:
@@ -162,42 +332,113 @@ class SIPPBXOutputTransport(FrameProcessor):
                                        tts_duration_sec=round(last_tts_sec, 3),
                                        rtp_sent_duration_sec=duration_sec_rounded,
                                        diff_ratio_pct=round(diff_ratio * 100, 1),
-                                       note="Notifier(음원 길이) vs Output(큐에 넣은 양) 불일치. sample_rate 차이 또는 프레임 누락 가능")
+                                       notifier_audio_frame_count=last_tts_frames,
+                                       output_audio_frame_count=response_frames,
+                                       response_bytes=self._response_bytes,
+                                       note="Notifier vs Output 불일치. EndFrame·파이프라인 순서로 일부 오디오가 EndFrame 이후에 도착하면 프레임 수만 달라질 수 있음. 바지인 시 더 벌어짐.",
+                                       frame_count_gap=(last_tts_frames or 0) - (response_frames or 0))
             await self.push_frame(frame, direction)
             return
 
-        # 오디오 프레임: OutputAudioRawFrame, TTSAudioRawFrame + .audio 가 bytes 인 모든 프레임 (TTS가 다른 타입으로 내보내도 RTP 전달)
+        # 오디오 프레임: TTSAudioRawFrame 또는 OutputAudioRawFrame 처리 (InputAudioRawFrame 제외!)
+        # InputAudioRawFrame은 caller 음성이므로 다시 caller에게 보내면 안됨 (에코 발생)
         audio_data = getattr(frame, "audio", None)
-        is_audio_frame = (
-            isinstance(frame, OutputAudioRawFrame)
-            or (TTSAudioRawFrame is not type(None) and isinstance(frame, TTSAudioRawFrame))
-            or (isinstance(audio_data, bytes) and len(audio_data) > 0)
+        is_tts_audio = (
+            TTSAudioRawFrame is not type(None) and isinstance(frame, TTSAudioRawFrame)
         )
-        if is_audio_frame and audio_data and isinstance(audio_data, bytes):
+        is_output_audio = (
+            OutputAudioRawFrame is not type(None) and isinstance(frame, OutputAudioRawFrame)
+        )
+        if (is_tts_audio or is_output_audio) and audio_data and isinstance(audio_data, bytes):
+            self._response_audio_frame_count = getattr(self, "_response_audio_frame_count", 0) + 1
             if not self._first_audio_sent:
                 logger.info("tts_first_audio_sent_to_rtp",
                             call_id=self._rtp_worker.media_session.call_id,
                             progress="tts",
+                            category="tts",
+                            frame_type=type(frame).__name__,
+                            audio_len=len(audio_data),
                             ts_iso=datetime.now().isoformat(timespec="milliseconds"),
-                            note="첫 오디오 RTP 전송(재생 시작) 시점")
+                            note="이 응답의 첫 오디오 RTP 전송 시점 (응답마다 로깅)")
                 self._first_audio_sent = True
+            if not self._session_has_sent_audio:
+                self._session_has_sent_audio = True
+            sr = getattr(frame, "sample_rate", None) or PIPECAT_SAMPLE_RATE
             self._response_bytes += len(audio_data)
+            # 인사말 중간 끊김 추적: 10번째·30번째 프레임 등 중간 구간 로그 (중간이 빠지면 여기서 끊김)
+            fc = self._response_audio_frame_count
+            if fc in (10, 30, 50) or (fc > 0 and fc % 20 == 0):
+                logger.info("tts_response_audio_chunk",
+                            call_id=self._rtp_worker.media_session.call_id,
+                            frame_index=fc,
+                            response_bytes_so_far=self._response_bytes,
+                            note="응답 내 오디오 청크 누적 — 중간 끊김 시 이 로그가 중간에 멈춤")
+            # Notifier와 동일한 재생 길이 계산: bytes / (sample_rate * 2) — mismatch 경고 완화
+            self._response_duration_sec += len(audio_data) / (sr * 2)
+            # ✅ TTS PCM 송출 바이트 추적 (STT 처리 중 TTS 상태 확인용)
+            self._tts_sync_context["_tts_pending_pcm_bytes"] = self._response_bytes
             try:
                 self._rtp_worker.send_audio_to_caller(
                     audio_data,
-                    sample_rate=getattr(frame, "sample_rate", None) or PIPECAT_SAMPLE_RATE,
+                    sample_rate=sr,
                 )
             except Exception as e:
                 logger.error("pipecat_output_send_error",
                            call_id=self._rtp_worker.media_session.call_id,
                            error=str(e))
-        elif isinstance(frame, StartInterruptionFrame):
-            # Barge-in: TTS 중단
-            logger.info("pipecat_tts_interrupted",
-                       call_id=self._rtp_worker.media_session.call_id)
-            await self.push_frame(frame, direction)
         else:
-            await self.push_frame(frame, direction)
+            # InputAudioRawFrame(발신자 음성)은 에코 방지를 위해 의도적으로 RTP로 보내지 않음 — 경고 로그 제외
+            is_caller_audio = isinstance(frame, InputAudioRawFrame)
+            if is_caller_audio:
+                pass  # 정상: caller 음성을 caller에게 다시 보내지 않음
+            elif audio_data and isinstance(audio_data, bytes) and len(audio_data) > 0:
+                logger.warning("output_audio_frame_skipped",
+                               call_id=self._rtp_worker.media_session.call_id,
+                               frame_type=type(frame).__name__,
+                               audio_len=len(audio_data),
+                               note="오디오 있으나 전송 스킵 — TTSAudioRawFrame/OutputAudioRawFrame 아님. 음성 끊김 가능")
+            elif hasattr(frame, "__class__") and "Audio" in type(frame).__name__:
+                logger.debug("output_non_audio_frame",
+                            call_id=self._rtp_worker.media_session.call_id,
+                            frame_type=type(frame).__name__,
+                            has_audio=audio_data is not None,
+                            audio_type=type(audio_data).__name__ if audio_data else None)
+        
+        # Interruption 계열은 TTS까지 도달해 "Barge-in detected, stopping TTS"를 유발함.
+        # 파이프라인 중간 BargeInSuppressProcessor로 막아도, Task 경로 등으로 올 수 있으므로
+        # Output에서 한 번 더 흡수하여 RTP/하류로 전달하지 않음.
+        if isinstance(frame, StartInterruptionFrame):
+            logger.info("output_interruption_frame_absorbed",
+                       call_id=self._rtp_worker.media_session.call_id,
+                       frame_type="StartInterruptionFrame",
+                       note="바지인 차단 (Output 흡수) — 이미 TTS를 통과한 뒤이므로 TTS는 이미 반응했을 수 있음")
+            logger.debug("pipecat_interruption_frame_reached_output",
+                         call_id=self._rtp_worker.media_session.call_id,
+                         frame_type="StartInterruptionFrame",
+                         note="Pipecat 경로: Interruption* 가 BargeInSuppress를 거치지 않고 Output까지 도달")
+            return
+        try:
+            from pipecat.frames.frames import InterruptionFrame, InterruptionTaskFrame
+            try:
+                from pipecat.frames.frames import StopInterruptionFrame
+            except ImportError:
+                StopInterruptionFrame = None
+            _out_interruption_types = (InterruptionFrame, InterruptionTaskFrame)
+            if StopInterruptionFrame is not None:
+                _out_interruption_types = _out_interruption_types + (StopInterruptionFrame,)
+            if isinstance(frame, _out_interruption_types):
+                logger.info("output_interruption_frame_absorbed",
+                           call_id=self._rtp_worker.media_session.call_id,
+                           frame_type=type(frame).__name__,
+                           note="바지인 차단 (Output 흡수) — 이미 TTS 통과 후이면 TTS가 Barge-in detected 했을 수 있음")
+                logger.debug("pipecat_interruption_frame_reached_output",
+                             call_id=self._rtp_worker.media_session.call_id,
+                             frame_type=type(frame).__name__,
+                             note="Pipecat 경로: Interruption* 가 BargeInSuppress를 거치지 않고 Output까지 도달")
+                return
+        except ImportError:
+            pass
+        await self.push_frame(frame, direction)
 
 
 class SIPPBXTransport:

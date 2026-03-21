@@ -111,66 +111,80 @@ class CDR:
 class CDRWriter:
     """CDR 파일 작성기
     
-    JSON Lines 형식으로 CDR을 파일에 저장
+    JSON Lines 형식으로 CDR을 파일에 저장.
+    pretty_json=True면 들여쓰기된 JSON으로 가시적 저장(디버깅용).
     """
-    
+
     def __init__(
         self,
         output_dir: str = "./cdr",
         filename_pattern: str = "cdr-%Y-%m-%d.jsonl",
+        pretty_json: bool = False,
     ):
         """초기화
-        
+
         Args:
             output_dir: CDR 출력 디렉토리
             filename_pattern: 파일명 패턴 (strftime 형식)
+            pretty_json: True면 레코드마다 들여쓰기 JSON + \\n\\n 구분(디버깅용)
         """
         self.output_dir = Path(output_dir)
         self.filename_pattern = filename_pattern
-        
+        self.pretty_json = pretty_json
+
         # 디렉토리 생성
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Thread safety
         self._lock = threading.Lock()
-        
+
         # 통계
         self.stats = {
             "total_written": 0,
             "write_errors": 0,
         }
-        
+
         logger.info("cdr_writer_initialized",
                    output_dir=str(self.output_dir),
-                   filename_pattern=filename_pattern)
-    
+                   filename_pattern=filename_pattern,
+                   pretty_json=pretty_json)
+
     def write_cdr(self, cdr: CDR) -> bool:
         """CDR 작성
-        
+
         Args:
             cdr: CDR 객체
-            
+
         Returns:
             작성 성공 여부
         """
         with self._lock:
             try:
-                # 파일 경로 결정 (일자별)
                 filename = datetime.now().strftime(self.filename_pattern)
                 filepath = self.output_dir / filename
-                
-                # JSON Lines 형식으로 추가
-                with open(filepath, 'a', encoding='utf-8') as f:
-                    f.write(cdr.to_json() + '\n')
-                
+
+                if self.pretty_json:
+                    # 디버깅용: 들여쓰기 JSON, 레코드 구분은 \n\n
+                    body = json.dumps(
+                        cdr.to_dict(),
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    line = body + "\n\n"
+                else:
+                    # 표준 JSONL: 한 줄 한 레코드
+                    line = cdr.to_json() + "\n"
+
+                with open(filepath, "a", encoding="utf-8") as f:
+                    f.write(line)
+
                 self.stats["total_written"] += 1
-                
                 logger.info("cdr_written",
                            call_id=cdr.call_id,
-                           filepath=str(filepath))
-                
+                           cdr_file=filepath.as_posix(),
+                           pretty_json=self.pretty_json)
                 return True
-            
+
             except Exception as e:
                 self.stats["write_errors"] += 1
                 logger.error("cdr_write_failed",

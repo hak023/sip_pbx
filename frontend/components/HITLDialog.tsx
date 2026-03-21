@@ -31,7 +31,8 @@ export function HITLDialog({ request, onClose, onSubmit }: HITLDialogProps) {
         call_id: request.callId,
         response_text: responseText,
         save_to_kb: saveToKB,
-        category: saveToKB ? category : undefined
+        category: saveToKB ? category : undefined,
+        question: request.question  // 질문 추가
       });
 
       // 성공
@@ -88,8 +89,8 @@ export function HITLDialog({ request, onClose, onSubmit }: HITLDialogProps) {
             <div>
               <h3 className="font-semibold mb-2">👤 발신자 정보</h3>
               <div className="bg-gray-50 rounded p-3 text-sm">
-                <p><strong>URI:</strong> {request.context.callerInfo.uri}</p>
-                {request.context.callerInfo.name && (
+                <p><strong>URI:</strong> {request.context?.callerInfo?.uri ?? '—'}</p>
+                {request.context?.callerInfo?.name && (
                   <p><strong>이름:</strong> {request.context.callerInfo.name}</p>
                 )}
               </div>
@@ -98,11 +99,11 @@ export function HITLDialog({ request, onClose, onSubmit }: HITLDialogProps) {
             <div>
               <h3 className="font-semibold mb-2">💬 이전 대화 내역</h3>
               <div className="bg-gray-50 rounded p-3 max-h-48 overflow-y-auto">
-                {request.context.previousMessages.length === 0 ? (
+                {!(request.context?.previousMessages?.length) ? (
                   <p className="text-gray-500 text-sm">이전 대화 없음</p>
                 ) : (
                   <div className="space-y-2 text-sm">
-                    {request.context.previousMessages.map((msg: any, idx: number) => (
+                    {(request.context?.previousMessages ?? []).map((msg: any, idx: number) => (
                       <div key={idx}>
                         <span className="font-semibold">
                           {msg.role === 'user' ? '사용자' : 'AI'}:
@@ -118,11 +119,11 @@ export function HITLDialog({ request, onClose, onSubmit }: HITLDialogProps) {
             <div>
               <h3 className="font-semibold mb-2">🔍 RAG 검색 결과</h3>
               <div className="bg-gray-50 rounded p-3 max-h-48 overflow-y-auto">
-                {request.context.ragResults.length === 0 ? (
+                {!(request.context?.ragResults?.length) ? (
                   <p className="text-gray-500 text-sm">검색 결과 없음</p>
                 ) : (
                   <div className="space-y-2 text-sm">
-                    {request.context.ragResults.map((result: any, idx: number) => (
+                    {(request.context?.ragResults ?? []).map((result: any, idx: number) => (
                       <div key={idx} className="border-l-2 border-blue-400 pl-2">
                         <p>{result.text}</p>
                         <p className="text-xs text-gray-500">

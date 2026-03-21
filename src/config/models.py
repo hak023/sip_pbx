@@ -188,6 +188,10 @@ class CDRConfig(BaseModel):
     filename_pattern: str = Field(default="cdr-%Y-%m-%d.jsonl", description="파일명 패턴")
     rotation: str = Field(default="daily", description="로테이션 주기 (daily, hourly)")
     retention_days: int = Field(default=90, ge=1, le=3650, description="보관 기간 (일)")
+    pretty_json: bool = Field(
+        default=False,
+        description="True면 CDR을 들여쓰기된 JSON으로 저장(디버깅용 가시성). False면 한 줄 한 레코드(JSONL 표준).",
+    )
 
 
 class LoggingConfig(BaseModel):
@@ -340,6 +344,7 @@ class AIVoicebotConfig(BaseModel):
     model_config = {"extra": "allow"}  # ✅ 추가 필드 허용
     
     enabled: bool = Field(default=True, description="보이스봇 활성화")
+    pipeline_engine: str = Field(default="pipecat", description="파이프라인 엔진 (pipecat | legacy). pipecat=단일 파이프라인, legacy=Orchestrator")
     no_answer_timeout: int = Field(default=10, description="부재중 타임아웃")
     greeting_message: str = Field(default="안녕하세요", description="인사말")
     google_cloud: Optional[GoogleCloudConfig] = Field(default=None, description="Google Cloud 설정")

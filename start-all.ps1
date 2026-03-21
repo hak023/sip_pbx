@@ -27,6 +27,7 @@ Write-Host "0️⃣  Python 의존성 확인 중..." -ForegroundColor Yellow
 $VenvActivate = Join-Path $RootDir "venv\Scripts\Activate.ps1"
 $ReqFile = Join-Path $RootDir "requirements.txt"
 $ReqAiFile = Join-Path $RootDir "requirements-ai.txt"
+$ReqWsFile = Join-Path $RootDir "requirements-websocket.txt"
 
 # venv 존재 확인
 if (-Not (Test-Path $VenvActivate)) {
@@ -51,6 +52,9 @@ if (-Not (Test-Path $StampFile)) {
     if ((Test-Path $ReqAiFile) -and (Get-Item $ReqAiFile).LastWriteTime -gt $StampTime) {
         $NeedInstall = $true
     }
+    if ((Test-Path $ReqWsFile) -and (Get-Item $ReqWsFile).LastWriteTime -gt $StampTime) {
+        $NeedInstall = $true
+    }
 }
 
 if ($NeedInstall) {
@@ -59,6 +63,9 @@ if ($NeedInstall) {
     & $VenvActivate
     if (Test-Path $ReqFile) {
         pip install -r $ReqFile --quiet 2>&1 | Out-Null
+    }
+    if (Test-Path $ReqWsFile) {
+        pip install -r $ReqWsFile --quiet 2>&1 | Out-Null
     }
     Pop-Location
     # stamp 파일 갱신

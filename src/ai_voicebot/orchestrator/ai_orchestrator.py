@@ -1,10 +1,17 @@
 """
-AI Orchestrator
+AI Orchestrator (Legacy)
 
-AI 보이스봇의 핵심 로직 - 모든 컴포넌트를 통합하고 대화 흐름을 제어합니다.
+AI 보이스봇의 레거시 핵심 로직 — 모든 컴포넌트를 통합하고 대화 흐름을 제어합니다.
+
+[주의] 현재 config 기본값은 pipeline_engine="pipecat" 이므로, 실제 AI 응대는
+  Pipecat 파이프라인(pipeline_builder.build_and_run, RAGLLMProcessor 등)에서 수행됩니다.
+  이 모듈은 config에서 pipeline_engine="legacy" 로 설정했을 때만 사용됩니다.
+  관련: src/config/models.py (AIVoicebotConfig.pipeline_engine),
+        src/ai_voicebot/factory.py (create_ai_orchestrator vs create_pipecat_pipeline_builder).
 """
 
 import asyncio
+from datetime import datetime
 from typing import Optional, Dict, Any
 import structlog
 
@@ -17,7 +24,7 @@ from ..ai_pipeline.llm_client import LLMClient
 from ..ai_pipeline.rag_engine import RAGEngine
 from ..recording.recorder import CallRecorder
 from ..knowledge.knowledge_extractor import KnowledgeExtractor
-from ..knowledge.organization_info import get_organization_manager, OrganizationInfoManager
+from ..knowledge.organization_info import create_org_manager, OrganizationInfoManager
 from .barge_in_controller import BargeInController
 from src.sip_core.models.outbound import OutboundCallResult, TranscriptEntry
 
@@ -38,10 +45,10 @@ except ImportError:
 
 class AIOrchestrator:
     """
-    AI Orchestrator
-    
-    AI 보이스봇의 핵심 컴포넌트로, 모든 AI 파이프라인을 통합하고
-    대화 흐름을 제어합니다.
+    AI Orchestrator (Legacy 경로).
+
+    AI 보이스봇의 핵심 컴포넌트로, 모든 AI 파이프라인을 통합하고 대화 흐름을 제어합니다.
+    pipeline_engine="legacy" 일 때만 사용됨. 기본은 Pipecat 파이프라인.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -72,8 +79,8 @@ class AIOrchestrator:
         self.recorder: Optional[CallRecorder] = None
         self.extractor: Optional[KnowledgeExtractor] = None
         
-        # ✅ 기관 정보 관리자
-        self.org_manager = get_organization_manager()
+        # ✅ 기관 정보 관리자 (handle_call 시 owner·knowledge_service로 생성)
+        self.org_manager: Optional[OrganizationInfoManager] = None
         
         # ✅ Barge-in 제어기
         self.barge_in_controller = BargeInController(
@@ -82,6 +89,10 @@ class AIOrchestrator:
         
         # RTP 전송 콜백
         self.rtp_send_callback = None
+        
+        # ACK 수신 시 인사말 시작용 (TTS를 call_established 이후에 재생해 RTP 전달 보장)
+        self._call_established_event: Optional[asyncio.Event] = None
+        self._call_established_call_id: Optional[str] = None
         
         # 통계
         self.total_calls = 0
@@ -141,15 +152,21 @@ class AIOrchestrator:
         """
         self.rtp_send_callback = callback
     
+    def set_call_established_event(self, call_id: str, event: asyncio.Event) -> None:
+        """ACK 수신 시 인사말을 시작하도록 대기할 이벤트 설정 (CallManager에서 호출)."""
+        self._call_established_call_id = call_id
+        self._call_established_event = event
+    
     async def handle_call(
-        self, 
-        call_id: str, 
+        self,
+        call_id: str,
         caller: str,
         callee: str
     ):
         """
-        AI 통화 처리 메인 로직
-        
+        AI 통화 처리 메인 로직 (Legacy 경로).
+        pipeline_engine="legacy" 일 때만 호출됨. 기본은 Pipecat build_and_run.
+
         Args:
             call_id: 통화 ID
             caller: 발신자
@@ -160,6 +177,18 @@ class AIOrchestrator:
             self.caller = caller
             self.callee = callee
             self.total_calls += 1
+            
+            # 기관 정보 관리자 생성 (deprecated get_organization_manager 대신 create_org_manager 사용)
+            try:
+                from src.services.knowledge_service import get_knowledge_service
+                ks = get_knowledge_service()
+                self.org_manager = await create_org_manager(owner=callee, knowledge_service=ks)
+            except Exception as e:
+                logger.warning("org_manager_create_fallback",
+                              call_id=call_id, callee=callee, error=str(e),
+                              message="기본값으로 OrganizationInfoManager 사용")
+                self.org_manager = OrganizationInfoManager(owner=callee)
+                self.org_manager._use_defaults()
             
             # 대화 세션 생성
             from datetime import datetime
@@ -177,7 +206,17 @@ class AIOrchestrator:
             # 오디오 버퍼 시작
             await self.audio_buffer.start()
             
-            # STT 스트리밍 시작
+            # 0. ACK 수신(call_established)까지 대기 후 STT·인사말 → RTP 경로 확립 후 시작해 STT 400 Audio Timeout 방지
+            if self._call_established_event:
+                try:
+                    await asyncio.wait_for(self._call_established_event.wait(), timeout=15.0)
+                    logger.info("call_established_received_starting_greeting", call_id=call_id)
+                except asyncio.TimeoutError:
+                    logger.warning("call_established_wait_timeout_starting_greeting", call_id=call_id)
+                self._call_established_event = None
+                self._call_established_call_id = None
+            
+            # STT 스트리밍 시작 (call_established 이후에 시작해 오디오가 실시간으로 전달되도록)
             await self.stt.start_stream(self._on_stt_result)
             
             # 1. 고정 인사말 재생
@@ -218,15 +257,10 @@ class AIOrchestrator:
             if direction != "caller":
                 return
             
-            # VAD 검사
-            is_speech = self.vad.detect(audio_data)
-            
-            # Barge-in 확인
-            if self.vad.is_barge_in() and self.is_speaking:
-                logger.info("Barge-in detected, stopping TTS")
-                await self.stop_speaking()
-                self.state = ConversationState.LISTENING
-            
+            # VAD 검사 (필요 시 다른 용도로 사용 가능)
+            self.vad.detect(audio_data)
+            # Orchestrator에서는 VAD만으로 TTS를 끊지 않음. 3단어·발화 확정 등으로 AI 발화를 끊는 로직은 Pipecat(BargeInSuppress·stt_post_filter) 또는 STT 콜백 경로에서 처리.
+
             # STT로 전송
             await self.stt.send_audio(audio_data)
             
@@ -241,13 +275,29 @@ class AIOrchestrator:
             text: 인식된 텍스트
             is_final: 최종 결과 여부
         """
+        # 대시보드 실시간 대화: 항상 먼저 전송 (GREETING/바지인 무시해도 화면에는 표시)
+        if websocket_manager and self.call_id and text:
+            try:
+                await websocket_manager.emit_stt_transcript(
+                    self.call_id,
+                    {"text": text, "is_final": is_final, "timestamp": datetime.now().isoformat()},
+                )
+            except Exception as e:
+                logger.debug("emit_stt_transcript_failed", call_id=self.call_id, error=str(e))
+
+        # 0. Phase 1(인사말) 구간에서는 STT 무시, TTS 응대만 진행
+        if self.state == ConversationState.GREETING:
+            logger.debug("STT result ignored (Phase 1 greeting)",
+                        text=text[:50] if text else "", is_final=is_final)
+            return
+
         # 1. Barge-in Controller로 필터링
         if not self.barge_in_controller.should_process_speech(is_final):
             logger.debug("STT result ignored (TTS speaking or barge-in disabled)",
                         text=text[:50] if text else "",
                         is_final=is_final)
             return
-        
+
         # 2. 음성 감지 등록
         self.barge_in_controller.on_speech_detected(text, is_final)
         
@@ -280,15 +330,19 @@ class AIOrchestrator:
     
     async def generate_and_speak_response(self, user_text: str):
         """
-        답변 생성 및 재생 (기관 정보 컨텍스트 포함 + Transfer Intent 감지)
-        
+        답변 생성 및 재생 (기관 정보 컨텍스트 포함 + Transfer Intent 감지). Legacy 경로 전용.
+
         Args:
             user_text: 사용자 질문
         """
         try:
             self.state = ConversationState.THINKING
             
-            # 1. 기관 정보 컨텍스트 생성
+            # 1. 기관 정보 컨텍스트 생성 (handle_call에서 create_org_manager로 설정됨)
+            if not self.org_manager:
+                logger.warning("org_manager_not_initialized", call_id=self.call_id)
+                self.org_manager = OrganizationInfoManager(owner=self.callee or "default")
+                self.org_manager._use_defaults()
             org_context = self.org_manager.get_full_context_for_llm(user_text)
             
             logger.info("Organization context prepared",
@@ -360,7 +414,9 @@ class AIOrchestrator:
         Args:
             text: 재생할 텍스트
         """
-        self.state = ConversationState.SPEAKING
+        # Phase 1 인사말 중에는 state를 GREETING으로 유지해 VAD Barge-in이 TTS를 끊지 않도록 함
+        if self.state != ConversationState.GREETING:
+            self.state = ConversationState.SPEAKING
         self.is_speaking = True
         
         try:
@@ -369,30 +425,74 @@ class AIOrchestrator:
             
             logger.info("🔊 TTS started", text_length=len(text), 
                        text_preview=text[:50] if len(text) > 50 else text)
+            logger.info("orchestrator_speak_start",
+                        call_id=self.call_id,
+                        text_len=len(text),
+                        note="[Orchestrator 경로] TTS 스트리밍 시작 — 청크 수·바이트 추적")
+
+            # 대시보드 실시간 대화: TTS 시작 전송
+            if websocket_manager and self.call_id:
+                try:
+                    await websocket_manager.emit_tts_started(
+                        self.call_id,
+                        {"text": text, "timestamp": datetime.now().isoformat()},
+                    )
+                except Exception as e:
+                    logger.debug("emit_tts_started_failed", call_id=self.call_id, error=str(e))
             
-            # 2. TTS 스트리밍 생성
+            # 2. TTS 스트리밍 생성 (인사말 중간 끊김 추적: 청크 인덱스·누적 바이트 로그)
+            if not self.rtp_send_callback:
+                logger.warning("TTS RTP callback not set, caller will not hear AI audio",
+                             call_id=self.call_id)
+            _chunk_index = 0
+            _bytes_sent = 0
             async for audio_chunk in self.tts.synthesize_stream(text):
                 if not self.is_speaking:  # Barge-in 체크
                     logger.info("Speaking interrupted by barge-in")
                     break
-                
-                # RTP로 전송
+                _chunk_index += 1
+                _bytes_sent += len(audio_chunk) if isinstance(audio_chunk, bytes) else 0
+                if _chunk_index in (10, 30, 50) or (_chunk_index > 0 and _chunk_index % 20 == 0):
+                    logger.info("orchestrator_speak_chunk",
+                                call_id=self.call_id,
+                                chunk_index=_chunk_index,
+                                bytes_so_far=_bytes_sent,
+                                note="[Orchestrator 경로] TTS 청크 누적 — 중간 끊김 시 이 로그가 멈춤")
+                # RTP로 전송 (콜백이 없으면 발신자에게 TTS가 전달되지 않음)
                 if self.rtp_send_callback:
-                    await self.rtp_send_callback(audio_chunk)
-                
+                    try:
+                        await self.rtp_send_callback(audio_chunk)
+                    except Exception as e:
+                        logger.error("rtp_send_callback_error", call_id=self.call_id, error=str(e))
                 # 녹음
                 self.recorder.add_callee_audio(audio_chunk)
-            
+            logger.info("orchestrator_speak_done",
+                        call_id=self.call_id,
+                        total_chunks=_chunk_index,
+                        total_bytes=_bytes_sent,
+                        text_len=len(text),
+                        note="[Orchestrator 경로] TTS 스트리밍 완료 — total_bytes가 TTS audio_bytes와 비슷한지 확인")
             logger.info("✅ TTS completed", text_length=len(text))
             
         except Exception as e:
             logger.error("TTS playback error", error=str(e), exc_info=True)
         finally:
             self.is_speaking = False
+
+            # 대시보드 실시간 대화: TTS 완료 전송
+            if websocket_manager and self.call_id:
+                try:
+                    await websocket_manager.emit_tts_completed(
+                        self.call_id,
+                        {"text": text, "timestamp": datetime.now().isoformat()},
+                    )
+                except Exception as e:
+                    logger.debug("emit_tts_completed_failed", call_id=self.call_id, error=str(e))
             
             # 3. Barge-in Controller에 TTS 종료 알림
             await self.barge_in_controller.on_tts_end()
             
+            # Phase 1 인사말 중이 아니었을 때만 LISTENING으로 전환 (GREETING은 play_greeting 종료 시 변경)
             if self.state == ConversationState.SPEAKING:
                 self.state = ConversationState.LISTENING
     
@@ -421,6 +521,25 @@ class AIOrchestrator:
                 '안녕하세요. AI 비서입니다.'
             )
             logger.info("✅ [Phase 1] Fixed greeting", greeting=fixed_greeting)
+            # [진단] Orchestrator 경로 — Phase1 텍스트 전체 확인 (로그 잘림 시 청크로 확인)
+            _t1 = fixed_greeting
+            _c1 = [_t1[i : i + 60] for i in range(0, len(_t1), 60)]
+            logger.info("orchestrator_greeting_phase1_sent",
+                        call_id=self.call_id,
+                        text_len=len(_t1),
+                        text_chunk_0=_c1[0] if _c1 else "",
+                        text_chunk_1=_c1[1] if len(_c1) > 1 else "",
+                        note="[Orchestrator 경로] Phase1 전송. 인사말이 이 경로로 나가면 이 로그가 찍힘")
+
+            # 대시보드 실시간 대화: Phase 1 인사말 전송
+            if websocket_manager and self.call_id:
+                try:
+                    await websocket_manager.emit_ai_greeting(
+                        self.call_id,
+                        {"phase": 1, "text": fixed_greeting, "timestamp": datetime.now().isoformat()},
+                    )
+                except Exception as e:
+                    logger.debug("emit_ai_greeting_failed", call_id=self.call_id, error=str(e))
             
             if self.conversation:
                 self.conversation.add_message("assistant", fixed_greeting)
@@ -443,10 +562,31 @@ class AIOrchestrator:
             
             if guide_text:
                 logger.info("✅ [Phase 2] Capability guide", guide=guide_text)
+                # [진단] Orchestrator 경로 — Phase2 텍스트 전체 확인
+                _t2 = guide_text
+                _c2 = [_t2[i : i + 60] for i in range(0, len(_t2), 60)]
+                logger.info("orchestrator_greeting_phase2_sent",
+                            call_id=self.call_id,
+                            text_len=len(_t2),
+                            text_chunk_0=_c2[0] if _c2 else "",
+                            text_chunk_1=_c2[1] if len(_c2) > 1 else "",
+                            text_last_chunk=_c2[-1] if _c2 else "",
+                            note="[Orchestrator 경로] Phase2 전송. 인사말이 이 경로로 나가면 이 로그가 찍힘")
+
+                # 대시보드 실시간 대화: Phase 2 가이드 전송
+                if websocket_manager and self.call_id:
+                    try:
+                        await websocket_manager.emit_ai_greeting(
+                            self.call_id,
+                            {"phase": 2, "text": guide_text, "timestamp": datetime.now().isoformat()},
+                        )
+                    except Exception as e:
+                        logger.debug("emit_ai_greeting_failed", call_id=self.call_id, error=str(e))
+
                 if self.conversation:
                     self.conversation.add_message("assistant", guide_text)
                 
-                # Barge-in ON (가이드 중에는 끊을 수 있게)
+                # Phase2도 인사말 구간으로 간주: state는 GREETING 유지 → 바지인으로 TTS 중단하지 않음
                 await self.barge_in_controller.on_tts_end()
                 await self.speak(guide_text)
             else:

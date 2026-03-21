@@ -11,6 +11,8 @@ from pathlib import Path
 import json
 import structlog
 
+from src.common.sip_owner import normalize_owner_username
+
 logger = structlog.get_logger(__name__)
 
 
@@ -95,6 +97,15 @@ class KnowledgeExtractor:
             }
         """
         try:
+            owner_raw = owner_id or ""
+            owner_id = normalize_owner_username(owner_id)
+            if owner_id != (owner_raw or "").strip():
+                logger.info(
+                    "knowledge_extract_owner_normalized",
+                    call_id=call_id,
+                    owner_raw_preview=owner_raw[:80] if owner_raw else "",
+                    owner_normalized=owner_id,
+                )
             logger.info("🔄 [VectorDB Flow] Step 1/6: Knowledge extraction started",
                        call_id=call_id,
                        owner_id=owner_id,

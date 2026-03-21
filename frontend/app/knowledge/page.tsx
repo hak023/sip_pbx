@@ -1,401 +1,428 @@
-/**
- * Knowledge Base Management Page
- * 
- * Vector DB에 저장된 지식 항목 조회 및 관리
- */
-
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import axios from 'axios';
-import { toast } from 'sonner';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle, 
-  DialogDescription, 
-  DialogFooter 
-} from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Search, Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { KNOWLEDGE_CATEGORIES, DOC_TYPES, KNOWLEDGE_SOURCES, type KnowledgeItem } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-interface KnowledgeEntry {
-  id: string;
-  text: string;
-  category: string;
-  keywords: string[];
-  metadata: {
-    source: string;
-    usageCount?: number;
-    lastUsed?: string;
-  };
-  created_at: string;
-  updated_at?: string;
-}
-
-const CATEGORIES = [
-  { value: 'all', label: '전체', icon: '📚' },
-  { value: 'faq', label: 'FAQ', icon: '❓' },
-  { value: 'support', label: '고객 지원', icon: '🆘' },
-  { value: 'product', label: '제품 정보', icon: '📦' },
-  { value: 'policy', label: '정책', icon: '📋' },
-  { value: 'hitl', label: 'HITL 저장', icon: '👤' },
-];
-
 export default function KnowledgePage() {
   const router = useRouter();
-  const [activeCategory, setActiveCategory] = useState('all');
-  const [knowledgeList, setKnowledgeList] = useState<KnowledgeEntry[]>([]);
-  const [filteredList, setFilteredList] = useState<KnowledgeEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  
-  const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
-  const [showDetailDialog, setShowDetailDialog] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [tenant, setTenant] = useState<{ owner: string; name?: string } | null>(null);
+  const [text, setText] = useState('');
+  const [category, setCategory] = useState('question');
+  const [docType, setDocType] = useState<string>('knowledge'); // 추가
+  const [answer, setAnswer] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [department, setDepartment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
+  const [items, setItems] = useState<KnowledgeItem[]>([]);
+  const [filterOwner, setFilterOwner] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterDocType, setFilterDocType] = useState(''); // 추가
+  const [filterSource, setFilterSource] = useState(''); // 추가
+  const [loadingList, setLoadingList] = useState(false);
+  const [groupByCategory, setGroupByCategory] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchKnowledge();
-  }, []);
-
-  useEffect(() => {
-    filterKnowledge();
-  }, [activeCategory, searchQuery, knowledgeList]);
-
-  const fetchKnowledge = async () => {
-    setIsLoading(true);
+    const t = localStorage.getItem('tenant');
+    if (!t) {
+      router.push('/login');
+      return;
+    }
     try {
-      const token = localStorage.getItem('access_token');
-      const tenantData = localStorage.getItem('tenant');
-      const owner = tenantData ? JSON.parse(tenantData).owner : undefined;
-      const response = await axios.get(`${API_URL}/api/knowledge`, {
-        params: {
-          page: 1,
-          limit: 100,
-          category: activeCategory === 'all' ? undefined : activeCategory,
-          owner,
-        },
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const parsed = JSON.parse(t) as { owner: string; name?: string };
+      setTenant(parsed);
+      setFilterOwner(parsed.owner || '');
+    } catch {
+      router.push('/login');
+    }
+  }, [router]);
 
-      setKnowledgeList(response.data.items);
-    } catch (error) {
-      console.error('Failed to fetch knowledge:', error);
-      toast.error('지식 베이스 조회 실패');
+  const fetchList = useCallback(async () => {
+    setLoadingList(true);
+    const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+    const params = new URLSearchParams();
+    if (filterOwner) {
+      params.set('owner', filterOwner);
+    }
+    if (filterCategory) params.set('category', filterCategory);
+    if (filterDocType) params.set('doc_type', filterDocType); // 추가
+    if (filterSource) params.set('source', filterSource); // 추가
+    try {
+      const res = await fetch(`${API_URL}/api/knowledge?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setItems(Array.isArray(data.items) ? data.items : []);
+        setMessage(null);
+      } else {
+        setItems([]);
+        const err = await res.json().catch(() => ({}));
+        const detail = err.detail ?? err.error ?? `HTTP ${res.status}`;
+        setMessage({ type: 'error', text: typeof detail === 'string' ? detail : JSON.stringify(detail) });
+      }
+    } catch {
+      setItems([]);
     } finally {
-      setIsLoading(false);
+      setLoadingList(false);
     }
-  };
+  }, [filterOwner, filterCategory, filterDocType, filterSource]);
 
-  const filterKnowledge = () => {
-    let filtered = knowledgeList;
+  useEffect(() => {
+    if (tenant) fetchList();
+  }, [tenant, fetchList]);
 
-    // 카테고리 필터
-    if (activeCategory !== 'all') {
-      filtered = filtered.filter(k => k.category === activeCategory);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tenant?.owner || !text.trim() || !category) {
+      setMessage({ type: 'error', text: '착신(owner), 내용(text), 카테고리(category)를 입력하세요.' });
+      return;
     }
-
-    // 검색 필터
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(k => 
-        k.text.toLowerCase().includes(query) ||
-        k.keywords.some(kw => kw.toLowerCase().includes(query))
-      );
+    if (category === 'contact' && !phoneNumber.trim()) {
+      setMessage({ type: 'error', text: '연락처 카테고리는 전화번호(phone_number)가 필요합니다.' });
+      return;
     }
-
-    setFilteredList(filtered);
-  };
-
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-
+    setSubmitting(true);
+    setMessage(null);
+    const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+    const postUrl = `${API_URL}/api/knowledge`;
     try {
-      const token = localStorage.getItem('access_token');
-      await axios.delete(`${API_URL}/api/knowledge/${deleteTarget}`, {
+      const res = await fetch(postUrl, {
+        method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        body: JSON.stringify({
+          text: text.trim(),
+          owner: tenant.owner,
+          category,
+          doc_type: docType, // 추가
+          answer: answer.trim() || undefined,
+          source: 'api',
+          ...(category === 'contact'
+            ? {
+                phone_number: phoneNumber.trim(),
+                ...(department.trim() ? { department: department.trim() } : {}),
+              }
+            : {}),
+        }),
       });
-
-      toast.success('지식이 삭제되었습니다');
-      setShowDeleteDialog(false);
-      setDeleteTarget(null);
-      fetchKnowledge();
-    } catch (error) {
-      console.error('Failed to delete knowledge:', error);
-      toast.error('삭제 실패');
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setMessage({ type: 'ok', text: `저장됨 (doc_id: ${data.doc_id}${data.cached ? ', 즉시 캐시됨' : ''})` });
+        setText('');
+        setAnswer('');
+        setPhoneNumber('');
+        setDepartment('');
+        fetchList();
+      } else {
+        const errorMsg = typeof data.detail === 'string' 
+          ? data.detail 
+          : data.detail 
+            ? JSON.stringify(data.detail) 
+            : data.error || `HTTP ${res.status}`;
+        setMessage({ type: 'error', text: errorMsg });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: (err as Error).message || '요청 실패' });
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const getCategoryInfo = (category: string) => {
-    return CATEGORIES.find(c => c.value === category) || CATEGORIES[0];
+  const needsAnswer = ['greeting_phase1', 'greeting_phase2', 'farewell'].includes(category);
+  const needsContactFields = category === 'contact';
+
+  const handleDelete = async (docId: string) => {
+    if (!confirm('이 지식을 삭제할까요?')) return;
+    setDeletingId(docId);
+    const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+    try {
+      const res = await fetch(`${API_URL}/api/knowledge/${encodeURIComponent(docId)}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setMessage({ type: 'ok', text: '삭제되었습니다.' });
+        fetchList();
+      } else {
+        setMessage({ type: 'error', text: data.detail || data.error || `HTTP ${res.status}` });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: (err as Error).message || '삭제 요청 실패' });
+    } finally {
+      setDeletingId(null);
+    }
   };
+
+  const categoryLabel = (value: string) => KNOWLEDGE_CATEGORIES.find((c) => c.value === value)?.label ?? value;
+  const itemsByCategory = items.reduce<Record<string, KnowledgeItem[]>>((acc, item) => {
+    const cat = item.metadata?.category ?? 'unknown';
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(item);
+    return acc;
+  }, {});
+  const sortedCategories = Object.keys(itemsByCategory).sort();
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-gray-900">📚 지식 베이스</h1>
-            <Button onClick={() => router.push('/knowledge/add')}>
-              <Plus className="w-4 h-4 mr-2" />
-              지식 추가
-            </Button>
-          </div>
-        </div>
-      </header>
+    <div>
+      <div className="max-w-4xl mx-auto px-0 py-4">
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">지식 베이스</h1>
+        <p className="text-gray-600 text-sm mb-6">
+          등록한 문구는 의도(질문·불만·전환·잡담·인사 등)에 맞춰 <strong>벡터 검색(RAG)</strong>에 포함됩니다.
+          인사·종료는 <strong>응답 문장</strong>을 넣으면 캐시로 더 빠르게 반응하고, 캐시 미스 시에도 동일 문구는 지식 컬렉션에서 검색됩니다.
+        </p>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Card>
-          <CardHeader>
-            <CardTitle>지식 관리</CardTitle>
-            <CardDescription>
-              Vector DB에 저장된 지식을 조회, 수정, 삭제할 수 있습니다
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {/* Search Bar */}
-            <div className="mb-6">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-                <Input
-                  type="text"
-                  placeholder="텍스트 또는 키워드로 검색..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-
-            {/* Category Tabs */}
-            <Tabs value={activeCategory} onValueChange={setActiveCategory}>
-              <TabsList className="mb-4">
-                {CATEGORIES.map(cat => (
-                  <TabsTrigger key={cat.value} value={cat.value}>
-                    {cat.icon} {cat.label}
-                  </TabsTrigger>
+        {/* 등록 폼 */}
+        <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-6 mb-8">
+          <h2 className="text-lg font-semibold mb-4">지식 추가</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">카테고리 *</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              >
+                {KNOWLEDGE_CATEGORIES.map((c) => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
                 ))}
-              </TabsList>
-
-              <TabsContent value={activeCategory}>
-                {/* Stats */}
-                <div className="mb-4 flex items-center gap-4 text-sm text-gray-600">
-                  <span>전체: {knowledgeList.length}개</span>
-                  <span>표시: {filteredList.length}개</span>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                질의·FAQ·잡담·불만·전환·연락처는 모두 RAG 후보입니다. (doc_type은 검색 필터가 아니라 구분용입니다.)
+              </p>
+            </div>
+            {needsContactFields && (
+              <div className="space-y-2 rounded-md border border-amber-100 bg-amber-50/50 p-3">
+                <p className="text-xs text-amber-900 font-medium">연락처 카테고리 — 전화번호 필수</p>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">전화번호 *</label>
+                  <input
+                    type="text"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    placeholder="예: 02-1234-5678"
+                  />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">부서명 (선택)</label>
+                  <input
+                    type="text"
+                    value={department}
+                    onChange={(e) => setDepartment(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    placeholder="예: 총무팀"
+                  />
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">문서 유형 (doc_type)</label>
+              <select
+                value={docType}
+                onChange={(e) => setDocType(e.target.value)}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              >
+                {DOC_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">대시보드 입력은 기본적으로 knowledge 사용</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">내용 (질문/문구) *</label>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={3}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                placeholder="예: 안녕하세요, OO입니다 / 영업시간이 궁금해요"
+              />
+            </div>
+            {needsAnswer && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">응답 문장 (즉시 캐시용)</label>
+                <textarea
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  rows={2}
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                  placeholder="예: 안녕하세요. 무엇을 도와드릴까요?"
+                />
+                <p className="text-xs text-gray-500 mt-1">인사/종료 인사는 이 문장이 캐시되어 다음 통화부터 즉시 사용됩니다.</p>
+              </div>
+            )}
+          </div>
+          {message && (
+            <p className={`mt-3 text-sm ${message.type === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
+              {message.text}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {submitting ? '저장 중…' : '저장'}
+          </button>
+        </form>
 
-                {/* Knowledge List */}
-                {isLoading ? (
-                  <div className="text-center py-8">로딩 중...</div>
-                ) : filteredList.length === 0 ? (
-                  <div className="text-center py-12">
-                    <p className="text-gray-500 mb-4">
-                      {searchQuery ? '검색 결과가 없습니다' : '지식이 없습니다'}
-                    </p>
-                    <Button onClick={() => router.push('/knowledge/add')}>
-                      <Plus className="w-4 h-4 mr-2" />
-                      첫 번째 지식 추가하기
-                    </Button>
+        {/* 목록 — 조회·삭제·카테고리별 분류 */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-lg font-semibold mb-4">등록된 지식 (조회·삭제·카테고리별 분류)</h2>
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <input
+              type="text"
+              value={filterOwner}
+              onChange={(e) => setFilterOwner(e.target.value)}
+              placeholder="owner 필터"
+              className="border border-gray-300 rounded px-2 py-1 text-sm w-24"
+            />
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="">전체 카테고리</option>
+              {KNOWLEDGE_CATEGORIES.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
+            <select
+              value={filterDocType}
+              onChange={(e) => setFilterDocType(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="">전체 doc_type</option>
+              {DOC_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+            <select
+              value={filterSource}
+              onChange={(e) => setFilterSource(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="">전체 source</option>
+              {KNOWLEDGE_SOURCES.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+            <label className="flex items-center gap-1.5 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={groupByCategory}
+                onChange={(e) => setGroupByCategory(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              카테고리별 분류 표시
+            </label>
+            <button
+              type="button"
+              onClick={fetchList}
+              disabled={loadingList}
+              className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200 text-sm disabled:opacity-50"
+            >
+              새로고침
+            </button>
+          </div>
+          {loadingList ? (
+            <p className="text-gray-500 text-sm">로딩 중…</p>
+          ) : items.length === 0 ? (
+            <p className="text-gray-500 text-sm">등록된 지식이 없거나 API를 사용할 수 없습니다.</p>
+          ) : groupByCategory && sortedCategories.length > 0 ? (
+            <div className="space-y-6">
+              {sortedCategories.map((cat) => (
+                <div key={cat}>
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 pb-1 border-b">
+                    {categoryLabel(cat)} ({itemsByCategory[cat].length}건)
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-gray-600">
+                          <th className="py-2 pr-4">ID</th>
+                          <th className="py-2 pr-4">owner</th>
+                          <th className="py-2 pr-4">doc_type</th>
+                          <th className="py-2 pr-4">source</th>
+                          <th className="py-2 pr-4">내용</th>
+                          <th className="py-2 w-20">삭제</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {itemsByCategory[cat].map((row) => (
+                          <tr key={row.id} className="border-b border-gray-100">
+                            <td className="py-2 pr-4 font-mono text-xs">{row.id}</td>
+                            <td className="py-2 pr-4">{row.metadata?.owner ?? '-'}</td>
+                            <td className="py-2 pr-4">{DOC_TYPES.find(t => t.value === row.metadata?.doc_type)?.label ?? row.metadata?.doc_type ?? '-'}</td>
+                            <td className="py-2 pr-4">{KNOWLEDGE_SOURCES.find(s => s.value === row.metadata?.source)?.label ?? row.metadata?.source ?? '-'}</td>
+                            <td className="py-2 max-w-md truncate" title={row.text}>{row.text}</td>
+                            <td className="py-2">
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(row.id)}
+                                disabled={deletingId === row.id}
+                                className="text-red-600 hover:text-red-800 text-xs disabled:opacity-50"
+                              >
+                                {deletingId === row.id ? '삭제 중…' : '삭제'}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    {filteredList.map((entry) => {
-                      const catInfo = getCategoryInfo(entry.category);
-                      return (
-                        <div
-                          key={entry.id}
-                          className="border rounded-lg p-4 hover:bg-gray-50 transition"
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-gray-600">
+                    <th className="py-2 pr-4">ID</th>
+                    <th className="py-2 pr-4">카테고리</th>
+                    <th className="py-2 pr-4">owner</th>
+                    <th className="py-2 pr-4">doc_type</th>
+                    <th className="py-2 pr-4">source</th>
+                    <th className="py-2 pr-4">내용</th>
+                    <th className="py-2 w-20">삭제</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((row) => (
+                    <tr key={row.id} className="border-b border-gray-100">
+                      <td className="py-2 pr-4 font-mono text-xs">{row.id}</td>
+                      <td className="py-2 pr-4">{row.metadata?.category ?? '-'}</td>
+                      <td className="py-2 pr-4">{row.metadata?.owner ?? '-'}</td>
+                      <td className="py-2 pr-4">{DOC_TYPES.find(t => t.value === row.metadata?.doc_type)?.label ?? row.metadata?.doc_type ?? '-'}</td>
+                      <td className="py-2 pr-4">{KNOWLEDGE_SOURCES.find(s => s.value === row.metadata?.source)?.label ?? row.metadata?.source ?? '-'}</td>
+                      <td className="py-2 max-w-md truncate" title={row.text}>{row.text}</td>
+                      <td className="py-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(row.id)}
+                          disabled={deletingId === row.id}
+                          className="text-red-600 hover:text-red-800 text-xs disabled:opacity-50"
                         >
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Badge variant="outline">
-                                  {catInfo.icon} {catInfo.label}
-                                </Badge>
-                                <Badge variant="secondary">
-                                  {entry.metadata.source}
-                                </Badge>
-                                {entry.metadata.usageCount && (
-                                  <Badge variant="default">
-                                    사용 {entry.metadata.usageCount}회
-                                  </Badge>
-                                )}
-                              </div>
-                              <p className="text-sm text-gray-700 mb-2 line-clamp-2">
-                                {entry.text}
-                              </p>
-                              {entry.keywords.length > 0 && (
-                                <div className="flex flex-wrap gap-1">
-                                  {entry.keywords.slice(0, 5).map((kw, i) => (
-                                    <span
-                                      key={i}
-                                      className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded"
-                                    >
-                                      {kw}
-                                    </span>
-                                  ))}
-                                  {entry.keywords.length > 5 && (
-                                    <span className="text-xs text-gray-500">
-                                      +{entry.keywords.length - 5}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex gap-2 ml-4">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setSelectedEntry(entry);
-                                  setShowDetailDialog(true);
-                                }}
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => router.push(`/knowledge/${entry.id}/edit`)}
-                              >
-                                수정
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => {
-                                  setDeleteTarget(entry.id);
-                                  setShowDeleteDialog(true);
-                                }}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      </main>
-
-      {/* Detail Dialog */}
-      <Dialog open={showDetailDialog} onOpenChange={setShowDetailDialog}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>지식 상세</DialogTitle>
-            <DialogDescription>ID: {selectedEntry?.id}</DialogDescription>
-          </DialogHeader>
-
-          {selectedEntry && (
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-semibold mb-2">카테고리</h3>
-                <Badge variant="outline">
-                  {getCategoryInfo(selectedEntry.category).icon}{' '}
-                  {getCategoryInfo(selectedEntry.category).label}
-                </Badge>
-              </div>
-
-              <div>
-                <h3 className="font-semibold mb-2">내용</h3>
-                <ScrollArea className="h-32 border rounded p-3 bg-gray-50">
-                  {selectedEntry.text}
-                </ScrollArea>
-              </div>
-
-              <div>
-                <h3 className="font-semibold mb-2">키워드</h3>
-                <div className="flex flex-wrap gap-2">
-                  {selectedEntry.keywords.map((kw, i) => (
-                    <Badge key={i} variant="secondary">
-                      {kw}
-                    </Badge>
+                          {deletingId === row.id ? '삭제 중…' : '삭제'}
+                        </button>
+                      </td>
+                    </tr>
                   ))}
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold mb-2">메타데이터</h3>
-                <div className="text-sm space-y-1">
-                  <p>출처: {selectedEntry.metadata.source}</p>
-                  {selectedEntry.metadata.usageCount && (
-                    <p>사용 횟수: {selectedEntry.metadata.usageCount}회</p>
-                  )}
-                  {selectedEntry.metadata.lastUsed && (
-                    <p>마지막 사용: {new Date(selectedEntry.metadata.lastUsed).toLocaleString()}</p>
-                  )}
-                  <p>생성: {new Date(selectedEntry.created_at).toLocaleString()}</p>
-                  {selectedEntry.updated_at && (
-                    <p>수정: {new Date(selectedEntry.updated_at).toLocaleString()}</p>
-                  )}
-                </div>
-              </div>
+                </tbody>
+              </table>
             </div>
           )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDetailDialog(false)}>
-              닫기
-            </Button>
-            <Button onClick={() => {
-              if (selectedEntry) {
-                router.push(`/knowledge/${selectedEntry.id}/edit`);
-              }
-            }}>
-              수정하기
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>지식 삭제</DialogTitle>
-            <DialogDescription>
-              정말로 이 지식을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter>
-            <Button 
-              variant="outline" 
-              onClick={() => {
-                setShowDeleteDialog(false);
-                setDeleteTarget(null);
-              }}
-            >
-              취소
-            </Button>
-            <Button variant="destructive" onClick={handleDelete}>
-              삭제
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </div>
     </div>
   );
 }
-

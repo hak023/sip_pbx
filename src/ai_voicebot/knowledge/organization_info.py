@@ -113,6 +113,10 @@ class OrganizationInfoManager:
             "greeting_templates": json.dumps([
                 "안녕하세요. AI 상담원입니다. 무엇을 도와드릴까요?"
             ], ensure_ascii=False),
+            "closing_templates": json.dumps([
+                "감사합니다. 필요하시면 다시 연락 주세요.",
+                "감사합니다. 좋은 하루 되세요.",
+            ], ensure_ascii=False),
         }
     
     def get_organization_name(self) -> str:
@@ -145,7 +149,49 @@ class OrganizationInfoManager:
         if not templates:
             return f"안녕하세요. {self.get_organization_name()} AI 비서입니다. 무엇을 도와드릴까요?"
         return random.choice(templates)
-    
+
+    def get_closing_templates(self) -> List[str]:
+        """마무리 멘트(끝인사) 템플릿 목록 반환 (VectorDB tenant_config.closing_templates)"""
+        templates_raw = self.tenant_config.get("closing_templates", "[]")
+        try:
+            if isinstance(templates_raw, str):
+                return json.loads(templates_raw)
+            elif isinstance(templates_raw, list):
+                return templates_raw
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return ["감사합니다. 필요하시면 다시 연락 주세요."]
+
+    def get_random_closing_template(self) -> str:
+        """랜덤 마무리 멘트 반환 (farewell 시 TTS로 재생)"""
+        templates = self.get_closing_templates()
+        if not templates:
+            return "감사합니다. 필요하시면 다시 연락 주세요."
+        return random.choice(templates)
+
+    def get_intent_templates(self, intent: str) -> Optional[List[str]]:
+        """
+        테넌트별 intent 응답 템플릿 오버라이드.
+        VectorDB tenant_config.intent_templates 에서 intent별 문장 리스트 반환.
+        없으면 None (호출측에서 기본 INTENT_RESPONSE_TEMPLATES 사용).
+        """
+        raw = self.tenant_config.get("intent_templates")
+        if not raw:
+            return None
+        try:
+            if isinstance(raw, str):
+                data = json.loads(raw)
+            elif isinstance(raw, dict):
+                data = raw
+            else:
+                return None
+            templates = data.get(intent)
+            if isinstance(templates, list) and all(isinstance(s, str) for s in templates):
+                return templates
+            return None
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return None
+
     def get_capabilities(self) -> List[str]:
         """제공 가능한 기능 목록 반환 (캐시된 값 사용)"""
         if self._capabilities_cache is not None:

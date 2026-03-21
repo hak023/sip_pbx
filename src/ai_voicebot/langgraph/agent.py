@@ -14,6 +14,7 @@ ConversationState를 공유하는 StateGraph 워크플로우.
                            update_state → END
 """
 
+import asyncio
 from typing import Optional
 
 import structlog
@@ -27,6 +28,14 @@ from src.ai_voicebot.langgraph.nodes.generate_response import generate_response_
 from src.ai_voicebot.langgraph.nodes.step_back_prompt import step_back_node
 from src.ai_voicebot.langgraph.nodes.hitl_alert import hitl_alert_node
 from src.ai_voicebot.langgraph.nodes.update_state import update_state_node
+from src.ai_voicebot.langgraph.nodes.greeting_farewell_cache import check_greeting_farewell_cache_node
+from src.ai_voicebot.langgraph.nodes.response_shortcuts import (
+    template_response_node,
+    repeat_response_node,
+    clarification_response_node,
+    help_response_node,
+    fallback_response_node,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -39,13 +48,27 @@ def _route_after_cache(state: ConversationState) -> str:
 
 
 def _route_after_intent(state: ConversationState) -> str:
-    """의도에 따라 분기"""
+    """의도에 따라 분기. 설계: AI_RESPONSE_HUMANLIKE_DESIGN.md §3.2, CHROMADB_CATEGORY_DESIGN §4.2"""
     intent = state.get("intent", "")
     if intent == "farewell":
-        return "update_state"
+        return "check_greeting_farewell_cache"
     if intent == "greeting":
-        # 인사 의도는 캐시 스킵 → 바로 응답 생성
+        return "check_greeting_farewell_cache"
+    # B 그룹 반응/피드백 → 템플릿 응답
+    if intent in ("affirm", "deny", "gratitude", "doubt", "positive_reaction", "negative_reaction"):
+        return "template_response"
+    if intent == "repeat":
+        return "repeat_response"
+    if intent == "clarification":
+        return "clarification_response"
+    if intent == "help":
+        return "help_response"
+    if intent in ("out_of_scope", "nlu_fallback"):
+        return "fallback_response"
+    # 잡담: RAG/semantic cache 없이 LLM만으로 짧게 응답
+    if intent == "chitchat":
         return "generate_response"
+    # question, complaint, transfer, unknown → 캐시·RAG 경로
     return "check_cache"
 
 
@@ -55,6 +78,15 @@ def _route_after_rag(state: ConversationState) -> str:
     if confidence < 0.4:
         return "step_back"
     return "generate_response"
+
+
+def _route_after_greeting_farewell_cache(state: ConversationState) -> str:
+    """캐시 히트 시 update_state. 미스 시 knowledge RAG(인사/종료 category)로 폴백."""
+    if state.get("rag_cache_hit"):
+        return "update_state"
+    if state.get("intent") in ("greeting", "farewell"):
+        return "rewrite_query"
+    return "update_state"
 
 
 _compiled_graph_cache = None  # 전역 캐시: 서버 라이프사이클 동안 재사용
@@ -97,12 +129,18 @@ def build_conversation_graph():
     graph.add_node("hitl_alert", hitl_alert_node)
     graph.add_node("update_cache", update_cache_node)
     graph.add_node("update_state", update_state_node)
+    # 단축 응답 노드 (설계 §3.3)
+    graph.add_node("template_response", template_response_node)
+    graph.add_node("repeat_response", repeat_response_node)
+    graph.add_node("clarification_response", clarification_response_node)
+    graph.add_node("help_response", help_response_node)
+    graph.add_node("fallback_response", fallback_response_node)
+    graph.add_node("check_greeting_farewell_cache", check_greeting_farewell_cache_node)
 
     # ── 엣지 정의 ──
-    # 시작점
     graph.set_entry_point("classify_intent")
 
-    # classify_intent → (farewell → update_state, greeting → generate, else → check_cache)
+    # classify_intent → 의도별 분기 (greeting/farewell은 캐시 선검색)
     graph.add_conditional_edges(
         "classify_intent",
         _route_after_intent,
@@ -110,8 +148,28 @@ def build_conversation_graph():
             "update_state": "update_state",
             "generate_response": "generate_response",
             "check_cache": "check_cache",
+            "check_greeting_farewell_cache": "check_greeting_farewell_cache",
+            "template_response": "template_response",
+            "repeat_response": "repeat_response",
+            "clarification_response": "clarification_response",
+            "help_response": "help_response",
+            "fallback_response": "fallback_response",
         },
     )
+
+    # greeting/farewell 캐시 검색 후 분기
+    graph.add_conditional_edges(
+        "check_greeting_farewell_cache",
+        _route_after_greeting_farewell_cache,
+        {
+            "update_state": "update_state",
+            "rewrite_query": "rewrite_query",
+        },
+    )
+
+    # 단축 응답 노드 → update_state → END (캐시/RAG/hitl_alert 스킵)
+    for node_name in ("template_response", "repeat_response", "clarification_response", "help_response", "fallback_response"):
+        graph.add_edge(node_name, "update_state")
 
     # check_cache → (hit → update_state, miss → rewrite_query)
     graph.add_conditional_edges(
@@ -248,6 +306,17 @@ class ConversationAgent:
             result = await self.graph.ainvoke(invoke_state)
             graph_elapsed = time.time() - graph_start
 
+            # 단축 경로/캐시 히트 경로는 messages를 반환하지 않음 → 이 턴의 user+assistant 보강
+            messages_before = invoke_state.get("messages", [])
+            messages_after = result.get("messages", [])
+            response_text = result.get("response", "")
+            if response_text and len(messages_after) <= len(messages_before):
+                from datetime import datetime
+                repaired = list(messages_after)
+                repaired.append({"role": "user", "content": user_text, "timestamp": datetime.now().isoformat()})
+                repaired.append({"role": "assistant", "content": response_text, "timestamp": datetime.now().isoformat()})
+                result = {**result, "messages": repaired}
+
             # 결과에서 지속 상태 추출
             self._state["messages"] = result.get("messages", self._state["messages"])
             self._state["turn_count"] = result.get("turn_count", self._state["turn_count"])
@@ -255,15 +324,16 @@ class ConversationAgent:
 
             total_elapsed = time.time() - utterance_start
             
-            # ✅ 구간별 타이밍 로그 (디버깅용)
-            logger.info("⏱️ [TIMING] process_utterance 완료",
+            # ✅ 구간별 타이밍 로그 (6.2 지연 구간 점검: classify_intent(LLM), generate_response(LLM) 로그 참고)
+            logger.info("process_utterance_complete",
                        user_text=user_text[:50],
                        total_elapsed=f"{total_elapsed:.3f}s",
                        langgraph_elapsed=f"{graph_elapsed:.3f}s",
                        intent=result.get("intent", "unknown"),
                        confidence=f"{result.get('confidence', 0.0):.3f}",
                        cache_hit=result.get("rag_cache_hit", False),
-                       response_len=len(result.get("response", "")))
+                       response_len=len(result.get("response", "")),
+                       note="지연 시 ⏱️ [TIMING] classify_intent (LLM) / generate_response (LLM) 로그로 구간 확인")
 
             return {
                 "response": result.get("response", ""),
@@ -274,6 +344,8 @@ class ConversationAgent:
                 "business_state": result.get("business_state", "initial"),
                 "response_chunks": result.get("response_chunks", []),
                 "rag_cache_hit": result.get("rag_cache_hit", False),
+                "needs_follow_up": result.get("needs_follow_up", False),
+                "follow_up_user_query": result.get("follow_up_user_query", ""),
             }
 
         except Exception as e:
@@ -284,53 +356,104 @@ class ConversationAgent:
                 "confidence": 0.0,
                 "intent": "unknown",
                 "needs_human": False,
+                "needs_follow_up": False,
+                "follow_up_user_query": "",
             }
 
     async def generate_greeting(self) -> str:
         """
         1차 인사 메시지 생성 (통화 시작 시 호출).
-        
-        고정 템플릿 기반으로 빠르게 인사합니다.
-        LLM 호출 없이 즉시 반환하여 사용자 대기 시간을 최소화합니다.
+
+        우선순위:
+        1) 지식베이스 `knowledge` 컬렉션 category=greeting_phase1 (owner 일치)
+        2) tenant_config `greeting_templates` (OrganizationInfoManager)
+        3) 기본 문구
+
+        LLM 호출 없이 즉시 반환.
         """
+        # 1) 지식베이스 greeting_phase1 (CHROMADB_CATEGORY_DESIGN)
+        if self.vector_db and self.owner:
+            try:
+                from src.ai_voicebot.knowledge.knowledge_service import get_knowledge_greeting_text
+
+                loop = asyncio.get_event_loop()
+                kb_text = await loop.run_in_executor(
+                    None,
+                    lambda: get_knowledge_greeting_text(
+                        self.vector_db, self.owner, "greeting_phase1"
+                    ),
+                )
+                if kb_text and len(kb_text.strip()) >= 2:
+                    logger.info(
+                        "greeting_from_kb_greeting_phase1",
+                        owner=self.owner,
+                        text_len=len(kb_text),
+                        preview=kb_text[:120],
+                        note="지식베이스 greeting_phase1 문서 본문 사용",
+                    )
+                    return kb_text.strip()
+            except Exception as e:
+                logger.debug("greeting_kb_phase1_lookup_failed", owner=self.owner, error=str(e))
+
+        org_name = "AI 비서"
         if self.org_manager:
             org_name = self.org_manager.get_organization_name()
-            # VectorDB tenant_config의 greeting_templates에서 랜덤 선택
             try:
                 template = self.org_manager.get_random_greeting_template()
-                if template:
-                    return template
+                if template and len(template.strip()) >= 5:
+                    # tenant_config greeting_templates — 짧은 멘트·다양한 표현 허용
+                    return template.strip()
             except Exception:
                 pass
-        else:
-            org_name = "AI 비서"
-
-        return f"안녕하세요. {org_name} AI 통화 비서입니다. 무엇을 도와드릴까요?"
+        full = f"안녕하세요. {org_name} AI 통화 비서입니다. 무엇을 도와드릴까요?"
+        return full
 
     async def generate_capability_guide(self) -> str:
         """
         2차 인사말: 업무 안내 메시지 생성.
-        
-        기관의 capabilities를 기반으로 "저는 ~을 도와드릴 수 있습니다" 형태의
-        안내 메시지를 생성합니다. 캐시가 비어 있으면 load_capabilities()로 먼저 로드.
+
+        우선순위:
+        1) 지식베이스 category=greeting_phase2
+        2) capabilities 기반 자동 문장
         """
+        if self.vector_db and self.owner:
+            try:
+                from src.ai_voicebot.knowledge.knowledge_service import get_knowledge_greeting_text
+
+                loop = asyncio.get_event_loop()
+                kb_text = await loop.run_in_executor(
+                    None,
+                    lambda: get_knowledge_greeting_text(
+                        self.vector_db, self.owner, "greeting_phase2"
+                    ),
+                )
+                if kb_text and len(kb_text.strip()) >= 2:
+                    logger.info(
+                        "greeting_phase2_from_kb",
+                        owner=self.owner,
+                        text_len=len(kb_text),
+                        preview=kb_text[:120],
+                        note="지식베이스 greeting_phase2 문서 본문 사용",
+                    )
+                    return kb_text.strip()
+            except Exception as e:
+                logger.debug("greeting_kb_phase2_lookup_failed", owner=self.owner, error=str(e))
+
         capabilities = []
         org_name = "AI 비서"
-        
+
         if self.org_manager:
             org_name = self.org_manager.get_organization_name()
             try:
-                # 캐시가 비어 있으면 VectorDB에서 먼저 로드 (실제 가이드 멘트가 TTS로 나가도록)
                 await self.org_manager.load_capabilities()
                 capabilities = self.org_manager.get_capabilities()
             except Exception:
                 pass
-        
+
         if not capabilities:
             return "어떤 내용이 궁금하시면 편하게 말씀해 주세요."
-        
-        # API 가이드 멘트 미리보기와 동일한 문장으로 통일 (캐시된 미리보기 = 실제 TTS 안내)
-        cap_text = ", ".join(capabilities[:7])  # API와 동일 7개 제한
+
+        cap_text = ", ".join(capabilities[:7])
         return f"저는 {cap_text}을 도와드릴 수 있어요. 어떤 것이 궁금하신가요?"
 
     def reset(self):

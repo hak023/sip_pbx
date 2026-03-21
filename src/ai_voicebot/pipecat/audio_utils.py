@@ -207,4 +207,22 @@ class RTPPacketBuilder:
         self.sequence = (self.sequence + 1) & 0xFFFF
         self.timestamp = (self.timestamp + self.timestamp_increment) & 0xFFFFFFFF
         
-        return header + payload
+        packet = header + payload
+        
+        # 디버그: 첫 몇 개 패킷 상세 로깅
+        if not hasattr(self, '_packets_logged'):
+            self._packets_logged = 0
+        if self._packets_logged < 3:
+            logger.debug("rtp_packet_built",
+                        packet_size=len(packet),
+                        header_size=len(header),
+                        payload_size=len(payload),
+                        sequence=(self.sequence - 1) & 0xFFFF,
+                        timestamp=(self.timestamp - self.timestamp_increment) & 0xFFFFFFFF,
+                        ssrc=self.ssrc,
+                        codec=self.codec,
+                        pt=self.pt,
+                        note="RTP 패킷 생성 상세 (처음 3개만)")
+            self._packets_logged += 1
+        
+        return packet

@@ -4,7 +4,7 @@
 
 | 항목 | 내용 |
 |-----|------|
-| **문서 버전** | v5.1 |
+| **문서 버전** | v5.3 |
 | **최종 업데이트** | 2026-02-19 |
 | **작성자** | Winston (Architect) |
 | **프로젝트명** | SIP PBX B2BUA + AI Voice Assistant + Frontend Control Center |
@@ -20,6 +20,8 @@
 | 2026-01-29 | v4.0 | AI Outbound Call (목적지향 대화, TaskTracker, OutboundCallManager) 구현 및 통합 (섹션 26) | AI Assistant |
 | 2026-02-13 | v5.0 | **멀티테넌트 RAG 아키텍처** - VectorDB 기반 OrganizationInfoManager, owner 필터, 테넌트별 데이터 격리, Frontend 멀티테넌트 지원 (섹션 27) | AI Assistant |
 | 2026-02-19 | v5.1 | **TTS→RTP 파이프라인·Phase 타이밍** (4.3.2a), **RAG 부족 시 HITL 대응 플로우** (19.1a) 설계 반영. 참고: docs/reports/TTS_RTP_AND_HITL_DESIGN.md | AI Assistant |
+| 2026-02-19 | v5.2 | **AI 응답 고도화 (사람처럼 응대)** 설계 반영: 확장 Intent 택소노미, 의도별 HITL 조건, shortcut 경로 HITL 연동 (섹션 19.1b). 참고: docs/design/AI_RESPONSE_HUMANLIKE_DESIGN.md | AI Assistant |
+| 2026-02-19 | v5.3 | **HITL 구현 현황** (섹션 19.1c): HITLService, call_id별 queue·20초 fallback timer, hitl_fallback_available, emit_call_ended 시 unregister_call(SIP BYE 연동) 반영 | AI Assistant |
 
 ---
 
@@ -36,9 +38,11 @@
 > - ✅ **Backend API Services**: FastAPI Gateway, WebSocket, HITL
 > - ✅ **TTS→RTP 파이프라인·Phase 타이밍**: Pipecat 큐잉·변수 정의·Phase1→Phase2 대기 (섹션 4.3.2a)
 > - ✅ **RAG 부족 시 HITL 대응**: 모른다 명시 → HITL 요청 → timeout/응답에 따른 문구·종료·피드백 (섹션 19.1a)
+> - ✅ **AI 응답 고도화 (사람처럼 응대)**: 확장 Intent 택소노미, 의도별 템플릿/폴백 경로, **의도별 HITL 연동** (섹션 19.1b)
 > 
 > Frontend 관련 내용은 **[Frontend Architecture](frontend-architecture.md)** 문서를 참조하세요.  
-> 상세 설계: **[TTS_RTP_AND_HITL_DESIGN.md](../reports/TTS_RTP_AND_HITL_DESIGN.md)** (TTS→RTP 변수 정의, RAG 부족 HITL 플로우).
+> 상세 설계: **[TTS_RTP_AND_HITL_DESIGN.md](../reports/TTS_RTP_AND_HITL_DESIGN.md)** (TTS→RTP 변수 정의, RAG 부족 HITL 플로우).  
+> **대화 응답 고도화**: **[AI_RESPONSE_HUMANLIKE_DESIGN.md](../design/AI_RESPONSE_HUMANLIKE_DESIGN.md)** (확장 Intent, 의도별 HITL 조건, 구현 단계).
 
 ---
 
@@ -2931,6 +2935,65 @@ RAG 검색 결과가 없거나 confidence가 낮을 때, "모른다"를 명시�
 
 상세 설계: `docs/reports/TTS_RTP_AND_HITL_DESIGN.md`.
 
+### 19.1b 의도(Intent) 기반 HITL 및 응답 고도화 ⭐
+
+AI 비서가 **사람처럼** 맞장구·반응·일상 대화·제어(반복/명확화/도움)를 구분하고, **HITL이 필요한 intent**에 한해 운영자 개입을 요청하도록 하는 설계가 반영되어 있다.
+
+**확장 Intent 택소노미 (요약)**
+
+| 그룹 | Intent 예 | 응답 전략 |
+|------|-----------|-----------|
+| 시작/종료 | greeting, farewell | 인사/끝인사 (기존) |
+| 반응/피드백 | affirm, deny, gratitude, doubt, positive_reaction, negative_reaction | 템플릿 기반 짧은 응답 |
+| 일상/제어 | chitchat, repeat, clarification, help | 템플릿·이전 발화·capability 안내 |
+| 업무 | question, complaint, transfer | RAG·LLM 또는 HITL |
+| 폴백 | out_of_scope, nlu_fallback | 고정 멘트 또는 HITL(설정) |
+
+**의도별 HITL 필요 여부**
+
+| Intent | HITL | 조건 |
+|--------|------|------|
+| **transfer** | 항상 | 담당자 연결 요청 |
+| **complaint** | 조건부 | confidence < 0.5 |
+| **question** 등 (RAG 경로) | 조건부 | needs_follow_up 또는 confidence < 0.3 |
+| **out_of_scope / nlu_fallback** | 선택(설정) | 설정 또는 confidence에 따라 needs_human 설정 |
+| 그 외 (affirm, gratitude, repeat, help 등) | 불필요 | 템플릿/경량 응답만 |
+
+**경로 연동**
+
+- **generate_response를 거치는 경로**: `generate_response → hitl_alert → update_cache → update_state`. `hitl_alert` 노드에서 intent/confidence/needs_follow_up 기준으로 `needs_human`, `hitl_reason` 설정.
+- **hitl_alert를 타지 않는 경로** (template_response, fallback_response 등): 해당 노드에서 HITL이 필요한 intent일 때 state에 `needs_human`, `hitl_reason`을 설정한 뒤 `update_state`로 전달하여, 그래프 최종 결과에 HITL 정보가 포함되도록 함.
+
+상세 설계(확장 intent 집합, 라우팅, 구현 Phase, HITL 조건 정리): **[AI_RESPONSE_HUMANLIKE_DESIGN.md](../design/AI_RESPONSE_HUMANLIKE_DESIGN.md)**.
+
+### 19.1c HITL 구현 현황 (Voice Pipeline) ⭐
+
+19.1a·19.1b 설계에 따른 **실제 구현**은 아래와 같다. Pipecat/LangGraph 기반 통화 파이프라인과 WebSocket·Frontend와 연동되어 동작한다.
+
+**구현 컴포넌트**
+
+| 구성요소 | 경로 | 역할 |
+|----------|------|------|
+| **HITLService** | `src/services/hitl.py` | call_id별 `hitl_response_queue` 등록, 관리자 제출 시 해당 큐에 put, 타임아웃·fallback affirm 상태 관리, 통화 종료 시 `unregister_call` |
+| **RAGLLMProcessor** | `src/ai_voicebot/pipecat/processors/rag_processor.py` | needs_human 시 queue 자동 생성·등록, `emit_hitl_requested`, 20초 fallback 타이머 시작, affirm 시 `emit_hitl_fallback_available` |
+| **WebSocket** | `src/websocket/server.py` | `submit_hitl_response` → `get_hitl_service().submit_response()` 후 `hitl_resolved` 발송; **`emit_call_ended(call_id)`** 내부에서 `unregister_call(call_id)` 호출로 SIP BYE 시 HITL 정리 |
+| **Frontend** | `frontend/hooks/useWebSocket.ts`, `app/dashboard/page.tsx` | `hitl_fallback_available` 수신 시 "Fallback 가능 (별도 연락 희망)" 섹션 표시, `fallbackAvailableCallIds`·`clearFallback` |
+
+**HITL UX 흐름 (구현 기준)**
+
+1. **발신자 안내 후 관리자 요청**  
+   발신자에게 "확인해보겠습니다. 잠시만 기다려 주세요." TTS 재생 후, 운영자에게 `hitl_requested` 이벤트 발송.
+2. **관리자 응답 시**  
+   WebSocket `submit_hitl_response` → HITLService.submit_response → 해당 call의 queue에 응답 텍스트 put → RAGLLMProcessor의 consumer가 `_format_hitl_response_for_customer` 후 TTS 재생 → `hitl_resolved` 발송.
+3. **관리자 미응답 시 (20초 타임아웃)**  
+   `start_fallback_timer(call_id, 20.0)` → 20초 후 "해당 내용 확인 후 별도 연락을 드릴까요?" 문구를 같은 queue에 put → TTS 재생 → 발신자 긍정(affirm) 시 `hitl_fallback_available` 이벤트 발송 → Frontend에 Fallback 가능 표시.
+4. **통화 종료 시 정리**  
+   SIP BYE 등 통화 종료 처리부에서 **`emit_call_ended(call_id)`**만 호출하면, 그 안에서 `get_hitl_service().unregister_call(call_id)`가 호출되어 해당 통화의 queue·타임아웃 태스크가 정리된다.
+
+**참고**  
+- 상세 UX·구현 상태 표: **[AI_RESPONSE_HUMANLIKE_DESIGN.md §5.5](../design/AI_RESPONSE_HUMANLIKE_DESIGN.md)**.  
+- 관리자 확인 타임아웃: **20초** (기본값).
+
 ### 19.2 운영자 상태 관리 (신규 기능) ⭐
 
 #### 운영자 상태 정의
@@ -3604,6 +3667,15 @@ async def _speak(self, text: str):
 **3. Frontend 통화 이력 UI**
 - 파일: `frontend/app/call-history/page.tsx`
 - 기능: 목록 표시, HITL 필터, 상세 다이얼로그, 트랜스크립트 표시
+- **통화 유형 표시**: 목록에 "통화 유형" 컬럼 (AI 응대 / 일반). 백엔드가 `is_ai_handled` 반환 시 구분 표시. 사람 간 + AI 응대 모두 이력에 남도록 백엔드 계약은 `docs/design/CALL_HISTORY_AND_RECORDINGS.md` §1 참고.
+
+**4. 녹음 파일 제공 API** ✅
+- 파일: `src/api/routers/recordings.py`
+- 엔드포인트: `GET /api/recordings/{call_id}/stream` (스트리밍), `GET /api/recordings/{call_id}/mixed.wav` (다운로드), `GET /api/recordings/{call_id}/exists` (존재 여부)
+- FastAPI 앱에 `app.include_router(recordings.router)` 등록 필요. 상세: `docs/design/CALL_HISTORY_AND_RECORDINGS.md` §2.
+
+**5. Frontend 녹음 조회·재생** ✅
+- 통화 이력 상세 다이얼로그에 "녹음" 섹션 추가: HTML5 audio 재생 + 다운로드 링크. 녹음 없을 시 "녹음 파일 없음" 표시.
 
 #### ❌ 미구현 항목 (우선순위 HIGH)
 
@@ -3612,24 +3684,16 @@ async def _speak(self, text: str):
 - 필요: RTP Relay 레벨에서 패킷 캡처
 - 예상 작업: 1-2일
 
-**2. 녹음 파일 제공 API**
-- 문제: 파일이 저장되지만 Frontend 접근 불가
-- 필요: 파일 다운로드 + 스트리밍 API (Range 헤더 지원)
-- 예상 작업: 0.5일
-
-**3. Frontend 녹음 재생 UI**
-- 문제: 녹음 재생 페이지 없음
-- 필요: Wavesurfer.js 통합, Waveform 시각화
-- 예상 작업: 1-2일
-
-**4. AI 처리 과정 조회 API**
+**2. AI 처리 과정 조회 API**
 - 문제: RAG/LLM 로그가 DB에 저장 안됨
 - 필요: `ai_insights` API 및 테이블
 - 예상 작업: 1일
 
-### 21.2 Recording API 설계
+### 21.2 Recording API 설계 및 구현
 
-**신규 파일**: `src/api/routers/recordings.py`
+**구현 파일**: `src/api/routers/recordings.py` (Range 스트리밍, 다운로드, exists 포함). 라우터 등록: `app.include_router(recordings.router)`. 통화 이력·녹음 요약: **docs/design/CALL_HISTORY_AND_RECORDINGS.md**.
+
+**참고: 기존 설계 예시 (동일 동작 구현됨)**
 
 ```python
 """
@@ -4764,6 +4828,7 @@ ai_voicebot:
 - 📄 **[AI 인사말 + Capability 가이드 설계서](../design/ai-greeting-and-capability-guide.md)** - 2-Phase Greeting + VectorDB Capability
 - 📄 **[Knowledge Extraction v2 설계서](../design/knowledge-extraction-upgrade.md)** - 멀티스텝 추출 파이프라인
 - 📄 **[AI Outbound Call 설계서](../design/ai-outbound-call.md)** - 목적지향 AI 발신, TaskTracker, OutboundCallManager
+- 📄 **[AI 응답 고도화 (사람처럼 응대) 설계서](../design/AI_RESPONSE_HUMANLIKE_DESIGN.md)** - 확장 Intent 택소노미, 의도별 HITL 조건, 템플릿/폴백 경로, 구현 Phase
 - 📄 **[Gemini Model Comparison](../guides/gemini-model-comparison.md)** - Flash vs Pro 비교
 - 📄 **[Response Time Analysis](../analysis/ai-response-time-analysis.md)** - 성능 분석
 

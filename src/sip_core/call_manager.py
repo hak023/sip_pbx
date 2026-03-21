@@ -3,6 +3,7 @@
 통화 생명주기 관리
 """
 
+import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -62,9 +63,15 @@ class CallManager:
         self.ai_orchestrator = ai_orchestrator
         self.no_answer_timeout = no_answer_timeout
         self.ai_enabled_calls = set()  # AI 모드가 활성화된 통화 ID 집합
+        # ACK 수신 시 TTS 시작용 (인사말을 call_established 이후에 재생해 RTP가 전달되도록)
+        self._call_established_events: Dict[str, asyncio.Event] = {}
         
         # Pipecat Pipeline Builder (Phase 1)
         self.pipecat_builder = None
+        # Pipecat Pipeline task 참조 (BYE 수신 시 즉시 취소용)
+        self._pipecat_tasks: Dict[str, asyncio.Task] = {}
+        # Pipeline 취소 대기 타임아웃 (초) - Pipecat cancel_timeout 20초 고려
+        self._pipecat_cancel_timeout_secs = 25.0
         
         # 통화 녹음 지원 (신규)
         self.recording_enabled = recording_enabled
@@ -158,10 +165,89 @@ class CallManager:
         self.pipecat_builder = builder
         logger.info("✅ [Pipecat] Pipeline Builder injected into CallManager",
                    pipecat_available=builder is not None)
-    
+
     def set_sip_endpoint(self, sip_endpoint) -> None:
         """SIP Endpoint 참조 설정 (Pipecat에서 RTP Worker 접근용)"""
         self._sip_endpoint = sip_endpoint
+
+    async def cancel_pipeline(self, call_id: str) -> bool:
+        """BYE 수신 시 Pipecat Pipeline task 즉시 취소.
+        
+        Args:
+            call_id: 통화 ID (원본 Call-ID)
+            
+        Returns:
+            bool: 취소 성공 여부 (task가 있었고 취소됨)
+        """
+        task = self._pipecat_tasks.pop(call_id, None)
+        if task is None:
+            return False
+        if task.done():
+            return True
+        try:
+            task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task),
+                    timeout=self._pipecat_cancel_timeout_secs,
+                )
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "pipecat_pipeline_cancel_timeout",
+                    call_id=call_id,
+                    timeout_secs=self._pipecat_cancel_timeout_secs,
+                )
+            except Exception as e:
+                logger.warning("pipecat_pipeline_cancel_error", call_id=call_id, error=str(e))
+            else:
+                logger.info("pipecat_pipeline_cancelled", call_id=call_id)
+            return True
+        except Exception as e:
+            logger.warning("pipecat_pipeline_cancel_error", call_id=call_id, error=str(e))
+            return False
+
+    async def cancel_all_pipelines(self) -> int:
+        """서버 종료 시 모든 활성 Pipecat Pipeline task 취소 (Graceful shutdown).
+        
+        Returns:
+            int: 취소된 task 수
+        """
+        if not self._pipecat_tasks:
+            return 0
+        tasks = list(self._pipecat_tasks.items())
+        self._pipecat_tasks.clear()
+        cancelled = 0
+        for call_id, task in tasks:
+            if task.done():
+                cancelled += 1
+                continue
+            try:
+                task.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=self._pipecat_cancel_timeout_secs,
+                    )
+                except asyncio.CancelledError:
+                    pass
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "pipecat_pipeline_cancel_timeout",
+                        call_id=call_id,
+                        timeout_secs=self._pipecat_cancel_timeout_secs,
+                    )
+                cancelled += 1
+            except Exception as e:
+                logger.warning(
+                    "pipecat_pipeline_cancel_error",
+                    call_id=call_id,
+                    error=str(e),
+                )
+        if cancelled:
+            logger.info("pipecat_all_pipelines_cancelled", count=cancelled)
+        return cancelled
 
     async def request_hangup(self, call_id: str) -> bool:
         """
@@ -291,6 +377,10 @@ class CallManager:
         """
         return self.call_repository.count_active()
 
+    def get_active_sessions(self):
+        """대시보드/GET /api/calls/active용 활성 통화 세션 목록."""
+        return self.call_repository.get_active_sessions()
+
     def register_b2bua_call(self, call_id: str, from_uri: str, to_uri: str) -> None:
         """B2BUA 경로에서 수신한 통화를 Repository에 등록 (대시보드 실시간 통화 목록용)
         
@@ -323,6 +413,13 @@ class CallManager:
             session.mark_established()
             self.call_repository.update(session)
             logger.debug("b2bua_call_established", call_id=call_id)
+
+    def notify_call_established(self, call_id: str) -> None:
+        """ACK 수신(통화 수립) 시 호출. AI 인사말을 이 시점 이후에 재생하도록 대기 중인 이벤트를 set."""
+        event = self._call_established_events.pop(call_id, None)
+        if event:
+            event.set()
+            logger.debug("call_established_event_set", call_id=call_id)
 
     def remove_b2bua_call(self, call_id: str) -> None:
         """B2BUA 통화 종료 시 Repository에서 제거"""
@@ -457,11 +554,26 @@ class CallManager:
             callee_username: 착신자 사용자명
         """
         import asyncio
+        # 4.1 중복 방지: 동일 call_id로 이미 처리 시작됐으면 한 번만 실행
+        activated = getattr(self, "_no_answer_activated_call_ids", None)
+        if activated is None:
+            self._no_answer_activated_call_ids = set()
+            activated = self._no_answer_activated_call_ids
+        if call_id in activated:
+            logger.debug("no_answer_timeout_already_activated",
+                         call_id=call_id,
+                         callee=callee_username)
+            return
+        activated.add(call_id)
         try:
-            logger.warning("no_answer_timeout_activating_ai",
-                          call_id=call_id,
-                          callee=callee_username,
-                          timeout=self.no_answer_timeout)
+            # 진단: 부재중 터크오버 시점의 AI 준비 상태 (ai_orchestrator_not_available 원인 추적용)
+            logger.info("no_answer_timeout_activating_ai",
+                        call_id=call_id,
+                        callee=callee_username,
+                        timeout=self.no_answer_timeout,
+                        ai_orchestrator_is_set=self.ai_orchestrator is not None,
+                        pipecat_builder_is_set=self.pipecat_builder is not None,
+                        diagnostic="둘 다 False면 서버 기동 로그에서 ai_readiness_after_background_init 또는 ai_voicebot_background_init_error 검색")
             
             # AI Orchestrator가 있으면 AI 모드로 전환
             if self.ai_orchestrator:
@@ -472,6 +584,45 @@ class CallManager:
                 
                 # AI 활성화 통화로 등록
                 self.ai_enabled_calls.add(call_id)
+                
+                # CallSession을 AI 응대로 업데이트 (대시보드 활성 통화 목록에 표시되도록)
+                call_session = self.get_session(call_id)
+                if call_session:
+                    call_session.mark_established()  # 상태를 ESTABLISHED로
+                    # AI 응대 플래그 설정 (Frontend에서 'AI 응대' 표시)
+                    if hasattr(call_session, 'metadata'):
+                        if call_session.metadata is None:
+                            call_session.metadata = {}
+                        call_session.metadata['is_ai_handled'] = True
+                    self.call_repository.update(call_session)
+                    logger.info("call_session_marked_as_ai",
+                               call_id=call_id,
+                               state=call_session.state.value,
+                               note="Repository 업데이트 완료 - 대시보드에 표시됨")
+                    
+                    # WebSocket: call_started 이벤트 발송 (Frontend 실시간 업데이트)
+                    try:
+                        from src.websocket import manager as ws_manager
+                        call_data = {
+                            "caller": call_session.get_caller_uri() if hasattr(call_session, 'get_caller_uri') else "",
+                            "callee": call_session.get_callee_uri() if hasattr(call_session, 'get_callee_uri') else callee_username,
+                            "state": call_session.state.value if hasattr(call_session.state, 'value') else str(call_session.state),
+                            "is_ai_handled": True,
+                        }
+                        await ws_manager.emit_call_started(call_id, call_data)
+                        logger.info("ai_call_started_event_emitted", call_id=call_id)
+                    except Exception as ws_err:
+                        logger.warning("ai_call_started_event_failed", call_id=call_id, error=str(ws_err))
+                else:
+                    logger.warning("call_session_not_found_for_ai_takeover",
+                                  call_id=call_id,
+                                  note="Repository에 세션 없음 - 대시보드에 표시 안 될 수 있음")
+                
+                # ACK 수신 시 인사말 시작용 이벤트 (TTS를 call_established 이후에 재생해 RTP 전달 보장)
+                call_established_event = asyncio.Event()
+                self._call_established_events[call_id] = call_established_event
+                if hasattr(self.ai_orchestrator, 'set_call_established_event'):
+                    self.ai_orchestrator.set_call_established_event(call_id, call_established_event)
                 
                 # Pipecat Pipeline Builder가 있으면 Pipecat 모드로 실행
                 if self.pipecat_builder:
@@ -492,21 +643,109 @@ class CallManager:
                         rtp_worker = self._sip_endpoint._rtp_workers.get(call_id)
                     
                     if rtp_worker:
+                        # RTP Worker를 Pipecat 모드로 전환 (오디오 큐 생성·RTP→파이프라인 라우팅 활성화)
+                        rtp_worker.enable_pipecat_mode()
                         # Pipecat 파이프라인 실행 (백그라운드)
                         # Phase 2: embedder/vector_db 전달 (LangGraph Semantic Cache용)
                         _rag = getattr(self.ai_orchestrator, 'rag', None)
-                        asyncio.create_task(
-                            self.pipecat_builder.build_and_run(
-                                rtp_worker=rtp_worker,
-                                call_context=call_context,
-                                llm_client=getattr(self.ai_orchestrator, 'llm', None),
-                                rag_engine=_rag,
-                                # org_manager는 pipeline_builder 내부에서 callee 기반으로 VectorDB에서 로드
-                                org_manager=None,
-                                embedder=getattr(_rag, 'embedder', None) if _rag else None,
-                                vector_db=getattr(_rag, 'vector_db', None) if _rag else None,
-                            )
+                        _effective_callee = callee_username or ""
+                        
+                        # HITL 콜백 준비 (프론트엔드 알림 연동)
+                        _hitl_on_alert = None
+                        try:
+                            from src.websocket import manager as ws_manager
+                            async def _default_hitl_alert(context: dict):
+                                """HITL 알림 — hitl_processor가 (context) 1인자로 호출. context에 call_id, question 등 포함."""
+                                cid = context.get("call_id", "")
+                                question = context.get("question", "")
+                                urgency = context.get("urgency", "medium")
+                                await ws_manager.emit_hitl_requested(cid, question, context, urgency)
+                            _hitl_on_alert = _default_hitl_alert
+                        except Exception as e:
+                            logger.debug("hitl_on_alert_setup_failed", error=str(e))
+                        
+                        # Knowledge Service 준비 (org_manager 자동 로딩용)
+                        _knowledge_service = None
+                        try:
+                            from src.services.knowledge_service import get_knowledge_service
+                            _knowledge_service = get_knowledge_service()
+                        except Exception as e:
+                            logger.debug("knowledge_service_import_failed", error=str(e))
+                        
+                        logger.info("pipecat_pipeline_args",
+                                   call_id=call_id,
+                                   callee=_effective_callee,
+                                   has_vad=getattr(self.ai_orchestrator, 'vad', None) is not None,
+                                   has_stt=getattr(self.ai_orchestrator, 'stt', None) is not None,
+                                   has_tts=getattr(self.ai_orchestrator, 'tts', None) is not None,
+                                   has_llm=getattr(self.ai_orchestrator, 'llm', None) is not None,
+                                   has_rag=_rag is not None,
+                                   has_hitl=_hitl_on_alert is not None,
+                                   has_knowledge_service=_knowledge_service is not None)
+                        
+                        # VAD를 Pipecat processor로 래핑 (VADDetector → PipecatVADProcessor)
+                        _vad_raw = getattr(self.ai_orchestrator, 'vad', None)
+                        _vad_processor = None
+                        if _vad_raw:
+                            try:
+                                from src.ai_voicebot.pipecat.processors.vad_processor import PipecatVADProcessor
+                                _vad_processor = PipecatVADProcessor(
+                                    vad_detector=_vad_raw,
+                                    enable_barge_in=True,  # 바지인 켬. TTS 중단은 BargeInSuppressProcessor에서 InterruptionFrame 차단으로 STT 확정 시에만
+                                )
+                                logger.info("vad_wrapped_for_pipecat", call_id=call_id)
+                            except Exception as vad_err:
+                                logger.warning("vad_wrap_failed", call_id=call_id, error=str(vad_err))
+                                _vad_processor = None
+                        
+                        # STT/TTS: Pipecat Singleton 서비스 사용 (통화마다 재생성 방지 → 19초 지연 제거)
+                        _stt_pipecat = None
+                        _tts_pipecat = None
+                        try:
+                            # Singleton에서 가져오기 (이미 생성되어 있음 → 즉시 반환)
+                            from src.ai_voicebot.factory import get_or_create_google_stt_service, get_or_create_google_tts_service
+                            
+                            _stt_pipecat = await get_or_create_google_stt_service()
+                            if _stt_pipecat:
+                                logger.info("google_stt_service_from_singleton",
+                                           call_id=call_id,
+                                           note="Singleton에서 STT 서비스 가져옴 (지연 없음)")
+                            
+                            _tts_pipecat = await get_or_create_google_tts_service()
+                            if _tts_pipecat:
+                                logger.info("google_tts_service_from_singleton",
+                                           call_id=call_id,
+                                           note="Singleton에서 TTS 서비스 가져옴 (지연 없음)")
+                            
+                        except Exception as service_err:
+                            logger.error("google_service_singleton_failed", 
+                                       call_id=call_id, 
+                                       error=str(service_err),
+                                       exc_info=True,
+                                       fallback="Using legacy STT/TTS")
+                            # Fallback: legacy STT/TTS (FrameProcessor 아니므로 파이프라인 오류 발생 가능)
+                            _stt_pipecat = getattr(self.ai_orchestrator, 'stt', None)
+                            _tts_pipecat = getattr(self.ai_orchestrator, 'tts', None)
+                        
+                        _coro = self.pipecat_builder.build_and_run(
+                            _effective_callee,
+                            rtp_worker,
+                            vad=_vad_processor,
+                            stt=_stt_pipecat,
+                            tts=_tts_pipecat,
+                            llm_client=getattr(self.ai_orchestrator, 'llm', None),
+                            rag_engine=_rag,
+                            org_manager=None,
+                            knowledge_service=_knowledge_service,
+                            hitl_on_alert=_hitl_on_alert,
+                            embedder=getattr(_rag, 'embedder', None) if _rag else None,
+                            vector_db=getattr(_rag, 'vector_db', None) if _rag else None,
                         )
+                        pipeline_task = asyncio.create_task(_coro)
+                        self._pipecat_tasks[call_id] = pipeline_task
+                        def _on_pipeline_done(t):
+                            self._pipecat_tasks.pop(call_id, None)
+                        pipeline_task.add_done_callback(_on_pipeline_done)
                         
                         logger.info("✅ [Pipecat] Pipeline task started",
                                    call_id=call_id)
@@ -553,11 +792,16 @@ class CallManager:
                 logger.info("✅ [AI Takeover] AI call handling started successfully",
                            call_id=call_id)
             else:
+                # 근본 원인: 서버 기동 시 AI 초기화 미완료/실패/비활성화 → set_ai_orchestrator 미호출
                 logger.warning("ai_orchestrator_not_available",
                               call_id=call_id,
                               callee=callee_username,
-                              message="AI Orchestrator is None - cannot activate AI mode")
-                
+                              message="AI Orchestrator is None - cannot activate AI mode",
+                              ai_orchestrator_is_set=False,
+                              pipecat_builder_is_set=self.pipecat_builder is not None,
+                              root_cause_check="서버 기동 로그에서 ai_readiness_at_startup 확인. ai_orchestrator_set=False면 초기화 타임아웃/실패/비활성화. docs/reports/AI_ORCHESTRATOR_NONE_ROOT_CAUSE.md 참고.",
+                              suggest_check="app.log에서 ai_readiness_after_background_init(성공) 또는 ai_voicebot_background_init_error(실패) 또는 AI 초기화 타임아웃(60s) 검색")
+
                 logger.warning("ai_orchestrator_not_available_for_activation",
                               callee=callee_username,
                               message="Cannot activate AI mode")
@@ -765,7 +1009,8 @@ class CallManager:
                         'caller': call_session.get_caller_uri(),
                         'callee': call_session.get_callee_uri(),
                         'is_ai_handled': call_session.call_id in self.ai_enabled_calls,
-                        'timestamp': datetime.now().isoformat()
+                        'timestamp': datetime.now().isoformat(),
+                        'started_at': call_session.answer_time.isoformat() if call_session.answer_time else datetime.now().isoformat(),
                     }
                 ))
             except Exception as e:
@@ -843,6 +1088,18 @@ class CallManager:
         Returns:
             CDR 데이터 딕셔너리
         """
+        # Bypass 모드 실시간 STT 스트림 정리 (유저 간 통화)
+        try:
+            from src.media.bypass_realtime_stt import get_bypass_realtime_stt
+
+            get_bypass_realtime_stt().end_call(call_session.call_id)
+        except Exception as e:
+            logger.debug(
+                "bypass_realtime_stt_end_call_failed",
+                call_id=call_session.call_id,
+                error=str(e),
+            )
+
         # SIP 통화 녹음 종료 (신규)
         recording_dir_name = None
         if self.sip_recorder and self.sip_recorder.is_recording(call_session.call_id):
@@ -886,8 +1143,11 @@ class CallManager:
                     
                     transcript_path = Path(f"./recordings/{recording_dir_name}/transcript.txt")
                     
-                    # 착신자 ID 추출 (to_uri에서)
-                    callee_id = call_session.get_callee_uri()
+                    # 착신자 ID → Chroma owner는 username만 (sip:user@host → user)
+                    from src.common.sip_owner import normalize_owner_username
+                    callee_id = normalize_owner_username(
+                        call_session.get_callee_uri() or ""
+                    )
                     
                     logger.info("🚀 [Knowledge Flow] Scheduling knowledge extraction for regular SIP call",
                                call_id=call_session.call_id,
@@ -951,7 +1211,8 @@ class CallManager:
             from pathlib import Path
             
             transcript_path = Path(f"./recordings/{recording_dir_name}/transcript.txt")
-            callee_id = f"sip:{callee_username}@unknown"  # URI 형식
+            from src.common.sip_owner import normalize_owner_username
+            callee_id = normalize_owner_username(f"sip:{callee_username}@unknown")
             
             logger.info("🚀 [Knowledge Flow] Scheduling knowledge extraction for regular SIP call",
                        call_id=call_id,

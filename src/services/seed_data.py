@@ -35,6 +35,12 @@ TENANT_CONFIGS = {
             "이탈리안 비스트로에 전화 주셔서 감사합니다. AI 비서가 안내해 드리겠습니다.",
             "안녕하세요. 이탈리안 비스트로 AI 상담원입니다. 어떤 것이 궁금하신가요?",
         ], ensure_ascii=False),
+        "closing_templates": json.dumps([
+            "감사합니다. 또 방문해 주세요. 좋은 하루 되세요.",
+            "감사합니다. 필요하시면 언제든 연락 주세요.",
+            "감사합니다. 맛있는 식사 되세요. 다음에 또 뵐게요.",
+            "전화해 주셔서 감사합니다. 좋은 하루 보내세요.",
+        ], ensure_ascii=False),
         "system_prompt_template": (
             "당신은 {tenant_name}의 친절한 AI 전화 비서입니다.\n\n"
             "## 역할\n"
@@ -66,6 +72,12 @@ TENANT_CONFIGS = {
             "안녕하세요. 기상청 AI 상담원입니다. 어떤 도움이 필요하신가요?",
             "기상청에 전화해 주셔서 감사합니다. AI 비서가 도와드리겠습니다.",
             "안녕하세요. 기상청입니다. 날씨와 관련된 문의를 도와드리겠습니다.",
+        ], ensure_ascii=False),
+        "closing_templates": json.dumps([
+            "감사합니다. 기상 정보가 필요하시면 언제든 연락 주세요. 좋은 하루 되세요.",
+            "감사합니다. 필요하시면 다시 전화 주세요.",
+            "기상 정보 이용에 도움이 되었기를 바랍니다. 감사합니다.",
+            "전화해 주셔서 감사합니다. 안전한 하루 되세요.",
         ], ensure_ascii=False),
         "system_prompt_template": (
             "당신은 {tenant_name}의 친절하고 전문적인 AI 통화 비서입니다.\n\n"
@@ -374,19 +386,21 @@ async def seed_initial_data(knowledge_service) -> Dict[str, int]:
             # 3. knowledge 생성
             for idx, kb in enumerate(KNOWLEDGE_DATA.get(owner, []), start=1):
                 doc_id = f"kb_seed_{owner}_{idx:03d}"
-                embedding = await knowledge_service.embedder.embed(kb["text"])
+                embedding = knowledge_service.embedder.embed_text(kb["text"])
                 metadata = {
                     "category": kb["category"],
                     "keywords": ",".join(kb.get("keywords", [])),
                     "owner": owner,
+                    "doc_type": "knowledge",  # 추가: 시드 지식은 knowledge
                     "source": "seed",
                     "created_at": datetime.now().isoformat(),
                 }
-                await knowledge_service.vector_db.upsert(
-                    doc_id=doc_id,
-                    embedding=embedding,
-                    text=kb["text"],
-                    metadata=metadata,
+                # ChromaDB collection에 직접 upsert (async 아님)
+                knowledge_service.vector_db.collection.upsert(
+                    ids=[doc_id],
+                    embeddings=[embedding],
+                    documents=[kb["text"]],
+                    metadatas=[metadata],
                 )
                 stats["knowledge"] += 1
 
@@ -394,21 +408,22 @@ async def seed_initial_data(knowledge_service) -> Dict[str, int]:
             for idx, faq in enumerate(FAQ_DATA.get(owner, []), start=1):
                 doc_id = f"faq_seed_{owner}_{idx:03d}"
                 faq_text = f"Q: {faq['question']}\nA: {faq['answer']}"
-                embedding = await knowledge_service.embedder.embed(faq_text)
+                embedding = knowledge_service.embedder.embed_text(faq_text)
                 metadata = {
                     "category": "faq",
-                    "doc_type": "faq",
+                    "doc_type": "faq",  # FAQ는 doc_type=faq 유지 가능 (또는 knowledge로 통일)
                     "question": faq["question"],
                     "keywords": "",
                     "owner": owner,
                     "source": "seed",
                     "created_at": datetime.now().isoformat(),
                 }
-                await knowledge_service.vector_db.upsert(
-                    doc_id=doc_id,
-                    embedding=embedding,
-                    text=faq_text,
-                    metadata=metadata,
+                # ChromaDB collection에 직접 upsert
+                knowledge_service.vector_db.collection.upsert(
+                    ids=[doc_id],
+                    embeddings=[embedding],
+                    documents=[faq_text],
+                    metadatas=[metadata],
                 )
                 stats["faq"] += 1
 
@@ -468,7 +483,7 @@ async def _create_tenant_config(knowledge_service, owner: str, config: Dict) -> 
 
     # 설명 텍스트 (임베딩용)
     text = f"{config['tenant_name']} ({config['tenant_name_en']}): {config['description']}"
-    embedding = await knowledge_service.embedder.embed(text)
+    embedding = knowledge_service.embedder.embed_text(text)
 
     metadata = {
         "doc_type": "tenant_config",
@@ -480,12 +495,50 @@ async def _create_tenant_config(knowledge_service, owner: str, config: Dict) -> 
     for key, value in config.items():
         metadata[key] = str(value) if not isinstance(value, str) else value
 
-    await knowledge_service.vector_db.upsert(
-        doc_id=doc_id,
-        embedding=embedding,
-        text=text,
-        metadata=metadata,
+    # ChromaDB collection에 직접 upsert
+    knowledge_service.vector_db.collection.upsert(
+        ids=[doc_id],
+        embeddings=[embedding],
+        documents=[text],
+        metadatas=[metadata],
     )
+
+
+async def update_tenant_config_templates(knowledge_service) -> Dict[str, bool]:
+    """기존 tenant_config 문서에 greeting_templates, closing_templates를 반영.
+
+    시드 시 이미 tenant_config가 있으면 스킵되므로, 이미 있는 DB에는
+    인사말/끝인사가 비어 있을 수 있음. 이 함수로 TENANT_CONFIGS 기준으로 갱신.
+
+    Returns:
+        { "1003": True, "1004": True } 형태로 갱신된 owner 목록
+    """
+    updated = {}
+    try:
+        if not knowledge_service._initialized:
+            await knowledge_service.initialize()
+        for owner, config in TENANT_CONFIGS.items():
+            existing = await _get_tenant_config(knowledge_service, owner)
+            if not existing:
+                continue
+            doc_id = existing["id"]
+            text = existing["text"]
+            meta = dict(existing["metadata"])
+            meta["greeting_templates"] = config.get("greeting_templates", meta.get("greeting_templates", "[]"))
+            meta["closing_templates"] = config.get("closing_templates", meta.get("closing_templates", "[]"))
+            embedding = knowledge_service.embedder.embed_text(text)
+            # ChromaDB collection에 직접 upsert
+            knowledge_service.vector_db.collection.upsert(
+                ids=[doc_id],
+                embeddings=[embedding],
+                documents=[text],
+                metadatas=[meta],
+            )
+            updated[owner] = True
+            logger.info("tenant_config_templates_updated", owner=owner, doc_id=doc_id)
+    except Exception as e:
+        logger.error("update_tenant_config_templates_failed", error=str(e))
+    return updated
 
 
 async def cleanup_legacy_data(knowledge_service) -> int:

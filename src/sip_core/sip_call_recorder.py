@@ -737,7 +737,7 @@ class SIPCallRecorder:
         speakers: Dict[int, str]
     ) -> str:
         """
-        화자별로 전사 텍스트 포맷팅
+        화자별로 전사 텍스트 포맷팅 (발화 단위 병합)
         
         Args:
             words: 단어 리스트 (speaker_tag 포함)
@@ -750,35 +750,66 @@ class SIPCallRecorder:
         if not words:
             return ""
         
-        # 화자별로 그룹화
-        current_speaker = None
-        transcript_lines = []
-        current_line = []
-        
         # Google STT가 반환하는 서브워드 마커(▁ U+2581) 제거 — transcript 가독성
         def _norm(w: str) -> str:
             return (w or "").replace("\u2581", "").strip()
-
+        
+        # 1. 화자별로 연속된 발화를 그룹화 (시간 gap threshold: 1.0초)
+        UTTERANCE_GAP_THRESHOLD = 1.0
+        
+        utterances = []  # [(speaker_tag, text, start_time, end_time)]
+        current_speaker = None
+        current_words = []
+        current_start = None
+        last_end = None
+        
         for word_info in words:
             speaker_tag = word_info.get("speaker_tag", 1)
             word = _norm(word_info.get("word", ""))
+            start_time = word_info.get("start_time", 0.0)
+            end_time = word_info.get("end_time", 0.0)
             
-            if speaker_tag != current_speaker:
-                # 화자 변경 시 새로운 라인 시작
-                if current_line:
-                    speaker_label = self._get_speaker_label(current_speaker, speakers)
-                    transcript_lines.append(f"{speaker_label}: {' '.join(current_line)}")
-                    current_line = []
+            if not word:
+                continue
+            
+            # 화자 변경 또는 시간 gap이 큰 경우 → 새로운 발화 시작
+            if (speaker_tag != current_speaker) or (last_end is not None and start_time - last_end > UTTERANCE_GAP_THRESHOLD):
+                # 이전 발화 저장
+                if current_words:
+                    utterances.append((
+                        current_speaker,
+                        ' '.join(current_words),
+                        current_start,
+                        last_end
+                    ))
                 
+                # 새 발화 시작
                 current_speaker = speaker_tag
-            
-            if word:
-                current_line.append(word)
+                current_words = [word]
+                current_start = start_time
+                last_end = end_time
+            else:
+                # 같은 발화에 단어 추가
+                current_words.append(word)
+                last_end = end_time
         
-        # 마지막 라인 추가
-        if current_line:
-            speaker_label = self._get_speaker_label(current_speaker, speakers)
-            transcript_lines.append(f"{speaker_label}: {' '.join(current_line)}")
+        # 마지막 발화 추가
+        if current_words:
+            utterances.append((
+                current_speaker,
+                ' '.join(current_words),
+                current_start,
+                last_end
+            ))
+        
+        # 2. 시간 순서로 정렬 (발화 단위)
+        utterances.sort(key=lambda u: u[2])  # start_time 기준
+        
+        # 3. 포맷팅
+        transcript_lines = []
+        for speaker_tag, text, _, _ in utterances:
+            speaker_label = self._get_speaker_label(speaker_tag, speakers)
+            transcript_lines.append(f"{speaker_label}: {text}")
         
         return '\n'.join(transcript_lines)
     

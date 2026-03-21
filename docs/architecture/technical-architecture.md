@@ -1083,6 +1083,9 @@ async def get_operator_status(user_id: str):
     return status_manager.get_status_info(user_id)
 
 # ==================== HITL ====================
+# 실제 Voice Pipeline HITL 구현: src/services/hitl.py (HITLService), WebSocket submit_hitl_response,
+# emit_call_ended 시 unregister_call (SIP BYE 연동). 상세: docs/architecture/ai-voicebot-architecture.md §19.1c,
+# docs/design/AI_RESPONSE_HUMANLIKE_DESIGN.md §5.5.
 
 @app.get("/api/v1/hitl/alerts")
 async def list_hitl_alerts(status: str = "pending"):
@@ -1655,6 +1658,7 @@ collection: tenant_config
     type:                string  # "tenant_config"
     org_name:            string  # 조직명 (예: "이탈리안 비스트로")
     greeting_templates:  string  # JSON string (인사말 템플릿)
+    closing_templates:   string  # JSON string (마무리 멘트: farewell 시 TTS로 재생)
     system_prompt:       string  # AI 시스템 프롬프트
     language:            string  # "ko", "en" 등
     business_hours:      string  # JSON string

@@ -5,6 +5,7 @@ HITL (Human-In-The-Loop) Alert 노드.
 운영자 개입이 필요함을 표시한다.
 """
 
+import time
 import structlog
 from src.ai_voicebot.langgraph.state import ConversationState
 
@@ -18,18 +19,26 @@ async def hitl_alert_node(state: ConversationState) -> dict:
     """
     운영자 개입 판단.
     
-    조건:
-    1. intent == "transfer" (고객이 직접 요청)
-    2. intent == "complaint" + confidence < 0.5
-    3. confidence < 0.3 (정보 부족)
+    조건 (설계: TTS_RTP_AND_HITL_DESIGN.md — 모르는 내용 → "잠시만 기다려 주세요" + HITL):
+    1. needs_follow_up == True (AI가 모르는 내용으로 응답한 경우)
+    2. intent == "transfer" (고객이 직접 요청)
+    3. intent == "complaint" + confidence < 0.5
+    4. confidence < 0.3 (정보 부족)
     """
+    _start = time.time()
     intent = state.get("intent", "")
     confidence = state.get("confidence", 1.0)
+    needs_follow_up = state.get("needs_follow_up", False)
     needs_human = False
     reason = ""
 
+    # 0. 모르는 내용 응답 시 → HITL로 담당자 문의 (설계 2.1·2.2)
+    if needs_follow_up:
+        needs_human = True
+        reason = "AI가 모르는 내용으로 응답했습니다. 확인이 필요합니다."
+
     # 1. 직접 요청
-    if intent == "transfer":
+    elif intent == "transfer":
         needs_human = True
         reason = "고객이 상담원 연결을 요청했습니다."
 
@@ -48,12 +57,15 @@ async def hitl_alert_node(state: ConversationState) -> dict:
                       call=True,
                       intent=intent,
                       confidence=f"{confidence:.3f}",
+                      needs_follow_up=needs_follow_up,
                       reason=reason)
     else:
         logger.debug("hitl_not_needed",
                     intent=intent,
                     confidence=f"{confidence:.3f}")
 
+    elapsed = time.time() - _start
+    logger.info("timing_segment", segment="hitl_alert", elapsed_sec=round(elapsed, 3), needs_human=needs_human)
     return {
         "needs_human": needs_human,
         "hitl_reason": reason,

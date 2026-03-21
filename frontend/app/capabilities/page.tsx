@@ -39,8 +39,8 @@ import {
   FileText,
   Link,
   ClipboardList,
-  ArrowLeft,
 } from 'lucide-react';
+import { AppHeader } from '@/components/AppHeader';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -187,30 +187,14 @@ export default function CapabilitiesPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => router.push('/dashboard')}
-              >
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                대시보드
-              </Button>
-              <h1 className="text-2xl font-bold text-gray-900">
-                🤖 AI 서비스 관리
-              </h1>
-            </div>
-            <Button onClick={() => router.push('/capabilities/add')}>
-              <Plus className="w-4 h-4 mr-2" />
-              서비스 추가
-            </Button>
-          </div>
-        </div>
-      </header>
+      <AppHeader />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 flex justify-between items-center">
+        <h1 className="text-xl font-bold text-gray-900">🤖 AI 서비스 관리</h1>
+        <Button onClick={() => router.push('/capabilities/add')}>
+          <Plus className="w-4 h-4 mr-2" />
+          서비스 추가
+        </Button>
+      </div>
 
       {/* Main */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">

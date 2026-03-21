@@ -37,10 +37,10 @@ import {
   FileText,
   HelpCircle,
   Tag,
-  ArrowLeft,
   BarChart3,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { AppHeader } from '@/components/AppHeader';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -206,24 +206,14 @@ export default function ExtractionsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                대시보드
-              </Button>
-              <h1 className="text-2xl font-bold text-gray-900">📋 지식 추출 리뷰</h1>
-            </div>
-            <Button variant="outline" size="sm" onClick={fetchData}>
-              <BarChart3 className="w-4 h-4 mr-2" />
-              새로고침
-            </Button>
-          </div>
-        </div>
-      </header>
+      <AppHeader />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 flex justify-between items-center">
+        <h1 className="text-xl font-bold text-gray-900">📋 지식 추출 리뷰</h1>
+        <Button variant="outline" size="sm" onClick={fetchData}>
+          <BarChart3 className="w-4 h-4 mr-2" />
+          새로고침
+        </Button>
+      </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         {/* Stats */}

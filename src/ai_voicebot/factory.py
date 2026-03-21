@@ -23,14 +23,84 @@ from .recording.recorder import CallRecorder
 
 logger = structlog.get_logger(__name__)
 
+# 🔥 Google STT/TTS Service Singleton (통화마다 재생성 방지 → 19초 지연 제거)
+_global_google_stt_service = None
+_global_google_tts_service = None
+
+
+async def get_or_create_google_stt_service(config: Dict[str, Any] = None):
+    """
+    Google STT Service Singleton.
+    서버 시작 시 한 번만 생성하여 통화마다 19초 지연 방지.
+    """
+    global _global_google_stt_service
+    if _global_google_stt_service is None:
+        try:
+            from pipecat.services.google.stt import GoogleSTTService
+            from pipecat.transcriptions.language import Language
+
+            # Pipecat 공식: ko-KR은 params.InputParams(languages=[Language.KO_KR])로 설정.
+            # 기본값이 Language.EN_US 이므로 한글 사용 시 반드시 명시 필요 (오인식 방지).
+            _cfg = config or {}
+            _params = GoogleSTTService.InputParams(
+                languages=[Language.KO_KR],
+                model=_cfg.get("model", "telephony"),
+                enable_automatic_punctuation=_cfg.get("enable_automatic_punctuation", True),
+                enable_interim_results=_cfg.get("enable_interim_results", True),
+            )
+            _kwargs: Dict[str, Any] = {
+                "sample_rate": _cfg.get("sample_rate", 16000),
+                "params": _params,
+            }
+            if _cfg.get("credentials_path"):
+                _kwargs["credentials_path"] = _cfg["credentials_path"]
+            if _cfg.get("credentials") is not None:
+                _kwargs["credentials"] = _cfg["credentials"]
+            if _cfg.get("location"):
+                _kwargs["location"] = _cfg["location"]
+            _global_google_stt_service = GoogleSTTService(**_kwargs)
+            logger.info("✅ [Singleton] Global Google STT Service created",
+                       languages="ko-KR (Language.KO_KR)")
+        except Exception as e:
+            logger.error("google_stt_singleton_creation_failed", error=str(e), exc_info=True)
+            raise  # 에러 전파
+    return _global_google_stt_service
+
+
+async def get_or_create_google_tts_service(config: Dict[str, Any] = None):
+    """
+    Google TTS Service Singleton.
+    서버 시작 시 한 번만 생성하여 통화마다 19초 지연 방지.
+    """
+    global _global_google_tts_service
+    if _global_google_tts_service is None:
+        try:
+            from pipecat.services.google.tts import GoogleTTSService
+            _tts_config = config or {
+                "sample_rate": 16000,
+                "voice_name": "ko-KR-Standard-A",
+                "language_code": "ko-KR",
+            }
+            _global_google_tts_service = GoogleTTSService(**_tts_config)
+            logger.info("✅ [Singleton] Global Google TTS Service created",
+                       voice_model=_tts_config.get("voice_name"))
+        except Exception as e:
+            logger.error("google_tts_singleton_creation_failed", error=str(e), exc_info=True)
+            raise  # 에러 전파
+    return _global_google_tts_service
+
 
 async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestrator]:
     """
-    AI Orchestrator 및 모든 하위 컴포넌트 생성
-    
+    AI Orchestrator 및 모든 하위 컴포넌트 생성 (Legacy 경로).
+
+    config.pipeline_engine != "pipecat" (예: "legacy") 일 때만 호출부에서 사용합니다.
+    기본값은 pipeline_engine="pipecat" 이므로, 실제 AI 응대는 create_pipecat_pipeline_builder
+    및 PipelineBuilder.build_and_run 에서 수행됩니다.
+
     Args:
         config: AI 보이스봇 설정
-        
+
     Returns:
         초기화된 AIOrchestrator 또는 None (비활성화 시)
     """
@@ -59,13 +129,13 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         vad_config = config.get("vad", {})
         try:
             vad = VADDetector(
-                mode=vad_config.get("aggressiveness", 3),
+                mode=vad_config.get("aggressiveness", 2),  # 3→2: 음성 탐지 민감도 향상 (STT 개선)
                 sample_rate=16000,
                 frame_duration_ms=vad_config.get("frame_duration_ms", 30),
                 trigger_threshold=0.5,
                 speech_frame_count=3
             )
-            logger.info("VAD Detector initialized (WebRTC)")
+            logger.info("VAD Detector initialized (WebRTC)", mode=vad_config.get("aggressiveness", 2))
         except Exception as e:
             logger.warning("WebRTC VAD initialization failed, using SimpleVAD",
                          error=str(e))
@@ -138,7 +208,7 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         
         # API 키 일부 마스킹하여 로깅
         masked_key = f"{api_key[:10]}...{api_key[-4:]}" if len(api_key) > 14 else "***"
-        logger.info("Gemini API key loaded", source="config" if gemini_config.get("api_key") else "env", key=masked_key)
+        logger.debug("gemini_api_key_loaded", source="config" if gemini_config.get("api_key") else "env", key=masked_key)
         
         llm = LLMClient(gemini_config, api_key)
         llm_elapsed = time.time() - llm_start
@@ -159,21 +229,16 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         vector_db_provider = vector_db_config.get("provider", "chromadb")
         
         if vector_db_provider == "chromadb":
-            chromadb_config = vector_db_config.get("chromadb", {})
-            persist_dir = chromadb_config.get("persist_directory", "./data/chromadb")
-            
+            from .knowledge.chromadb_client import get_chroma_persist_path, get_vector_db
+            persist_dir = get_chroma_persist_path()
             logger.info("🔄 [ChromaDB] Using single ChromaDB client (get_chromadb_client)...",
                        persist_directory=persist_dir)
-            
-            vector_db = get_chromadb_client(
-                persist_directory=persist_dir,
-                collection_name="knowledge_base",
-                client_mode="local",
-            )
-            
-            logger.info("🔄 [ChromaDB] Calling initialize()...")
-            await vector_db.initialize()
-            
+            vector_db_client = get_chromadb_client()
+            await vector_db_client.initialize()
+            vector_db = get_vector_db()
+            if not vector_db:
+                logger.error("ChromaDB initialize() completed but get_vector_db() is None")
+                return None
             logger.info("✅ [FACTORY] ChromaDB initialized successfully")
         else:
             logger.error("Unsupported Vector DB provider", provider=vector_db_provider)
@@ -185,7 +250,7 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
             vector_db=vector_db,
             embedder=embedder,
             top_k=rag_config.get("top_k", 3),
-            similarity_threshold=rag_config.get("similarity_threshold", 0.7),
+            similarity_threshold=rag_config.get("similarity_threshold", 0.55),
             reranking_enabled=rag_config.get("reranking_enabled", False)
         )
         logger.info("RAG Engine initialized")
@@ -251,9 +316,15 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         return orchestrator
         
     except Exception as e:
+        err_msg = str(e)
         logger.error("AI Voicebot initialization failed",
-                    error=str(e),
+                    error=err_msg,
                     exc_info=True)
+        if "collections.topic" in err_msg:
+            logger.warning(
+                "chromadb_schema_fix_hint",
+                hint="pip install 'chromadb>=0.5.0' 또는 data/chroma 폴더 삭제 후 재시작. docs/reports/CHROMA_COLLECTIONS_TOPIC_ERROR.md",
+            )
         return None
 
 
@@ -273,7 +344,7 @@ async def create_pipecat_pipeline_builder(config: Dict[str, Any]) -> Optional[An
     if not config.get("enabled", False):
         return None
     
-    pipeline_engine = config.get("pipeline_engine", "legacy")
+    pipeline_engine = config.get("pipeline_engine", "pipecat")
     if pipeline_engine != "pipecat":
         logger.info("pipeline_engine_not_pipecat",
                     engine=pipeline_engine,
@@ -282,8 +353,9 @@ async def create_pipecat_pipeline_builder(config: Dict[str, Any]) -> Optional[An
     
     try:
         from src.ai_voicebot.pipecat.pipeline_builder import VoiceAIPipelineBuilder
+        from src.websocket import manager as ws_manager
         
-        builder = VoiceAIPipelineBuilder(config)
+        builder = VoiceAIPipelineBuilder(on_call_ended=ws_manager.emit_call_ended)
         
         # ✅ LangGraph 그래프를 서버 시작 시 미리 컴파일 (통화 중 7초 지연 방지)
         import time

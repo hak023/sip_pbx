@@ -1,9 +1,9 @@
 # SmartPBX AI - Frontend Architecture
 ## React 기반 운영자 & 상담원 대시보드
 
-**문서 버전**: v2.0 (멀티테넌트 반영)  
+**문서 버전**: v2.1 (UI 개선사항 반영)  
 **작성일**: 2026-01-30  
-**최종 업데이트**: 2026-02-13  
+**최종 업데이트**: 2026-03-06  
 **작성자**: Frontend Team  
 **상태**: Implemented
 
@@ -23,6 +23,7 @@
 10. [Key Features Implementation](#key-features-implementation)
 11. [Performance Optimization](#performance-optimization)
 12. [Build & Deployment](#build--deployment)
+13. [UI 개선 이력 (2026-03-06)](#ui-개선-이력-2026-03-06)
 
 ---
 
@@ -129,22 +130,61 @@
 ```
 frontend/
 ├── app/                            # Next.js App Router (페이지)
-│   ├── layout.tsx                  # Root Layout (Sidebar, Navigation)
+│   ├── layout.tsx                  # Root Layout
 │   ├── page.tsx                    # Root → /login 리다이렉트
 │   ├── login/
 │   │   └── page.tsx                # 내선번호 기반 로그인 (멀티테넌트)
 │   ├── dashboard/
-│   │   └── page.tsx                # 테넌트별 대시보드 (통계/차트)
+│   │   └── page.tsx                # 테넌트별 대시보드 (실시간 통화/HITL/후처리)
+│   ├── capabilities/
+│   │   ├── page.tsx                # AI 서비스 목록 관리 (CRUD, 활성 토글)
+│   │   ├── add/page.tsx            # AI 서비스 추가
+│   │   └── [id]/edit/page.tsx      # AI 서비스 수정
 │   ├── knowledge/
-│   │   └── page.tsx                # 테넌트별 지식 관리 (CRUD)
-│   ├── ai-services/
-│   │   └── page.tsx                # 테넌트별 AI 서비스/기능 관리
-│   ├── call-history/
-│   │   └── page.tsx                # 테넌트별 통화 이력 (callee 필터)
-│   └── extractions/
-│       └── page.tsx                # 테넌트별 지식 추출 이력
+│   │   ├── page.tsx                # 지식 베이스 관리 (CRUD, 카테고리 필터)
+│   │   ├── add/page.tsx            # 지식 추가
+│   │   └── [id]/edit/page.tsx      # 지식 수정
+│   ├── extractions/
+│   │   └── page.tsx                # 지식 추출 리뷰 (승인/거절/편집)
+│   ├── transfers/
+│   │   └── page.tsx                # 호 전환 이력 (실시간 5초 폴링)
+│   ├── outbound/
+│   │   ├── page.tsx                # AI 발신 목록
+│   │   ├── new/page.tsx            # 발신 생성
+│   │   └── [id]/page.tsx           # 발신 상세
+│   ├── calls/
+│   │   └── [id]/page.tsx           # 통화 상세
+│   └── call-history/
+│       └── page.tsx                # 통화 이력 (callee 필터, 녹음 재생)
 │
-├── public/                         # Static assets
+├── components/
+│   ├── AppHeader.tsx               # ★ 공통 헤더/네비게이션 (v2.1 신규)
+│   ├── HITLDialog.tsx              # HITL 답변 다이얼로그
+│   ├── LiveCallMonitor.tsx         # 실시간 통화 대화 모니터
+│   ├── OperatorStatusToggle.tsx    # 운영자 상태 토글
+│   └── ui/                         # shadcn/ui 기반 UI 컴포넌트
+│       ├── alert.tsx, alert-dialog.tsx
+│       ├── badge.tsx, button.tsx, card.tsx
+│       ├── checkbox.tsx, dialog.tsx, input.tsx
+│       ├── label.tsx, scroll-area.tsx
+│       ├── select.tsx, skeleton.tsx
+│       ├── switch.tsx, tabs.tsx, textarea.tsx
+│       └── ...
+│
+├── hooks/
+│   └── useWebSocket.ts             # WebSocket 연결 훅 + useHITL 훅
+│
+├── lib/
+│   ├── api.ts                      # ★ 공통 API_URL, getAuthHeaders(), safeParseDate() (v2.1 신규)
+│   ├── auth.ts                     # 현재 로그인 사용자 ID 조회
+│   ├── utils.ts                    # cn() 유틸
+│   └── websocket.ts                # WebSocket 클라이언트 싱글턴
+│
+├── store/
+│   └── useOperatorStore.ts         # 운영자 상태 Zustand Store
+│
+├── types/
+│   └── index.ts                    # 공통 타입 (DashboardMetrics, ActiveCall, HITLRequest 등)
 │
 ├── next.config.mjs                 # Next.js 설정
 ├── package.json                    # Dependencies
@@ -153,7 +193,7 @@ frontend/
 ```
 
 > **참고**: 원래 설계는 React SPA + Vite 기반이었으나, 구현 시 Next.js App Router로 변경되었습니다.  
-> State Management는 localStorage 기반으로 단순화되었고, API 호출은 fetch API를 직접 사용합니다.
+> State Management는 localStorage 기반으로 단순화되었고, API 호출은 fetch API / axios를 직접 사용합니다.
 
 ---
 
@@ -2222,10 +2262,59 @@ describe('Button', () => {
 |------|----------|----------|
 | **Framework** | React SPA + Vite | Next.js App Router |
 | **State Management** | Zustand + TanStack Query | localStorage + React useState |
-| **API Client** | Axios | fetch API |
+| **API Client** | Axios | fetch API / axios 혼용 |
 | **Auth** | JWT + Email/Password | Extension 기반 로그인 |
 | **Routing** | React Router | Next.js App Router |
 | **테넌트 식별** | - | owner/callee 기반 멀티테넌트 |
+| **공통 헤더** | DashboardLayout (Sidebar 포함) | AppHeader (상단 고정 네비게이션) |
+| **API 설정** | Axios interceptor (src/api/client.ts) | lib/api.ts 헬퍼 함수 |
+
+---
+
+## UI 개선 이력 (2026-03-06)
+
+### 개선 배경
+`docs/UI_IMPROVEMENT_REPORT.md` 분석을 바탕으로 버그 수정 및 UX 개선사항을 반영.
+
+### 신규 파일
+
+| 파일 | 내용 |
+|------|------|
+| `components/AppHeader.tsx` | 전체 페이지 공통 헤더. 로고, 테넌트 배지, 7개 메뉴 네비게이션(활성 상태 하이라이트), WebSocket 연결 상태, 재연결 버튼, 로그아웃 버튼 포함 |
+| `lib/api.ts` | `API_URL` 상수, `getAuthHeaders()` (localStorage Bearer 토큰), `getTenantOwner()`, `safeParseDate()` |
+
+### 버그 수정
+
+| 위치 | 문제 | 수정 |
+|------|------|------|
+| `transfers/page.tsx` | `axios.get` 에 Authorization 헤더 없어 401 에러 발생 | `getAuthHeaders()` 적용 |
+| `transfers/page.tsx` | 에러 시 사용자 피드백 없음 | `toast.error()` 추가 |
+| `call-history/page.tsx` | `new Date(null)` → `format()` 에서 Invalid Date crash | `safeParseDate()` 래퍼 적용 |
+| `call-history/page.tsx` | 녹음 에러 처리를 DOM 직접 조작 (`style.display`) | React `useState(recordingError)` 로 교체 |
+
+### UX 개선
+
+| 위치 | 변경 전 | 변경 후 |
+|------|---------|---------|
+| 전체 페이지 | 페이지마다 다른 헤더/네비게이션 | `AppHeader` 공통 컴포넌트로 통일 |
+| `dashboard/page.tsx` | 실시간 대화 말풍선 `bg-blue-100 text-blue-900` (대비 낮음) | `bg-blue-500 text-white` / `bg-emerald-500 text-white` (명확한 대비) |
+| `dashboard/page.tsx` | HITL 긴급 시 카드 전체 `animate-pulse` (깜빡임 과함) | 카드 `ring-2 ring-orange-500` + 우상단 pulse dot |
+| `dashboard/page.tsx` | HITL 카운트: WebSocket 누적값만 사용 (페이지 리로드 시 0) | `Math.max(hitlRequests.length, metrics.hitlQueueSize)` |
+| `dashboard/page.tsx` | AI 신뢰도 0~1 범위 `N%` 오표시 가능 | `avgAIConfidence <= 1` 이면 `×100` 변환 |
+| `dashboard/page.tsx` | 빈 통화 목록: 텍스트만 표시 | 아이콘 + 설명 텍스트 empty state |
+| `dashboard/page.tsx` | 말풍선에 타임스탬프 없음 | 메시지별 시각 표시 추가 |
+| `LiveCallMonitor.tsx` | `handleSTT/TTS/Greeting` 파라미터 `any` 타입 | 명시적 payload 타입 정의 |
+
+### 페이지별 네비게이션 현황 (개선 후)
+
+| 페이지 | 이전 | 이후 |
+|--------|------|------|
+| `/dashboard` | 인라인 헤더 (전체 nav) | `<AppHeader />` |
+| `/capabilities` | 뒤로가기 버튼만 | `<AppHeader />` + 페이지 제목 |
+| `/knowledge` | 페이지 제목만 | `<AppHeader />` + 페이지 제목 |
+| `/extractions` | 뒤로가기 버튼만 | `<AppHeader />` + 페이지 제목 |
+| `/transfers` | 부분 nav (AI발신 누락) | `<AppHeader />` |
+| `/call-history` | 페이지 제목만 | `<AppHeader />` |
 
 ---
 

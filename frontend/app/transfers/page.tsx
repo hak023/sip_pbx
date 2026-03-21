@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { toast } from 'sonner';
+import { AppHeader } from '@/components/AppHeader';
+import { API_URL as API_BASE, getAuthHeaders } from '@/lib/api';
 
 interface TransferEntry {
   transfer_id: string;
@@ -60,15 +61,17 @@ export default function TransfersPage() {
 
   const fetchData = useCallback(async () => {
     try {
+      const headers = getAuthHeaders();
       const stateParam = filter !== 'all' ? `?state=${filter}` : '';
       const [transfersRes, statsRes] = await Promise.all([
-        axios.get(`${API_BASE}/api/transfers/${stateParam}`),
-        axios.get(`${API_BASE}/api/transfers/stats`),
+        axios.get(`${API_BASE}/api/transfers/${stateParam}`, { headers }),
+        axios.get(`${API_BASE}/api/transfers/stats`, { headers }),
       ]);
       setTransfers(transfersRes.data.transfers || []);
       setStats(statsRes.data);
     } catch (err) {
       console.error('Failed to fetch transfers:', err);
+      toast.error('호 전환 이력 조회 실패');
     } finally {
       setLoading(false);
     }
@@ -82,38 +85,7 @@ export default function TransfersPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-6">
-              <h1 className="text-2xl font-bold text-gray-900">
-                AI Voicebot Control Center
-              </h1>
-              <nav className="flex gap-4">
-                <a href="/dashboard" className="text-sm font-medium text-gray-600 hover:text-blue-600">
-                  대시보드
-                </a>
-                <a href="/capabilities" className="text-sm font-medium text-gray-600 hover:text-blue-600">
-                  AI 서비스
-                </a>
-                <a href="/knowledge" className="text-sm font-medium text-gray-600 hover:text-blue-600">
-                  지식 베이스
-                </a>
-                <a href="/extractions" className="text-sm font-medium text-gray-600 hover:text-blue-600">
-                  지식 추출
-                </a>
-                <a href="/transfers" className="text-sm font-medium text-blue-600">
-                  호 전환
-                </a>
-                <a href="/call-history" className="text-sm font-medium text-gray-600 hover:text-blue-600">
-                  통화 이력
-                </a>
-              </nav>
-            </div>
-          </div>
-        </div>
-      </header>
+      <AppHeader />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <h2 className="text-xl font-semibold text-gray-900 mb-6">호 전환 이력</h2>

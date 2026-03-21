@@ -1263,6 +1263,7 @@ Frontend Call History Page
 | **[design/OPERATOR-AWAY-MODE-DESIGN.md](design/OPERATOR-AWAY-MODE-DESIGN.md)** | 운영자 부재중 모드 상세 설계 |
 | **[design/OPERATOR_TAKEOVER_DESIGN.md](design/OPERATOR_TAKEOVER_DESIGN.md)** | 상담원 실시간 개입 (Takeover) 설계 (NEW) |
 | **[design/TEMPORAL_EXPRESSION_DESIGN.md](design/TEMPORAL_EXPRESSION_DESIGN.md)** | 한글 시제 표현 정규화 설계 (NEW) |
+| **[design/INTENT_HANDLING_DESIGN.md](design/INTENT_HANDLING_DESIGN.md)** | Intent별 처리 로직 상세 (예제·도표, 18가지 의도 → 노드·응답) |
 
 ### 가이드
 

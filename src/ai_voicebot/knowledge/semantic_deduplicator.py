@@ -41,6 +41,7 @@ class SemanticDeduplicator:
         text: str,
         embedding: Optional[List[float]] = None,
         exclude_doc_ids: Optional[List[str]] = None,
+        owner_filter: Optional[str] = None,
     ) -> DeduplicationResult:
         """
         텍스트의 의미적 중복 검사
@@ -66,10 +67,12 @@ class SemanticDeduplicator:
                     action="insert",
                 )
 
-            # VectorDB에서 유사 문서 검색 (top-3)
+            # VectorDB에서 유사 문서 검색 (top-3). 테넌트 격리: owner 일치 문서만
+            fltr = {"owner": owner_filter} if (owner_filter or "").strip() else None
             results = await self.vector_db.search(
                 vector=embedding,
                 top_k=3,
+                filter=fltr,
             )
 
             if not results:
