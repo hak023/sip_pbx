@@ -4,15 +4,63 @@ RAG (Retrieval-Augmented Generation) Engine
 Vector DB 검색 및 컨텍스트 재순위화
 """
 
-from typing import List, Dict, Optional
-from dataclasses import dataclass
+from typing import List, Dict, Optional, Any, Tuple
+from dataclasses import dataclass, field
+from collections import Counter
 import asyncio
+import json
 import structlog
 
 from src.ai_voicebot.ai_pipeline.query_hints import looks_like_visit_or_direction_info_query
+from src.ai_voicebot.knowledge.chromadb_client import KNOWLEDGE_COLLECTION
 from src.common.sip_owner import normalize_owner_username
 
 logger = structlog.get_logger(__name__)
+
+
+def _json_safe_chroma_where(where: Optional[Dict[str, Any]]) -> Any:
+    """Chroma where 절을 JSON 로그에 넣기 위한 직렬화."""
+    if where is None:
+        return None
+    try:
+        return json.loads(json.dumps(where, default=str))
+    except (TypeError, ValueError):
+        return str(where)
+
+
+def _hit_category_counts(docs: List["Document"]) -> Dict[str, int]:
+    cats: List[str] = []
+    for d in docs:
+        m = d.metadata if isinstance(d.metadata, dict) else {}
+        c = m.get("category")
+        cats.append(str(c) if c is not None and str(c) != "" else "(no_category)")
+    return dict(Counter(cats))
+
+
+def _top_hits_trace_rows(docs: List["Document"], max_items: int = 12) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for i, d in enumerate(docs[:max_items]):
+        m = d.metadata if isinstance(d.metadata, dict) else {}
+        out.append(
+            {
+                "rank": i + 1,
+                "doc_id": (d.id or ""),
+                "score": round(float(d.score or 0.0), 4),
+                "category": m.get("category"),
+                "doc_type": m.get("doc_type"),
+                "title": (str(m.get("title", "")) or None),
+                "knowledge_id": m.get("knowledge_id"),
+            }
+        )
+    return out
+
+
+@dataclass
+class RAGSearchResult:
+    """벡터 검색 결과 + call_data_record(`rag_search_trace`)용 추적 정보."""
+
+    documents: List["Document"]
+    trace: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -37,7 +85,8 @@ class RAGEngine:
         embedder,   # TextEmbedder 인스턴스
         top_k: int = 3,
         similarity_threshold: float = 0.7,
-        reranking_enabled: bool = False
+        reranking_enabled: bool = False,
+        doc_type_allowlist: Optional[List[str]] = None,
     ):
         """
         Args:
@@ -46,12 +95,17 @@ class RAGEngine:
             top_k: 검색할 문서 수
             similarity_threshold: 유사도 임계값
             reranking_enabled: 재순위화 활성화
+            doc_type_allowlist: 설정 시 Chroma where에 doc_type $in 추가 (None이면 미적용)
         """
         self.vector_db = vector_db
         self.embedder = embedder
         self.top_k = top_k
         self.similarity_threshold = similarity_threshold
         self.reranking_enabled = reranking_enabled
+        self._doc_type_allowlist: Optional[Tuple[str, ...]] = None
+        if doc_type_allowlist:
+            cleaned = tuple(str(x).strip() for x in doc_type_allowlist if str(x).strip())
+            self._doc_type_allowlist = cleaned or None
         
         # 통계
         self.total_searches = 0
@@ -60,7 +114,8 @@ class RAGEngine:
         logger.info("RAGEngine initialized", 
                    top_k=top_k,
                    threshold=similarity_threshold,
-                   reranking=reranking_enabled)
+                   reranking=reranking_enabled,
+                   doc_type_allowlist=list(self._doc_type_allowlist) if self._doc_type_allowlist else None)
     
     # intent → knowledge category 검색 조건 (CHROMADB_CATEGORY_DESIGN)
     # question/transfer/unknown: category 제한 없음(owner만 필터) — 지식 카테고리가 테넌트별로 다름(weather_forecast, menu 등)
@@ -71,10 +126,15 @@ class RAGEngine:
     INTENT_CATEGORY_MAP = {
         "greeting": ["greeting_phase1", "greeting_phase2"],
         "farewell": ["farewell"],
+        "help": None,  # 능력 안내: 테넌트 지식 전체 RAG (category 제한 없음)
         "question": None,   # 전체 지식 검색 (owner만 적용)
         "complaint": _COMPLAINT_TRANSFER_CATS,
         "transfer": _COMPLAINT_TRANSFER_CATS,
         "unknown": None,   # 전체 지식 검색 (owner만 적용)
+        # 분류기 출력과 키 정합 (이전에는 .get 미스로 동작만 동일했음)
+        "chitchat": None,
+        "nlu_fallback": None,
+        "out_of_scope": None,
     }
 
     async def search(
@@ -84,7 +144,7 @@ class RAGEngine:
         call_id: Optional[str] = None,  # DB 로깅용
         top_k_override: Optional[int] = None,
         intent: Optional[str] = None,  # intent별 category 필터 (설계 §4.1)
-    ) -> List[Document]:
+    ) -> RAGSearchResult:
         """
         질문에 대한 관련 문서 검색
         
@@ -95,7 +155,7 @@ class RAGEngine:
             intent: 의도 — 이에 따라 category 조건 추가 (greeting/farewell/question 등)
             
         Returns:
-            관련 문서 리스트 (상위 top_k개)
+            RAGSearchResult(documents=..., trace=...) — trace는 rag_search_done.rag_search_trace 로 기록
         """
         import time
         start_time = time.time()
@@ -104,9 +164,20 @@ class RAGEngine:
             logger.info(
                 "rag_search_owner_normalized",
                 call_id=call_id or "",
-                owner_filter_raw_preview=(owner_filter or "")[:80],
+                owner_filter_raw_preview=(owner_filter or ""),
                 owner_filter_normalized=owner_for_query or "",
             )
+
+        def _base_trace() -> Dict[str, Any]:
+            return {
+                "knowledge_collection": KNOWLEDGE_COLLECTION,
+                "query_submitted": (query or ""),
+                "owner_filter_raw": (owner_filter or "") or None,
+                "owner_filter_normalized": owner_for_query,
+                "intent_classified": intent,
+                "similarity_threshold_config": round(float(self.similarity_threshold), 4),
+                "score_formula": "similarity = 1 / (1 + chroma_distance)",
+            }
 
         try:
             # 1. 질문 임베딩 (TextEmbedder.embed_text sync — embed 메서드 없음)
@@ -118,34 +189,57 @@ class RAGEngine:
             else:
                 raise RuntimeError("Embedder has no embed_text or embed method")
             if not query_embedding:
-                return []
+                tr = _base_trace()
+                tr["abort_reason"] = "empty_query_embedding"
+                return RAGSearchResult([], tr)
             
             # 2. Vector DB 검색 (intent → category 필터, 설계 §4.1). question/unknown은 category 미적용(테넌트 지식 전체 검색)
             effective_top_k = top_k_override if top_k_override else self.top_k
             # transfer로 분류됐어도 방문·길 안내 질의면 카테고리 제한 없이 검색 (오시는 길 FAQ가 question 외 category일 수 있음)
             search_intent = intent
+            intent_relaxation_applied = False
+            intent_relaxation_rule: Optional[str] = None
             if intent == "transfer" and looks_like_visit_or_direction_info_query(query):
                 search_intent = None
+                intent_relaxation_applied = True
+                intent_relaxation_rule = "transfer_plus_visit_or_direction_query"
                 logger.info(
                     "rag_search_intent_relaxed_for_visit_query",
                     call_id=call_id or "",
                     original_intent=intent,
-                    query_preview=(query or "")[:100],
+                    query_preview=(query or ""),
                     note="transfer+방문/교통류 질의 → category 필터 해제(전체 지식)",
                 )
-            filter_dict = None
-            if owner_for_query or search_intent:
-                and_conditions = []
-                if owner_for_query:
-                    and_conditions.append({"owner": owner_for_query})
-                cats = self.INTENT_CATEGORY_MAP.get(search_intent) if search_intent else None
-                if cats is not None and cats:
-                    and_conditions.append({"category": {"$in": cats}})
-                if and_conditions:
-                    filter_dict = {"$and": and_conditions} if len(and_conditions) > 1 else and_conditions[0]
+            and_conditions: List[Dict[str, Any]] = []
+            if owner_for_query:
+                and_conditions.append({"owner": owner_for_query})
+            cats = self.INTENT_CATEGORY_MAP.get(search_intent) if search_intent else None
+            if cats is not None and cats:
+                and_conditions.append({"category": {"$in": cats}})
+            if self._doc_type_allowlist:
+                and_conditions.append({"doc_type": {"$in": list(self._doc_type_allowlist)}})
+                logger.info(
+                    "rag_search_doc_type_allowlist_applied",
+                    call_id=call_id or "",
+                    doc_types=list(self._doc_type_allowlist),
+                    note="config ai_voicebot.rag.doc_type_allowlist",
+                )
+            filter_dict: Optional[Dict[str, Any]] = None
+            if and_conditions:
+                filter_dict = {"$and": and_conditions} if len(and_conditions) > 1 else and_conditions[0]
+            categories_applied_for_chroma = (
+                self.INTENT_CATEGORY_MAP.get(search_intent) if search_intent else None
+            )
+            soft_fallback_applied = False
+            soft_floor_used: Optional[float] = None
+            after_strict_threshold_count = 0
+            # help: 능력 나열은 질의-청크 유사도가 전반적으로 낮아 임계값 컷 시 0~2건에 그침 → 넓게 수집
+            chroma_n_results = effective_top_k * 2
+            if search_intent == "help":
+                chroma_n_results = max(80, effective_top_k * 4)
             raw = self.vector_db.query(
                 query_embeddings=[query_embedding],
-                n_results=effective_top_k * 2,
+                n_results=chroma_n_results,
                 where=filter_dict
             )
             ids = raw.get("ids", [[]])[0] if raw.get("ids") else []
@@ -166,29 +260,51 @@ class RAGEngine:
             
             # 4. 유사도 필터링
             before_filter = list(documents)
-            documents = [
-                doc for doc in documents
-                if doc.score >= self.similarity_threshold
-            ]
-            after_threshold_count = len(documents)
-            # 하드 컷으로 0건이나 Chroma 상위 후보가 있으면 완화 후보 반환 (짧은 STT·거리 스코어 특성)
-            if not documents and before_filter:
-                soft_floor = max(0.22, min(self.similarity_threshold * 0.5, 0.42))
-                soft = [d for d in before_filter if d.score >= soft_floor]
-                if not soft:
-                    soft = sorted(before_filter, key=lambda d: d.score, reverse=True)[
-                        : min(2, len(before_filter))
-                    ]
-                documents = soft
+            if search_intent == "help":
+                documents = sorted(
+                    before_filter, key=lambda d: d.score, reverse=True
+                )[:effective_top_k]
                 after_threshold_count = len(documents)
-                logger.info(
-                    "rag_search_soft_fallback_applied",
-                    call_id=call_id or "",
-                    soft_floor=round(soft_floor, 4),
-                    returned=len(documents),
-                    top_score=round(documents[0].score, 4) if documents else 0.0,
-                    note="임계값 미달 0건 → 완화 후보 사용 (config threshold 유지, 검색만 완화)",
+                after_strict_threshold_count = sum(
+                    1 for d in documents if d.score >= self.similarity_threshold
                 )
+                soft_fallback_applied = False
+                soft_floor_used = None
+                logger.info(
+                    "rag_search_help_intent_rank_only",
+                    call_id=call_id or "",
+                    returned=len(documents),
+                    raw_pool=len(before_filter),
+                    top_score=round(documents[0].score, 4) if documents else 0.0,
+                    note="help 의도: similarity_threshold 컷 생략 → 테넌트 상위 K를 LLM/휴리스틱에 전달",
+                )
+            else:
+                documents = [
+                    doc for doc in documents
+                    if doc.score >= self.similarity_threshold
+                ]
+                after_threshold_count = len(documents)
+                after_strict_threshold_count = after_threshold_count
+                # 하드 컷으로 0건이나 Chroma 상위 후보가 있으면 완화 후보 반환 (짧은 STT·거리 스코어 특성)
+                if not documents and before_filter:
+                    soft_floor = max(0.22, min(self.similarity_threshold * 0.5, 0.42))
+                    soft_floor_used = round(float(soft_floor), 4)
+                    soft = [d for d in before_filter if d.score >= soft_floor]
+                    if not soft:
+                        soft = sorted(before_filter, key=lambda d: d.score, reverse=True)[
+                            : min(2, len(before_filter))
+                        ]
+                    documents = soft
+                    after_threshold_count = len(documents)
+                    soft_fallback_applied = True
+                    logger.info(
+                        "rag_search_soft_fallback_applied",
+                        call_id=call_id or "",
+                        soft_floor=round(soft_floor, 4),
+                        returned=len(documents),
+                        top_score=round(documents[0].score, 4) if documents else 0.0,
+                        note="임계값 미달 0건 → 완화 후보 사용 (config threshold 유지, 검색만 완화)",
+                    )
             logger.info("rag_search_debug",
                         call=True,
                         call_id=call_id or "",
@@ -202,8 +318,10 @@ class RAGEngine:
                         note="raw_count>0, after_threshold=0 이면 similarity_threshold 또는 category 불일치 의심")
             
             # 5. 재순위화 (선택)
+            reranking_applied_flag = False
             if self.reranking_enabled and documents:
                 documents = await self._rerank(query, documents)
+                reranking_applied_flag = True
             
             # 6. Top-K 반환
             documents = documents[:effective_top_k]
@@ -215,7 +333,7 @@ class RAGEngine:
             search_latency_ms = int((time.time() - start_time) * 1000)
             top_k_used = top_k_override if top_k_override else self.top_k
             top_score = documents[0].score if documents else 0.0
-            top_text_preview = (documents[0].text[:150] + "...") if documents and len(documents[0].text) > 150 else (documents[0].text if documents else "")
+            top_text_preview = documents[0].text if documents else ""
 
             logger.info("rag_search_completed",
                        call=True,
@@ -243,7 +361,7 @@ class RAGEngine:
                     search_results_dict = [
                         {
                             "id": doc.id,
-                            "text": doc.text[:200],  # 최대 200자
+                            "text": doc.text,
                             "score": doc.score
                         }
                         for doc in documents
@@ -261,7 +379,7 @@ class RAGEngine:
                         user_question=query,
                         search_results=search_results_dict,
                         top_score=top_score,
-                        rag_context_used=rag_context[:1000],  # 최대 1000자
+                        rag_context_used=rag_context,
                         search_latency_ms=search_latency_ms
                     )
                     
@@ -279,12 +397,49 @@ class RAGEngine:
                     logger.debug("AI logger not available, skipping DB logging")
                 except Exception as e:
                     logger.error("rag_db_log_failed", call=True, category="rag", error=str(e))
-            
-            return documents
+
+            tr = _base_trace()
+            tr["search_intent_used"] = search_intent
+            tr["intent_relaxation_applied"] = intent_relaxation_applied
+            tr["intent_relaxation_rule"] = intent_relaxation_rule
+            if categories_applied_for_chroma is None:
+                tr["category_restrictions"] = None
+                tr["category_restrictions_meaning"] = (
+                    "metadata.category 미필터 → 테넌트(owner) 스코프의 knowledge 컬렉션 전체 벡터 검색"
+                )
+            else:
+                tr["category_restrictions"] = list(categories_applied_for_chroma)
+                tr["category_restrictions_meaning"] = (
+                    "metadata.category in [...] (INTENT_CATEGORY_MAP) 로 지식 카테고리 제한"
+                )
+
+            tr["chroma_where"] = _json_safe_chroma_where(filter_dict)
+            tr["doc_type_allowlist"] = (
+                list(self._doc_type_allowlist) if self._doc_type_allowlist else None
+            )
+            tr["doc_type_allowlist_applied"] = bool(self._doc_type_allowlist)
+            tr["owner_in_chroma_where"] = bool(owner_for_query)
+            tr["chroma_n_results_requested"] = chroma_n_results
+            tr["top_k_returned_cap"] = effective_top_k
+            tr["raw_chroma_hit_count"] = raw_count
+            tr["after_strict_similarity_threshold_count"] = after_strict_threshold_count
+            tr["after_soft_fallback_count"] = after_threshold_count
+            tr["soft_fallback_applied"] = soft_fallback_applied
+            tr["soft_floor_used"] = soft_floor_used
+            tr["first_raw_chroma_distance"] = round(first_distance, 6) if first_distance is not None else None
+            tr["reranking_applied"] = reranking_applied_flag
+            tr["final_returned_count"] = len(documents)
+            tr["hit_category_counts"] = _hit_category_counts(documents)
+            tr["top_hits_trace"] = _top_hits_trace_rows(documents, max_items=12)
+
+            return RAGSearchResult(documents=documents, trace=tr)
             
         except Exception as e:
             logger.error("rag_search_error", call=True, category="rag", error=str(e), exc_info=True)
-            return []
+            tr = _base_trace()
+            tr["abort_reason"] = "search_exception"
+            tr["error"] = str(e)
+            return RAGSearchResult([], tr)
     
     async def _rerank(
         self, 
@@ -354,14 +509,14 @@ class RAGEngine:
             검색 결과 문서 리스트
         """
         # 원본 검색
-        original_results = await self.search(query, owner_filter)
+        original_results = (await self.search(query, owner_filter)).documents
         
         # 쿼리 확장 (동의어, 관련어)
         expanded_query = self._expand_query(query)
         
         if expanded_query != query:
             # 확장된 쿼리로 검색
-            expanded_results = await self.search(expanded_query, owner_filter)
+            expanded_results = (await self.search(expanded_query, owner_filter)).documents
             
             # 결과 병합 (중복 제거)
             seen_ids = {doc.id for doc in original_results}

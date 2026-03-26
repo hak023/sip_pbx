@@ -9,6 +9,7 @@ from datetime import datetime
 import time
 
 import structlog
+from src.ai_voicebot.ai_pipeline.rag_engine import RAGSearchResult
 from src.ai_voicebot.langgraph.state import ConversationState
 
 logger = structlog.get_logger(__name__)
@@ -77,7 +78,7 @@ async def step_back_node(state: ConversationState) -> dict:
                     call_site="step_back",
                     request_sent_ts_iso=request_sent_at,
                     prompt_len=len(prompt),
-                    prompt_preview=prompt[:200].replace("\n", " "))
+                    prompt_preview=prompt.replace("\n", " "))
         try:
             step_back_query = await llm.generate_response(
                 prompt, context_docs=[], system_prompt="Step-back 변환기"
@@ -88,7 +89,7 @@ async def step_back_node(state: ConversationState) -> dict:
                            call_site="step_back",
                            request_sent_ts_iso=request_sent_at,
                            error_type=type(llm_err).__name__,
-                           error_msg=str(llm_err)[:500],
+                           error_msg=str(llm_err),
                            elapsed_ms=round(llm_elapsed_err * 1000))
             raise
         response_received_at = datetime.now().isoformat()
@@ -107,12 +108,12 @@ async def step_back_node(state: ConversationState) -> dict:
 
         logger.info("step_back_query_generated",
                    call=True,
-                   original=query[:50], step_back=step_back_query[:50],
+                   original=query, step_back=step_back_query,
                    llm_elapsed=f"{llm_elapsed:.3f}s")
 
         # 2. 상위 개념 질문으로 RAG 재검색 (call_id 전달 — 통화 이력·로그 일관성)
         rag_start = time.time()
-        step_back_results = await rag_engine.search(
+        step_back_rag = await rag_engine.search(
             step_back_query,
             owner_filter=owner,
             call_id=call_id or None,
@@ -120,9 +121,23 @@ async def step_back_node(state: ConversationState) -> dict:
         )
         rag_elapsed = time.time() - rag_start
 
+        # RAGEngine.search → RAGSearchResult(documents, trace). 예전 코드는 리스트 가정으로 iterable 오류 발생.
+        if isinstance(step_back_rag, RAGSearchResult):
+            step_back_results = step_back_rag.documents
+        else:
+            step_back_results = list(step_back_rag or [])
+
         if not step_back_results:
             elapsed = time.time() - _start
-            logger.info("timing_segment", segment="step_back", elapsed_sec=round(elapsed, 3), path="no_rag_results")
+            logger.info(
+                "timing_segment",
+                segment="step_back",
+                elapsed_sec=round(elapsed, 3),
+                path="no_rag_results",
+                step_back_trace_keys=list((step_back_rag.trace or {}).keys())
+                if isinstance(step_back_rag, RAGSearchResult)
+                else [],
+            )
             return {}
 
         # 3. 기존 결과와 병합

@@ -9,8 +9,30 @@ import time
 
 import structlog
 from src.ai_voicebot.langgraph.state import ConversationState
+from src.common.call_data_record_logger import log_call_data
 
 logger = structlog.get_logger(__name__)
+
+
+def _log_rewrite_timing(
+    call_id: str,
+    *,
+    elapsed_sec: float,
+    path: str,
+    query_preview: str = "",
+    rewritten_preview: str = "",
+) -> None:
+    if not call_id:
+        return
+    log_call_data(
+        call_id,
+        "timing",
+        "rewrite_query",
+        elapsed_sec=round(elapsed_sec, 3),
+        path=path,
+        query_preview=(query_preview or ""),
+        rewritten_preview=(rewritten_preview or ""),
+    )
 
 # 대명사 및 모호 표현 패턴
 AMBIGUOUS_PATTERNS = [
@@ -45,11 +67,13 @@ async def rewrite_query_node(state: ConversationState) -> dict:
     불필요 시 원본 쿼리 그대로 사용.
     """
     _start = time.time()
+    call_id = state.get("_call_id") or ""
 
     query = state.get("user_query", "").strip()
     if not query:
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), skip="no_query")
+        _log_rewrite_timing(call_id, elapsed_sec=elapsed, path="skip_no_query", query_preview=query)
         return {"rewritten_query": query}
 
     words = query.split()
@@ -61,13 +85,15 @@ async def rewrite_query_node(state: ConversationState) -> dict:
     if not needs_rewrite:
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), skip=True)
-        logger.debug("query_rewrite_skipped", query=query[:60])
+        logger.debug("query_rewrite_skipped", query=query)
+        _log_rewrite_timing(call_id, elapsed_sec=elapsed, path="skip_not_needed", query_preview=query)
         return {"rewritten_query": query}
 
     llm = state.get("_llm_client")
     if not llm:
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), skip="no_llm")
+        _log_rewrite_timing(call_id, elapsed_sec=elapsed, path="skip_no_llm", query_preview=query)
         return {"rewritten_query": query}
 
     try:
@@ -81,7 +107,7 @@ async def rewrite_query_node(state: ConversationState) -> dict:
                     call_site="rewrite_query",
                     request_sent_ts_iso=request_sent_at,
                     prompt_len=len(prompt),
-                    prompt_preview=prompt[:200].replace("\n", " "))
+                    prompt_preview=prompt.replace("\n", " "))
         try:
             rewritten = await llm.generate_response(
                 prompt, context_docs=[], system_prompt="쿼리 변환기"
@@ -92,7 +118,7 @@ async def rewrite_query_node(state: ConversationState) -> dict:
                            call_site="rewrite_query",
                            request_sent_ts_iso=request_sent_at,
                            error_type=type(llm_err).__name__,
-                           error_msg=str(llm_err)[:500],
+                           error_msg=str(llm_err),
                            elapsed_ms=round(elapsed_err * 1000))
             raise  # outer except가 원본 쿼리로 폴백 처리
         response_received_at = datetime.now().isoformat()
@@ -107,22 +133,34 @@ async def rewrite_query_node(state: ConversationState) -> dict:
         # LLM이 API 오류 시 에러 문구를 반환한 경우 → 원본 쿼리 유지 (검색에 쓰면 안 됨)
         if _is_error_message(rewritten):
             logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), path="llm_error_msg")
-            logger.warning("query_rewrite_llm_error_used_original", original=query[:50])
+            logger.warning("query_rewrite_llm_error_used_original", original=query)
+            _log_rewrite_timing(
+                call_id, elapsed_sec=elapsed, path="llm_error_msg", query_preview=query
+            )
             return {"rewritten_query": query}
 
         if rewritten and len(rewritten) > 2:
             logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), path="llm")
             logger.info("⏱️ [TIMING] rewrite_query (LLM)",
-                       original=query[:50], rewritten=rewritten[:50],
+                       original=query, rewritten=rewritten,
                        elapsed=f"{elapsed:.3f}s")
+            _log_rewrite_timing(
+                call_id,
+                elapsed_sec=elapsed,
+                path="llm",
+                query_preview=query,
+                rewritten_preview=rewritten,
+            )
             return {"rewritten_query": rewritten}
     except Exception as e:
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), path="error", error=str(e))
         logger.warning("query_rewrite_error", error=str(e))
+        _log_rewrite_timing(call_id, elapsed_sec=elapsed, path="error", query_preview=query)
 
     elapsed = time.time() - _start
     logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), path="fallback")
+    _log_rewrite_timing(call_id, elapsed_sec=elapsed, path="fallback", query_preview=query)
     return {"rewritten_query": query}
 
 

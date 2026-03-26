@@ -155,7 +155,7 @@ async def update_state_node(state: ConversationState) -> dict:
         out["response"] = closing
         logger.info("farewell_closing_message_set",
                     intent=intent,
-                    response_preview=closing[:50] if closing else "")
+                    response_preview=closing or "")
 
     elapsed = time.time() - _start
     logger.info("timing_segment", segment="update_state", elapsed_sec=round(elapsed, 3))

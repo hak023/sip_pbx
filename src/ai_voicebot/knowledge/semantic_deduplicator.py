@@ -1,8 +1,9 @@
 """
 Semantic Deduplicator
 
-VectorDB 기반 의미적 중복 검사
-코사인 유사도로 중복/유사 문서를 검출합니다.
+VectorDB 기반 의미적 중복 검사.
+비교에 쓰는 점수는 `_VectorDbWrapper.search`가 Chroma 거리 d를 1/(1+d)로 바꾼 값(상한 1)이다.
+(순수 코사인 유사도와 동일하지 않을 수 있음 — extraction_pipeline.md / 리포트 §9 참고)
 """
 
 import structlog
@@ -10,6 +11,11 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 logger = structlog.get_logger(__name__)
+
+# 기본값: 통화 전사·구어체는 문장 겹침이 드물어 0.92는 사실상 “거의 동일 문장”에 가까움.
+# 대화 기반 중복 완화 기본안: duplicate 낮춤, near는 duplicate보다 충분히 낮게 유지.
+DEFAULT_DUPLICATE_THRESHOLD = 0.82
+DEFAULT_NEAR_DUPLICATE_THRESHOLD = 0.74
 
 
 @dataclass
@@ -24,17 +30,34 @@ class DeduplicationResult:
 class SemanticDeduplicator:
     """VectorDB 기반 의미적 중복 검사"""
 
-    DUPLICATE_THRESHOLD = 0.92        # cosine ≥ 0.92 → 중복
-    NEAR_DUPLICATE_THRESHOLD = 0.85   # 0.85 ≤ sim < 0.92 → 유사 (병합 후보)
-
-    def __init__(self, vector_db, embedder):
+    def __init__(
+        self,
+        vector_db,
+        embedder,
+        duplicate_threshold: float = DEFAULT_DUPLICATE_THRESHOLD,
+        near_duplicate_threshold: float = DEFAULT_NEAR_DUPLICATE_THRESHOLD,
+    ):
         """
         Args:
             vector_db: VectorDB 인스턴스 (ChromaDBClient)
             embedder: TextEmbedder 인스턴스
+            duplicate_threshold: 이 점수 이상이면 기존 문서와 중복으로 보고 skip
+            near_duplicate_threshold: duplicate 미만이면서 이 값 이상이면 merge_candidate (파이프라인은 여전히 저장)
         """
         self.vector_db = vector_db
         self.embedder = embedder
+        dup = float(duplicate_threshold)
+        near = float(near_duplicate_threshold)
+        if near >= dup:
+            logger.warning(
+                "dedup_threshold_invalid_near_gte_duplicate",
+                duplicate_threshold=dup,
+                near_duplicate_threshold=near,
+                note="near_duplicate_threshold를 duplicate보다 낮게 조정합니다.",
+            )
+            near = max(0.0, dup - 0.05)
+        self.duplicate_threshold = dup
+        self.near_duplicate_threshold = near
 
     async def check(
         self,
@@ -100,11 +123,12 @@ class SemanticDeduplicator:
                     # similarity 형식 (1=같음, 0=무관)
                     similarity = score
 
-                if similarity >= self.DUPLICATE_THRESHOLD:
+                if similarity >= self.duplicate_threshold:
                     logger.info(
                         "duplicate_detected",
                         similar_doc_id=doc_id,
                         similarity=similarity,
+                        duplicate_threshold=self.duplicate_threshold,
                     )
                     return DeduplicationResult(
                         status="duplicate",
@@ -113,11 +137,12 @@ class SemanticDeduplicator:
                         action="skip",
                     )
 
-                if similarity >= self.NEAR_DUPLICATE_THRESHOLD:
+                if similarity >= self.near_duplicate_threshold:
                     logger.info(
                         "near_duplicate_detected",
                         similar_doc_id=doc_id,
                         similarity=similarity,
+                        near_duplicate_threshold=self.near_duplicate_threshold,
                     )
                     return DeduplicationResult(
                         status="near_duplicate",

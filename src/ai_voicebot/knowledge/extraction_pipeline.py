@@ -24,10 +24,20 @@ from .summarizer import ConversationSummarizer
 from .qa_extractor import QAPairExtractor
 from .entity_extractor import EntityExtractor
 from .hallucination_checker import HallucinationChecker
-from .semantic_deduplicator import SemanticDeduplicator
+from .semantic_deduplicator import (
+    DEFAULT_DUPLICATE_THRESHOLD,
+    DEFAULT_NEAR_DUPLICATE_THRESHOLD,
+    SemanticDeduplicator,
+)
 from .quality_gate import QualityGate
 from .extraction_category import normalize_extraction_category
+from .rag_knowledge_text import apply_rag_knowledge_prefix
 from src.common.sip_owner import normalize_owner_username
+from src.common.call_data_record_logger import log_call_data
+from src.common.knowledge_call_data_helpers import (
+    chroma_context_for_call_data,
+    judgment_summary_for_call_data,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -114,6 +124,12 @@ class ExtractionPipeline:
         self.min_confidence = quality_cfg.get("min_confidence", 0.7)
         self.enable_hallucination = quality_cfg.get("hallucination_check", True)
         self.enable_dedup = quality_cfg.get("deduplication", True)
+        _dup_t = quality_cfg.get(
+            "dedup_duplicate_threshold", DEFAULT_DUPLICATE_THRESHOLD
+        )
+        _near_t = quality_cfg.get(
+            "dedup_near_duplicate_threshold", DEFAULT_NEAR_DUPLICATE_THRESHOLD
+        )
 
         # 자동 승인
         auto_cfg = self.config.get("auto_approve", {})
@@ -129,7 +145,12 @@ class ExtractionPipeline:
         self.qa_extractor = QAPairExtractor(llm_client)
         self.entity_extractor = EntityExtractor(llm_client)
         self.hallucination_checker = HallucinationChecker(embedder, llm_client)
-        self.deduplicator = SemanticDeduplicator(vector_db, embedder)
+        self.deduplicator = SemanticDeduplicator(
+            vector_db,
+            embedder,
+            duplicate_threshold=_dup_t,
+            near_duplicate_threshold=_near_t,
+        )
         self.quality_gate = QualityGate(
             min_confidence=self.min_confidence,
             min_text_length=self.config.get("min_text_length", 10),
@@ -181,7 +202,7 @@ class ExtractionPipeline:
                 logger.info(
                     "pipeline_owner_normalized",
                     call_id=call_id,
-                    owner_raw_preview=(owner_raw[:80] if owner_raw else ""),
+                    owner_raw_preview=(owner_raw if owner_raw else ""),
                     owner_normalized=owner_id,
                 )
 
@@ -192,6 +213,15 @@ class ExtractionPipeline:
             if not full_transcript or len(full_transcript.strip()) < 10:
                 result.error = "Empty or too short transcript"
                 logger.warning("pipeline_skip_empty", call_id=call_id)
+                log_call_data(
+                    call_id,
+                    "knowledge",
+                    "knowledge_extraction_outcome",
+                    outcome="aborted_empty_or_short_transcript",
+                    pipeline_version=PIPELINE_VERSION,
+                    owner_id=owner_id,
+                    **chroma_context_for_call_data(),
+                )
                 return result
 
             # 화자 필터 (QA/엔티티/요약용). 지식 정제(judge_usefulness)에는 전체 전사 전달(맥락)
@@ -200,6 +230,16 @@ class ExtractionPipeline:
                 transcript = self._filter_by_speaker(full_transcript, speaker)
                 if not transcript:
                     result.error = "No content from target speaker"
+                    log_call_data(
+                        call_id,
+                        "knowledge",
+                        "knowledge_extraction_outcome",
+                        outcome="aborted_no_speaker_content",
+                        pipeline_version=PIPELINE_VERSION,
+                        speaker_filter=speaker,
+                        owner_id=owner_id,
+                        **chroma_context_for_call_data(),
+                    )
                     return result
 
             # ── Stage 2: 멀티스텝 추출 ──
@@ -253,13 +293,24 @@ class ExtractionPipeline:
             # Step 2-4: 지식 정제 — 설계서: 맥락 위해 전체 전사 전달, 저장은 착신자 발화만 (extracted_info는 복수 건 지원)
             judgment = await self.llm.judge_usefulness(full_transcript, speaker, call_id=call_id)
             extracted_list = judgment.get("extracted_info") or []
+            log_call_data(
+                call_id,
+                "llm",
+                "knowledge_judgement",
+                context="ExtractionPipeline.v2.judge_usefulness",
+                owner_id=owner_id,
+                speaker_filter=speaker,
+                min_confidence_threshold=self.min_confidence,
+                judgement=judgment_summary_for_call_data(judgment),
+                **chroma_context_for_call_data(),
+            )
             if judgment.get("is_useful") and judgment.get("confidence", 0) >= self.min_confidence:
                 for info in extracted_list:
                     info_text = info.get("text", "")
                     if info_text and len(info_text) >= 10:
                         items.append(ExtractionItem(
                             doc_type="knowledge",
-                            text=info_text,
+                            text=apply_rag_knowledge_prefix(info_text),
                             category=info.get("category", "기타"),
                             confidence=judgment["confidence"],
                             keywords=info.get("keywords", []),
@@ -310,7 +361,7 @@ class ExtractionPipeline:
                         result.skipped_hallucination += 1
                         logger.debug(
                             "hallucination_skip",
-                            text=item.text[:50],
+                            text=item.text,
                             reason=halluc.details,
                         )
                         continue
@@ -328,7 +379,7 @@ class ExtractionPipeline:
                     result.skipped_quality += 1
                     logger.debug(
                         "quality_gate_skip",
-                        text=item.text[:50],
+                        text=item.text,
                         rules=qr.failed_rules,
                     )
                     continue
@@ -347,7 +398,7 @@ class ExtractionPipeline:
                         result.skipped_duplicate += 1
                         logger.debug(
                             "dedup_skip",
-                            text=item.text[:50],
+                            text=item.text,
                             similar=dedup.similar_doc_id,
                         )
                         continue
@@ -388,11 +439,14 @@ class ExtractionPipeline:
                         category_stored=store_category,
                     )
                 metadata = {
-                    # 기본
+                    # 기본 (HITL·API 적재와 동일 키: source, call_id, created_at, category, doc_type)
                     "doc_type": item.doc_type,
                     "category": store_category,
                     "keywords": ",".join(item.keywords) if item.keywords else "",
-                    # 추출 출처
+                    "source": "call",
+                    "call_id": call_id,
+                    "created_at": now,
+                    # 추출 출처 (하위 호환·로그용)
                     "extraction_source": "call",
                     "extraction_call_id": call_id,
                     "extraction_timestamp": now,
@@ -430,6 +484,21 @@ class ExtractionPipeline:
                     text=item.text,
                     metadata=metadata,
                 )
+                log_call_data(
+                    call_id,
+                    "knowledge",
+                    "chroma_knowledge_upsert",
+                    doc_id=doc_id,
+                    owner_id=owner_id,
+                    doc_type=item.doc_type,
+                    category=store_category,
+                    review_status=review_status,
+                    embedding_dims=len(embedding) if embedding else 0,
+                    text_preview=item.text,
+                    metadata_keys=list(metadata.keys()),
+                    pipeline_version=PIPELINE_VERSION,
+                    **chroma_context_for_call_data(),
+                )
                 result.stored_count += 1
 
             result.items = verified_items
@@ -446,6 +515,19 @@ class ExtractionPipeline:
                 elapsed_ms=f"{result.elapsed_ms:.0f}",
                 summary_topics=result.main_topics,
             )
+            log_call_data(
+                call_id,
+                "knowledge",
+                "knowledge_extraction_completed",
+                extractor="ExtractionPipeline",
+                pipeline_version=PIPELINE_VERSION,
+                stored_chunks=result.stored_count,
+                skipped_duplicate=result.skipped_duplicate,
+                skipped_quality=result.skipped_quality,
+                skipped_hallucination=result.skipped_hallucination,
+                owner_id=owner_id,
+                **chroma_context_for_call_data(),
+            )
 
             return result
 
@@ -457,6 +539,16 @@ class ExtractionPipeline:
                 call_id=call_id,
                 error=str(e),
                 exc_info=True,
+            )
+            log_call_data(
+                call_id,
+                "knowledge",
+                "knowledge_extraction_outcome",
+                outcome="error",
+                pipeline_version=PIPELINE_VERSION,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                **chroma_context_for_call_data(),
             )
             return result
 

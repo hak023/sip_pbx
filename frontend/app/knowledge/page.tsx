@@ -12,9 +12,6 @@ export default function KnowledgePage() {
   const [text, setText] = useState('');
   const [category, setCategory] = useState('question');
   const [docType, setDocType] = useState<string>('knowledge'); // 추가
-  const [answer, setAnswer] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [department, setDepartment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [items, setItems] = useState<KnowledgeItem[]>([]);
@@ -82,10 +79,6 @@ export default function KnowledgePage() {
       setMessage({ type: 'error', text: '착신(owner), 내용(text), 카테고리(category)를 입력하세요.' });
       return;
     }
-    if (category === 'contact' && !phoneNumber.trim()) {
-      setMessage({ type: 'error', text: '연락처 카테고리는 전화번호(phone_number)가 필요합니다.' });
-      return;
-    }
     setSubmitting(true);
     setMessage(null);
     const token = localStorage.getItem('access_token') || localStorage.getItem('token');
@@ -102,23 +95,13 @@ export default function KnowledgePage() {
           owner: tenant.owner,
           category,
           doc_type: docType, // 추가
-          answer: answer.trim() || undefined,
           source: 'api',
-          ...(category === 'contact'
-            ? {
-                phone_number: phoneNumber.trim(),
-                ...(department.trim() ? { department: department.trim() } : {}),
-              }
-            : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         setMessage({ type: 'ok', text: `저장됨 (doc_id: ${data.doc_id}${data.cached ? ', 즉시 캐시됨' : ''})` });
         setText('');
-        setAnswer('');
-        setPhoneNumber('');
-        setDepartment('');
         fetchList();
       } else {
         const errorMsg = typeof data.detail === 'string' 
@@ -134,9 +117,6 @@ export default function KnowledgePage() {
       setSubmitting(false);
     }
   };
-
-  const needsAnswer = ['greeting_phase1', 'greeting_phase2', 'farewell'].includes(category);
-  const needsContactFields = category === 'contact';
 
   const handleDelete = async (docId: string) => {
     if (!confirm('이 지식을 삭제할까요?')) return;
@@ -175,8 +155,11 @@ export default function KnowledgePage() {
       <div className="max-w-4xl mx-auto px-0 py-4">
         <h1 className="text-2xl font-bold text-gray-900 mb-2">지식 베이스</h1>
         <p className="text-gray-600 text-sm mb-6">
-          등록한 문구는 의도(질문·불만·전환·잡담·인사 등)에 맞춰 <strong>벡터 검색(RAG)</strong>에 포함됩니다.
-          인사·종료는 <strong>응답 문장</strong>을 넣으면 캐시로 더 빠르게 반응하고, 캐시 미스 시에도 동일 문구는 지식 컬렉션에서 검색됩니다.
+          <strong>내용</strong> 필드 하나로 저장됩니다. 일반 카테고리는 RAG 검색에 쓰이고,
+          <strong className="font-medium"> 인사 (시작)·인사 (첫 응답)</strong>은 통화 시작 시 해당 문구를 <strong>LLM 없이 TTS</strong>로 재생합니다
+          (카테고리별 최신 1건). <strong className="font-medium">도움말·할 수 있는 일 (help)</strong>은 항목마다 <strong>별도로 한 줄씩</strong> 등록하면,
+          사용자가 무엇을 할 수 있는지 물을 때 그 목록으로 안내 멘트가 만들어집니다. <strong className="font-medium">종료 인사</strong>는 대화 중 종료 의도 시{' '}
+          <strong>qa_cache</strong>에도 같은 문구로 올라가 빠른 응답에 활용됩니다.
         </p>
 
         {/* 등록 폼 */}
@@ -195,34 +178,9 @@ export default function KnowledgePage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                질의·FAQ·잡담·불만·전환·연락처는 모두 RAG 후보입니다. (doc_type은 검색 필터가 아니라 구분용입니다.)
+                질의·FAQ·잡담·불만·전환·연락처는 RAG 후보입니다. 인사(시작)/(첫 응답)은 오프닝 TTS, help는 &quot;뭘 할 수 있어요&quot; 류 질문 시 멘트 구성용입니다.
               </p>
             </div>
-            {needsContactFields && (
-              <div className="space-y-2 rounded-md border border-amber-100 bg-amber-50/50 p-3">
-                <p className="text-xs text-amber-900 font-medium">연락처 카테고리 — 전화번호 필수</p>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">전화번호 *</label>
-                  <input
-                    type="text"
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                    placeholder="예: 02-1234-5678"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">부서명 (선택)</label>
-                  <input
-                    type="text"
-                    value={department}
-                    onChange={(e) => setDepartment(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                    placeholder="예: 총무팀"
-                  />
-                </div>
-              </div>
-            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">문서 유형 (doc_type)</label>
               <select
@@ -246,19 +204,6 @@ export default function KnowledgePage() {
                 placeholder="예: 안녕하세요, OO입니다 / 영업시간이 궁금해요"
               />
             </div>
-            {needsAnswer && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">응답 문장 (즉시 캐시용)</label>
-                <textarea
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                  rows={2}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                  placeholder="예: 안녕하세요. 무엇을 도와드릴까요?"
-                />
-                <p className="text-xs text-gray-500 mt-1">인사/종료 인사는 이 문장이 캐시되어 다음 통화부터 즉시 사용됩니다.</p>
-              </div>
-            )}
           </div>
           {message && (
             <p className={`mt-3 text-sm ${message.type === 'ok' ? 'text-green-600' : 'text-red-600'}`}>

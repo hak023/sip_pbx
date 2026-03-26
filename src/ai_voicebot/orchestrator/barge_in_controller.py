@@ -147,7 +147,7 @@ class BargeInController:
         
         logger.info("Utterance completed",
                    length=len(utterance),
-                   preview=utterance[:50] if len(utterance) > 50 else utterance)
+                   preview=utterance)
         
         return utterance
     

@@ -7,8 +7,10 @@ import { getTenantOwner } from "@/lib/tenant";
 import type { ActiveCallRestRaw, DashboardMetrics } from "@/types/api";
 import {
   normalizeRestActiveCall,
+  startTimeIsoFromCallStartedPayload,
   type DashboardActiveCall,
 } from "@/lib/normalizeActiveCall";
+import { RagSearchDoneDetail, stripRagHitsFromRow } from "@/components/RagSearchDoneDetail";
 
 /** 실시간 STT/TTS 한 줄 */
 interface LiveFeedLine {
@@ -28,6 +30,8 @@ interface HITLRequest {
   context: any;
   urgency: string;
   timestamp: string;
+  /** RAG 테넌트(착신) — HITL 이벤트 context.owner */
+  owner?: string;
 }
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:8001";
@@ -52,6 +56,22 @@ const DEBUG_CATEGORIES = [
   "call_event",
   "hitl",
 ] as const;
+
+/**
+ * 스트리밍 STT 중간 결과: API가 누적 전체를 주거나 짧은 조각만 줄 수 있음.
+ * 가능하면 한 발화 안에서 텍스트가 앞에서부터 이어지도록 병합한다.
+ */
+function mergeInterimTranscript(previous: string, incoming: string): string {
+  const p = previous.trim();
+  const n = incoming.trim();
+  if (!p) return n;
+  if (!n) return p;
+  if (n.startsWith(p)) return n;
+  if (p.startsWith(n)) return p;
+  if (p.includes(n)) return p;
+  if (n.includes(p)) return n;
+  return `${p} ${n}`.replace(/\s+/g, " ").trim();
+}
 
 function categoryBadgeClass(cat: string): string {
   switch (cat) {
@@ -97,6 +117,8 @@ export default function Dashboard() {
   const [debugCategoryFilter, setDebugCategoryFilter] = useState<(typeof DEBUG_CATEGORIES)[number]>("all");
   /** STT/TTS 패널에 표시할 통화 (단일 통화 가정, 복수 시 선택) */
   const [selectedFeedCallId, setSelectedFeedCallId] = useState<string>("");
+  /** 활성 통화가 있을 때 1초마다 증가 → 통화 경과 시간 표시 갱신 */
+  const [callDurationTick, setCallDurationTick] = useState(0);
   const liveFeedScrollRef = useRef<HTMLDivElement | null>(null);
   const debugLogScrollRef = useRef<HTMLDivElement | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -116,14 +138,42 @@ export default function Dashboard() {
       };
       setLiveFeedByCall((prev) => {
         const cur = prev[callId] ? [...prev[callId]] : [];
-        // STT 중간 결과: 동일 화자의 마지막 임시 줄만 갱신
+
+        // STT 확정: 같은 화자의 '인식 중' 줄이 있으면 그 줄을 확정 텍스트로 교체(중복 카드 제거)
+        if (line.kind === "stt" && line.isFinal === true) {
+          for (let i = cur.length - 1; i >= 0; i--) {
+            const row = cur[i];
+            if (
+              row.kind === "stt" &&
+              row.speakerLabel === line.speakerLabel &&
+              row.isFinal === false
+            ) {
+              cur[i] = {
+                ...row,
+                text: line.text,
+                isFinal: true,
+                ts,
+                source: line.source ?? row.source,
+              };
+              const max = 200;
+              if (cur.length > max) cur.splice(0, cur.length - max);
+              return { ...prev, [callId]: cur };
+            }
+          }
+        }
+
+        // STT 중간 결과: 리스트 **맨 끝**에 있는 같은 화자의 임시 줄만 갱신(중간에 TTS 끼면 새 임시 줄)
         if (line.kind === "stt" && line.isFinal === false && cur.length > 0) {
           const last = cur[cur.length - 1];
           if (last.kind === "stt" && last.speakerLabel === line.speakerLabel && last.isFinal === false) {
-            cur[cur.length - 1] = { ...last, text: line.text, ts };
+            const merged = mergeInterimTranscript(last.text, line.text);
+            cur[cur.length - 1] = { ...last, text: merged, ts };
+            const max = 200;
+            if (cur.length > max) cur.splice(0, cur.length - max);
             return { ...prev, [callId]: cur };
           }
         }
+
         cur.push(full);
         const max = 200;
         if (cur.length > max) cur.splice(0, cur.length - max);
@@ -219,7 +269,7 @@ export default function Dashboard() {
             caller_number: callerStr,
             callee_number: calleeStr,
             status: String(data.status || "진행 중"),
-            start_time: new Date().toISOString(),
+            start_time: startTimeIsoFromCallStartedPayload(data),
             is_ai_handled: isAi,
           },
         ];
@@ -259,10 +309,10 @@ export default function Dashboard() {
       const id = String(data.call_id || "");
       const text = String(data.text || "").trim();
       if (!id || !text) return;
-      const sp = String(data.speaker || "caller");
+      const sp = String(data.speaker || data.channel || "caller");
       const label =
         sp === "callee" ? "착신 STT" : sp === "caller" ? "발신 STT" : `STT(${sp})`;
-      const isFinal = data.is_final === true;
+      const isFinal = data.is_final === true || data.is_final === "true";
       appendLiveFeed(id, {
         kind: "stt",
         speakerLabel: label,
@@ -302,6 +352,9 @@ export default function Dashboard() {
     newSocket.on("hitl_requested", (data: Record<string, unknown>) => {
       const id = String(data.call_id || "");
       if (!id) return;
+      const ctx = (data.context as Record<string, unknown>) || {};
+      const ownerFromCtx =
+        typeof ctx.owner === "string" && ctx.owner.trim() ? ctx.owner.trim() : undefined;
       setHitlRequests((prev) => {
         if (prev.find((h) => h.call_id === id)) return prev;
         return [
@@ -309,9 +362,10 @@ export default function Dashboard() {
           {
             call_id: id,
             question: String(data.question || ""),
-            context: (data.context as object) || {},
+            context: ctx,
             urgency: String(data.urgency || "medium"),
             timestamp: new Date().toISOString(),
+            owner: ownerFromCtx,
           },
         ];
       });
@@ -345,6 +399,13 @@ export default function Dashboard() {
       return activeCalls[0].call_id;
     });
   }, [activeCalls]);
+
+  /** 통화 중 경과 시간(분:초)을 매초 갱신 */
+  useEffect(() => {
+    if (activeCalls.length === 0) return;
+    const id = window.setInterval(() => setCallDurationTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [activeCalls.length]);
 
   useEffect(() => {
     const el = debugLogScrollRef.current;
@@ -414,6 +475,7 @@ export default function Dashboard() {
       alert("답변을 입력해주세요.");
       return;
     }
+    const tenantForKb = (hitl.owner || currentTenantId || "").trim();
     socket.emit(
       "submit_hitl_response",
       {
@@ -421,6 +483,8 @@ export default function Dashboard() {
         response_text: responseText,
         original_question: hitl.question,
         save_to_kb: false,
+        ...(tenantForKb ? { tenant_id: tenantForKb } : {}),
+        category: "question",
       },
       (response: { success: boolean; message: string }) => {
         if (response.success) {
@@ -506,7 +570,10 @@ export default function Dashboard() {
             진행 중인 통화가 없습니다.
           </div>
         ) : (
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-stretch">
+          <div
+            className="flex flex-col gap-6 lg:flex-row lg:items-stretch"
+            data-duration-clock={callDurationTick}
+          >
             {/* 통화 요약 (좁은 열) */}
             <div className="w-full shrink-0 space-y-4 lg:w-[min(100%,22rem)]">
               {activeCalls.map((call) => {
@@ -567,7 +634,7 @@ export default function Dashboard() {
                       </p>
                     ) : null}
                     {/* AI 응대 통화만 호 전환(내선 연결). 유저 간 통화는 Pipecat 미사용이므로 버튼 숨김 */}
-                    {call.is_ai_handled === true ? (
+                    {call.is_ai_handled ? (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -728,7 +795,9 @@ export default function Dashboard() {
                   delete rest.call_id;
                   delete rest.category;
                   delete rest.event;
-                  const extraJson = Object.keys(rest).length > 0 ? JSON.stringify(rest, null, 2) : "";
+                  const forJson = stripRagHitsFromRow(rest);
+                  const extraJson =
+                    Object.keys(forJson).length > 0 ? JSON.stringify(forJson, null, 2) : "";
                   return (
                     <div
                       key={`${row.ts}-${row.event}-${idx}`}
@@ -743,6 +812,7 @@ export default function Dashboard() {
                         </span>
                         <span className="text-slate-900 font-semibold">{row.event}</span>
                       </div>
+                      <RagSearchDoneDetail row={row as Record<string, unknown>} />
                       {extraJson ? (
                         <pre className="mt-1 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-32 overflow-y-auto bg-slate-50 rounded px-1 py-0.5">
                           {extraJson}
@@ -842,8 +912,15 @@ function mergeByCallId(
     const r = map.get(c.call_id);
     if (!r) map.set(c.call_id, c);
     else {
+      const tPrev = Date.parse(c.start_time);
+      const tRest = Date.parse(r.start_time);
+      const start_time =
+        !Number.isNaN(tPrev) && !Number.isNaN(tRest)
+          ? new Date(Math.min(tPrev, tRest)).toISOString()
+          : r.start_time;
       map.set(c.call_id, {
         ...r,
+        start_time,
         is_ai_handled: r.is_ai_handled ?? c.is_ai_handled,
       });
     }

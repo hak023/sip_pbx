@@ -84,6 +84,7 @@ export const KNOWLEDGE_CATEGORIES = [
   { value: 'complaint', label: '불만 대응' },
   { value: 'transfer', label: '전환/연결 안내' },
   { value: 'contact', label: '연락처 (호 전환)' },
+  { value: 'help', label: '도움말·할 수 있는 일 (help)' },
 ] as const;
 
 /** doc_type 타입 정의 (KNOWLEDGE_DOC_TYPE_DESIGN) */
@@ -108,10 +109,19 @@ export interface KnowledgeItem {
   metadata: {
     owner?: string;
     category?: string;
-    doc_type?: string;   // 추가
-    source?: string;     // 추가
+    doc_type?: string;
+    source?: string;
     call_id?: string;
     created_at?: string;
+    /** HITL·통화추출·API 공통 하위 호환 키 */
+    extraction_source?: string;
+    extraction_call_id?: string;
+    extraction_timestamp?: string;
+    extraction_pipeline_version?: string;
+    /** category=contact 시 호 전환용 (목록 표시·점검용) */
+    phone_number?: string;
+    department?: string;
+    name?: string;
   };
 }
 

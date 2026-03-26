@@ -1,9 +1,11 @@
 """
 SIP Call Recorder
 
-SIP PBX 일반 통화 (사람-사람) 녹음
+SIP PBX 일반 통화 녹음
 RTP Relay 레벨에서 패킷 캡처 및 WAV 파일 저장
-후처리 STT로 transcript 생성
+
+대본(transcript): AI 통화는 실시간 파이프라인(pipeline_transcript_buffer)을 우선 저장하고,
+버퍼가 비어 있고 post_processing_stt가 켜져 있을 때만 mixed.wav 후처리 STT를 수행한다.
 """
 
 import asyncio
@@ -33,7 +35,7 @@ class SIPCallRecorder:
         self, 
         output_dir: str = "./recordings", 
         sample_rate: int = 8000,
-        enable_post_stt: bool = True,
+        enable_post_stt: bool = False,
         enable_diarization: bool = True,
         stt_language: str = "ko-KR",
         gcp_credentials_path: Optional[str] = None
@@ -268,9 +270,36 @@ class SIPCallRecorder:
             self._save_mixed_wav(mixed_path, recording)
         )
         
-        # 후처리 STT 실행 (선택적, 비동기)
+        # 1) 실시간 파이프라인 대본 (AI STT/TTS와 동일 소스) — 우선 저장
         transcript_text = ""
-        if self.enable_post_stt and mixed_path.exists():
+        transcript_source: Optional[str] = None
+        pipeline_msg_count = 0
+        try:
+            from src.common.pipeline_transcript_buffer import flush_pipeline_transcript_to_dir
+            pipeline_msg_count = flush_pipeline_transcript_to_dir(call_id, call_dir)
+        except Exception as e:
+            logger.warning(
+                "pipeline_transcript_flush_failed",
+                call_id=call_id,
+                error=str(e),
+                exc_info=True,
+            )
+
+        if pipeline_msg_count > 0:
+            transcript_source = "pipeline"
+            if transcript_path.exists():
+                try:
+                    transcript_text = transcript_path.read_text(encoding="utf-8")
+                except OSError:
+                    transcript_text = ""
+            logger.info(
+                "pipeline_transcript_flushed",
+                call_id=call_id,
+                message_count=pipeline_msg_count,
+                preview=transcript_text,
+            )
+        # 2) 파이프라인 대본이 없을 때만 WAV 후처리 STT (설정 시)
+        elif self.enable_post_stt and mixed_path.exists():
             try:
                 logger.info("stt_post_process_start",
                            category="stt",
@@ -307,6 +336,7 @@ class SIPCallRecorder:
                 
                 # transcript.txt 저장
                 if transcript_text:
+                    transcript_source = "post_stt"
                     with open(transcript_path, 'w', encoding='utf-8') as f:
                         f.write(transcript_text)
                     
@@ -316,7 +346,7 @@ class SIPCallRecorder:
                                call_id=call_id,
                                file_path=str(transcript_path),
                                transcript_length=len(transcript_text),
-                               preview=transcript_text[:100] + "..." if len(transcript_text) > 100 else transcript_text)
+                               preview=transcript_text)
                 else:
                     logger.warning("stt_empty_transcript", call=True, category="stt", call_id=call_id)
                     
@@ -341,12 +371,16 @@ class SIPCallRecorder:
             "caller_frames": recording["caller_frames"],
             "callee_frames": recording["callee_frames"],
             "has_transcript": transcript_path.exists(),
+            "transcript_source": transcript_source,
             "files": {
                 "caller": str(caller_path.relative_to(self.output_dir)),
                 "callee": str(callee_path.relative_to(self.output_dir)),
                 "mixed": str(mixed_path.relative_to(self.output_dir)),
-                "transcript": str(transcript_path.relative_to(self.output_dir)) if transcript_path.exists() else None
-            }
+                "transcript": str(transcript_path.relative_to(self.output_dir)) if transcript_path.exists() else None,
+                "conversation": str((call_dir / "conversation.json").relative_to(self.output_dir))
+                if (call_dir / "conversation.json").exists()
+                else None,
+            },
         }
         
         # 메타데이터 저장
@@ -674,7 +708,7 @@ class SIPCallRecorder:
                 if hasattr(last_alternative, 'words'):
                     # 처음 10개 단어의 speaker_tag 확인
                     sample_words = []
-                    for i, word_info in enumerate(last_alternative.words[:10]):
+                    for i, word_info in enumerate(last_alternative.words):
                         has_tag = hasattr(word_info, 'speaker_tag')
                         tag = word_info.speaker_tag if has_tag else None
                         sample_words.append({
@@ -683,8 +717,8 @@ class SIPCallRecorder:
                             "speaker_tag": tag
                         })
                     
-                    logger.info(f"📊 [STT Debug] Sample words (first 10)", 
-                               sample_words=sample_words[:5])
+                    logger.info(f"📊 [STT Debug] Sample words (all)", 
+                               sample_words=sample_words)
                     
                     # 모든 단어 추출
                     for word_info in last_alternative.words:
@@ -715,7 +749,7 @@ class SIPCallRecorder:
                        transcript_length=len(full_transcript),
                        words_count=len(words_with_speakers),
                        speaker_tags_present=len(set(w.get("speaker_tag", 1) for w in words_with_speakers)) if words_with_speakers else 0,
-                       first_10_speakers=[w.get("speaker_tag", 1) for w in words_with_speakers[:10]] if words_with_speakers else [])
+                       speaker_tags_ordered=[w.get("speaker_tag", 1) for w in words_with_speakers] if words_with_speakers else [])
             
             return {
                 "transcript": full_transcript,

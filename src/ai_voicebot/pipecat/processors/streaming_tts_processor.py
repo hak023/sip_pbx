@@ -177,7 +177,7 @@ class StreamingTTSGateway(FrameProcessor):
                     chunk_num=self._chunks_sent,
                     chars=len(text),
                     elapsed=f"{elapsed:.2f}s",
-                    preview=text[:60])
+                    preview=text)
 
         await self.push_frame(TextFrame(text=text))
 

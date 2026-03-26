@@ -14,6 +14,8 @@ export interface ActiveCallRestRaw {
   callee?: string | { number?: string; uri?: string } | null;
   state?: string;
   duration_seconds?: number | null;
+  /** 통화 연결 시각(ISO). 있으면 통화 시간 표시 기준으로 우선 사용 */
+  started_at?: string | null;
   is_ai_handled?: boolean;
 }
 

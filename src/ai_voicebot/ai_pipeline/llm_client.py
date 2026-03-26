@@ -677,7 +677,7 @@ JSON:"""
                              response_length=len(result_text),
                              json_length=len(json_text) if json_text else 0,
                              error=str(parse_error),
-                             json_preview=(json_text[:500] + "...") if json_text and len(json_text) > 500 else (json_text or "None"),
+                             json_preview=json_text if json_text else "None",
                              json_full=json_text if json_text else "")
                 if json_text:
                     fixed = json_text.rstrip()

@@ -10,6 +10,8 @@ import json
 import structlog
 from typing import List, Dict
 
+from src.ai_voicebot.knowledge.prompt_limits import TRANSCRIPT_PROMPT_MAX_CHARS
+
 logger = structlog.get_logger(__name__)
 
 # 지원 엔티티 타입
@@ -63,7 +65,7 @@ class EntityExtractor:
 6. confidence는 원문에 명확히 있으면 0.9+, 문맥 추론이면 0.7~0.9
 
 **통화 내용:**
-{transcript[:2000]}
+{transcript[:TRANSCRIPT_PROMPT_MAX_CHARS]}
 
 **출력 형식 (JSON 배열):**
 [

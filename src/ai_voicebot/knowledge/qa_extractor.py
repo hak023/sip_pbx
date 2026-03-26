@@ -10,6 +10,8 @@ import json
 import structlog
 from typing import List, Dict
 
+from src.ai_voicebot.knowledge.prompt_limits import TRANSCRIPT_PROMPT_MAX_CHARS
+
 logger = structlog.get_logger(__name__)
 
 
@@ -50,7 +52,7 @@ class QAPairExtractor:
 6. 답변은 완전한 문장으로 재구성
 
 **통화 내용:**
-{transcript[:2000]}
+{transcript[:TRANSCRIPT_PROMPT_MAX_CHARS]}
 
 **출력 형식 (JSON 배열):**
 [

@@ -169,13 +169,18 @@ class KnowledgeService:
             text = f"Q: {question}\nA: {answer}"
             embedding = self.embedder.embed_text(text)
             doc_id = f"hitl_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+            _ts = datetime.now().isoformat()
             doc_metadata = {
                 "category": category,
                 "keywords": "",
-                "created_at": datetime.now().isoformat(),
+                "created_at": _ts,
                 "doc_type": "knowledge",  # 통화로 인한 적재이므로 knowledge 고정
                 "source": "hitl",
                 "call_id": call_id,
+                # 파이프라인 적재와 동일 키 (extraction_* 하위 호환)
+                "extraction_source": "hitl",
+                "extraction_call_id": call_id,
+                "extraction_timestamp": _ts,
                 "operator_id": operator_id,
             }
             if owner:

@@ -120,7 +120,7 @@ class SmartBargeInStrategy:
             if keyword in text:
                 self.stats["keyword_interrupts"] += 1
                 logger.info("barge_in_keyword_interrupt",
-                           keyword=keyword, text=text[:60])
+                           keyword=keyword, text=text)
                 return True
 
         # ── Stage 2: Word Count Gate ──
@@ -130,7 +130,7 @@ class SmartBargeInStrategy:
         text_stripped = text.strip()
         if text_stripped in self.backchannel or word_count < 2:
             self.stats["backchannel_ignored"] += 1
-            logger.debug("barge_in_backchannel_ignored", text=text[:40])
+            logger.debug("barge_in_backchannel_ignored", text=text)
             return False
 
         if word_count < self.min_words:
@@ -151,10 +151,10 @@ class SmartBargeInStrategy:
                 if is_interrupt:
                     self.stats["llm_interrupts"] += 1
                     logger.info("barge_in_llm_interrupt",
-                               text=text[:60], ai_text=self.ai_current_text[:60])
+                               text=text, ai_text=self.ai_current_text)
                 else:
                     self.stats["llm_continued"] += 1
-                    logger.debug("barge_in_llm_continued", text=text[:60])
+                    logger.debug("barge_in_llm_continued", text=text)
 
                 return is_interrupt
             except Exception as e:
@@ -253,8 +253,8 @@ class SmartBargeInProcessor(FrameProcessor):
 
                 if should_interrupt:
                     logger.info("smart_barge_in_triggered",
-                               user_text=frame.text[:80],
-                               ai_text=self._current_tts_text[:60])
+                               user_text=frame.text,
+                               ai_text=self._current_tts_text)
 
                     # Pipecat interrupt 프레임 전송
                     await self.push_frame(
@@ -271,7 +271,7 @@ class SmartBargeInProcessor(FrameProcessor):
                 else:
                     # 무시 (맞장구 등)
                     logger.debug("smart_barge_in_ignored",
-                               user_text=frame.text[:60])
+                               user_text=frame.text)
                     await self._strategy.reset()
                 return
             else:

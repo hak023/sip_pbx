@@ -52,7 +52,7 @@ class FollowUpService:
             logger.debug("follow_up_save_skipped_no_db",
                          call_id=call_id,
                          request_id=request_id,
-                         user_question_preview=user_question[:50])
+                         user_question_preview=user_question)
             return None
         try:
             await db.execute(
@@ -73,7 +73,7 @@ class FollowUpService:
             logger.info("pending_follow_up_saved",
                         request_id=request_id,
                         call_id=call_id,
-                        user_question_preview=user_question[:60])
+                        user_question_preview=user_question)
             return request_id
         except Exception as e:
             logger.error("pending_follow_up_save_failed",

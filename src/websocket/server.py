@@ -26,6 +26,46 @@ _ws_loop: Optional[asyncio.AbstractEventLoop] = None
 WS_PORT = 8001
 CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+# schedule_socket_emit 이 WS 미기동 시 조용히 드롭될 때 1회만 경고 (유저간 STT 등)
+_stt_emit_skip_logged = False
+
+
+def install_bypass_realtime_stt_callback() -> bool:
+    """
+    WebSocket(_sio) 준비 후 Bypass STT → stt_transcript 브로드캐스트 콜백 등록.
+    SIP/RTP가 WS 스레드보다 먼저 패킷을 받는 경우 feed_audio 쪽에서 재시도할 수 있음.
+    """
+    if not _sio or not _ws_loop:
+        return False
+    try:
+        from src.media.bypass_realtime_stt import get_broadcast_callback, set_broadcast_callback
+
+        if get_broadcast_callback() is not None:
+            return True
+
+        def _bypass_stt_dashboard_cb(
+            cid: str, text: str, is_final: bool, channel: str
+        ) -> None:
+            schedule_socket_emit(
+                "stt_transcript",
+                {
+                    "call_id": cid,
+                    "text": text,
+                    "is_final": is_final,
+                    "speaker": channel,
+                    "channel": channel,
+                    "source": "bypass_human",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                },
+            )
+
+        set_broadcast_callback(_bypass_stt_dashboard_cb)
+        logger.info("bypass_realtime_stt_dashboard_callback_registered")
+        return True
+    except Exception as e:
+        logger.warning("bypass_stt_callback_register_failed error=%s", e)
+        return False
+
 
 def _llm_client_for_hitl_refine():
     """대시보드 HITL 답변 다듬기용 LLM (config.yaml gemini + 환경변수). 실패 시 None."""
@@ -64,12 +104,53 @@ def set_call_manager(cm: Any) -> None:
     _call_manager = cm
 
 
+def _resolve_hitl_kb_owner(call_id: str, data: dict) -> tuple[str, str]:
+    """
+    HITL → 지식 저장 시 Chroma/RAG용 owner 정규화.
+    우선순위: 요청 body owner/tenant_id → CallSession 착신 URI(get_callee_uri).
+
+    Returns:
+        (normalized_owner, resolution_source) — source는 client | call_session | empty
+    """
+    from src.common.sip_owner import normalize_owner_username
+
+    raw = (data.get("owner") or data.get("tenant_id") or "").strip()
+    if raw:
+        n = normalize_owner_username(raw)
+        if n:
+            return n, "client"
+
+    if _call_manager and call_id:
+        try:
+            sess = _call_manager.get_session(call_id)
+            if sess is not None:
+                uri = sess.get_callee_uri() or ""
+                n = normalize_owner_username(uri)
+                if n:
+                    return n, "call_session"
+        except Exception as e:
+            logger.debug(
+                "hitl_kb_owner_session_lookup_failed call_id=%s error=%s",
+                call_id,
+                e,
+            )
+    return "", "empty"
+
+
 # ---------- Socket.IO는 WS 전용 스레드 루프에서만 안전하게 emit. SIP/Pipecat 루프에서는 스케줄만 함. ----------
 
 
 def schedule_socket_emit(event: str, payload: Dict[str, Any], **emit_kwargs: Any) -> None:
     """동기 콜백·타 스레드에서 Socket.IO emit (fire-and-forget)."""
+    global _stt_emit_skip_logged
     if not _sio or not _ws_loop:
+        if event == "stt_transcript" and not _stt_emit_skip_logged:
+            _stt_emit_skip_logged = True
+            logger.warning(
+                "schedule_socket_emit_skipped_ws_not_ready event=%s "
+                "note=WebSocket_스레드_미기동_또는_socketio_미설치로_STT_이벤트_유실",
+                event,
+            )
         return
 
     async def _do_emit() -> None:
@@ -406,28 +487,7 @@ async def start_server() -> None:
     _ws_loop = asyncio.get_running_loop()
 
     # 유저 간(Bypass) RTP → Google 스트리밍 STT → 대시보드 stt_transcript
-    try:
-        from src.media.bypass_realtime_stt import set_broadcast_callback
-
-        def _bypass_stt_dashboard_cb(
-            cid: str, text: str, is_final: bool, channel: str
-        ) -> None:
-            schedule_socket_emit(
-                "stt_transcript",
-                {
-                    "call_id": cid,
-                    "text": text,
-                    "is_final": is_final,
-                    "speaker": channel,
-                    "source": "bypass_human",
-                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                },
-            )
-
-        set_broadcast_callback(_bypass_stt_dashboard_cb)
-        logger.info("bypass_realtime_stt_dashboard_callback_registered")
-    except Exception as e:
-        logger.warning("bypass_stt_callback_register_failed error=%s", e)
+    install_bypass_realtime_stt_callback()
 
     @sio.event
     async def connect(sid: str, environ: dict, auth: Optional[dict]) -> None:
@@ -466,7 +526,8 @@ async def start_server() -> None:
                 "response_text": str,
                 "original_question": str (추가),  # HITL 요청 시의 원래 질문
                 "save_to_kb": bool (optional),
-                "category": str (optional),
+                "category": str (optional),  # 미지정 시 question (RAG complaint/transfer $in 정합)
+                "owner" | "tenant_id": str (optional),  # Chroma owner; 없으면 CallSession 착신 URI 시도
                 "question": str (optional)
             }
         
@@ -477,7 +538,8 @@ async def start_server() -> None:
         response_text = data.get("response_text")
         original_question = data.get("original_question", "")  # HITL 지연 응답 설계
         save_to_kb = data.get("save_to_kb", False)
-        category = data.get("category", "faq")
+        # "faq"는 doc_type 용어와 혼동되고 RAG complaint/transfer category $in에 없음 → 기본 question
+        category = data.get("category") or "question"
         question = data.get("question", original_question)  # question이 없으면 original_question 사용
         
         if not call_id or not response_text:
@@ -550,20 +612,38 @@ async def start_server() -> None:
                 try:
                     from src.services.knowledge_service import get_knowledge_service
                     knowledge_service = get_knowledge_service()
-                    
+
+                    kb_owner, kb_owner_src = _resolve_hitl_kb_owner(call_id, data if isinstance(data, dict) else {})
+                    if not kb_owner:
+                        logger.warning(
+                            "hitl_kb_owner_unresolved call_id=%s save_to_kb=True "
+                            "category=%s note=owner없으면_RAG_where_owner에_안_걸림_요청에_tenant_id_권장",
+                            call_id,
+                            category,
+                        )
+                    else:
+                        logger.info(
+                            "hitl_kb_owner_resolved call_id=%s owner=%s source=%s",
+                            call_id,
+                            kb_owner,
+                            kb_owner_src,
+                        )
+
                     result = await knowledge_service.add_from_hitl(
                         question=question,
                         answer=response_text,
                         call_id=call_id,
                         operator_id=sid,  # Socket.IO 세션 ID를 운영자 ID로 사용
                         category=category,
+                        owner=kb_owner or None,
                     )
                     
                     logger.info(
-                        "hitl_knowledge_saved call_id=%s doc_id=%s category=%s",
+                        "hitl_knowledge_saved call_id=%s doc_id=%s category=%s owner_set=%s",
                         call_id,
                         result.get("doc_id"),
                         category,
+                        bool(kb_owner),
                     )
                     
                     # Frontend에 지식 업데이트 알림

@@ -583,7 +583,7 @@ async def cleanup_legacy_data(knowledge_service) -> int:
             )
             logger.info("legacy_data_cleaned",
                        deleted_count=len(ids_to_delete),
-                       deleted_ids=ids_to_delete[:10])  # 처음 10개만 로그
+                       deleted_ids=ids_to_delete)
 
         return len(ids_to_delete)
 

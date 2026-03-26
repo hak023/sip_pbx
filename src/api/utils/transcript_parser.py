@@ -62,9 +62,35 @@ def parse_transcript_file(transcript_path: str) -> List[Dict[str, str]]:
     return messages
 
 
+def _messages_from_conversation_json(dir_path: Path) -> Optional[List[Dict[str, str]]]:
+    """pipeline_transcript_buffer 가 저장한 conversation.json → 프론트용 role/content."""
+    conv_path = dir_path / "conversation.json"
+    if not conv_path.is_file():
+        return None
+    try:
+        with open(conv_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw = data.get("messages")
+    if not isinstance(raw, list):
+        return None
+    out: List[Dict[str, str]] = []
+    for m in raw:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role") or "user"
+        if role not in ("user", "assistant"):
+            role = "assistant" if role in ("착신자", "callee", "assistant") else "user"
+        content = (m.get("content") or "").strip()
+        if content:
+            out.append({"role": role, "content": content})
+    return out or None
+
+
 def get_transcript_for_call(call_id: str, recordings_dir: str = "recordings") -> Optional[List[Dict[str, str]]]:
     """
-    call_id로 transcript 파일을 찾아 파싱
+    call_id로 대본 로드: conversation.json(실시간 파이프라인) 우선, 없으면 transcript.txt 파싱.
     
     Args:
         call_id: 통화 ID
@@ -78,6 +104,9 @@ def get_transcript_for_call(call_id: str, recordings_dir: str = "recordings") ->
     dir_path = find_call_directory(call_id, recordings_dir)
     if dir_path is None:
         return None
+    conv_msgs = _messages_from_conversation_json(dir_path)
+    if conv_msgs:
+        return conv_msgs
     transcript_path = dir_path / "transcript.txt"
     if transcript_path.exists():
         return parse_transcript_file(str(transcript_path))

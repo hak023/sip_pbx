@@ -7,6 +7,7 @@ GET /api/calls/active: CallManager 또는 파이프라인 등록 통화 목록 �
 """
 
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -56,17 +57,22 @@ def unregister_active_call(call_id: str) -> None:
 def _get_active_calls_from_registry() -> List[Dict[str, Any]]:
     """레지스트리에서 활성 통화 목록 반환 (duration_seconds 계산)."""
     now = time.time()
-    return [
-        {
+    out: List[Dict[str, Any]] = []
+    for c in _active_calls_registry.values():
+        st = c.get("started_at", now)
+        dur = int(now - st) if isinstance(st, (int, float)) else 0
+        row = {
             "call_id": c["call_id"],
             "caller": c.get("caller"),
             "callee": c.get("callee"),
             "state": c.get("state", "active"),
-            "duration_seconds": int(now - c.get("started_at", now)),
+            "duration_seconds": dur,
             "is_ai_handled": c.get("is_ai_handled", True),
         }
-        for c in _active_calls_registry.values()
-    ]
+        if isinstance(st, (int, float)):
+            row["started_at"] = datetime.fromtimestamp(st, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        out.append(row)
+    return out
 
 
 def _get_active_calls_from_manager() -> List[Dict[str, Any]]:
@@ -96,16 +102,32 @@ def _get_active_calls_from_manager() -> List[Dict[str, Any]]:
                             elapsed = int(s.get_elapsed_seconds())
                         except Exception:
                             elapsed = 0
-                    rows.append(
-                        {
-                            "call_id": cid,
-                            "caller": caller,
-                            "callee": callee,
-                            "state": state_val,
-                            "duration_seconds": elapsed,
-                            "is_ai_handled": cid in ai_set,
-                        }
-                    )
+                    started_at_iso: Optional[str] = None
+                    at = getattr(s, "answer_time", None)
+                    if isinstance(at, datetime):
+                        try:
+                            au = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+                            started_at_iso = au.isoformat().replace("+00:00", "Z")
+                        except Exception:
+                            started_at_iso = None
+                    # Pipecat은 register_active_call로 레지스트리에만 넣고 ai_enabled_calls에 안 넣는 경로가 있음.
+                    # 부재중 전환 등은 metadata.is_ai_handled만 세팅될 수 있음. 대시보드 호전환 버튼용으로 병합.
+                    meta = getattr(s, "metadata", None)
+                    meta_ai = bool(isinstance(meta, dict) and meta.get("is_ai_handled"))
+                    reg = _active_calls_registry.get(cid)
+                    registry_ai = bool(reg and reg.get("is_ai_handled"))
+                    is_ai_handled = (cid in ai_set) or meta_ai or registry_ai
+                    row: Dict[str, Any] = {
+                        "call_id": cid,
+                        "caller": caller,
+                        "callee": callee,
+                        "state": state_val,
+                        "duration_seconds": elapsed,
+                        "is_ai_handled": is_ai_handled,
+                    }
+                    if started_at_iso:
+                        row["started_at"] = started_at_iso
+                    rows.append(row)
                 return rows
         except Exception:
             pass
@@ -137,7 +159,7 @@ def _get_active_calls_from_manager() -> List[Dict[str, Any]]:
 def _normalize_call_item(raw: Any) -> Dict[str, Any]:
     """원시 통화 객체를 대시보드 형식으로 정규화."""
     if isinstance(raw, dict):
-        return {
+        d: Dict[str, Any] = {
             "call_id": raw.get("call_id") or raw.get("id") or "",
             "caller": raw.get("caller"),
             "callee": raw.get("callee"),
@@ -145,6 +167,9 @@ def _normalize_call_item(raw: Any) -> Dict[str, Any]:
             "duration_seconds": raw.get("duration_seconds") or raw.get("duration"),
             "is_ai_handled": raw.get("is_ai_handled", False),
         }
+        if raw.get("started_at"):
+            d["started_at"] = raw.get("started_at")
+        return d
     return {
         "call_id": getattr(raw, "call_id", None) or getattr(raw, "id", None) or "",
         "caller": getattr(raw, "caller", None),

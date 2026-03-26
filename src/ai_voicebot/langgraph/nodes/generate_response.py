@@ -10,8 +10,25 @@ from datetime import datetime
 
 import structlog
 from src.ai_voicebot.langgraph.state import ConversationState
+from src.common.rag_hit_serializer import build_rag_hits_llm_context
+from src.common.call_data_record_logger import log_call_data
 
 logger = structlog.get_logger(__name__)
+
+
+def _llm_exchange_rag_fields(
+    state: ConversationState,
+    rag_results: list,
+    *,
+    context_source: str,
+) -> dict:
+    """llm_exchange / call_data_record용: 프롬프트에 넣은 압축 RAG 스니펫 + 검색 trace."""
+    trace = state.get("rag_search_trace") or {}
+    return {
+        "llm_rag_applied": build_rag_hits_llm_context(rag_results or [], max_items=8),
+        "llm_rag_context_source": context_source,
+        "rag_search_trace": trace,
+    }
 
 # 모르는 내용일 때 사용할 고정 멘트 (설계: TTS_RTP_AND_HITL_DESIGN.md — "잠시만 기다려 주세요" 후 HITL)
 RESPONSE_UNKNOWN_NEEDS_FOLLOWUP = "해당 내용은 확인이 필요합니다. 잠시만 기다려 주세요."
@@ -67,7 +84,11 @@ async def generate_response_node(state: ConversationState) -> dict:
     user_query = state.get("user_query", "")
 
     if not llm or not user_query:
-        return {"response": "죄송합니다. 잠시 후 다시 시도해 주세요.", "confidence": 0.0}
+        return {
+            "response": "죄송합니다. 잠시 후 다시 시도해 주세요.",
+            "confidence": 0.0,
+            **_llm_exchange_rag_fields(state, state.get("rag_results") or [], context_source="skipped_no_llm_input"),
+        }
 
     intent = state.get("intent", "")
     rag_results = state.get("rag_results") or []
@@ -101,6 +122,7 @@ async def generate_response_node(state: ConversationState) -> dict:
             "confidence": 0.0,
             "needs_follow_up": True,
             "follow_up_user_query": user_query,
+            **_llm_exchange_rag_fields(state, [], context_source="question_no_knowledge"),
         }
 
     start = time.time()
@@ -134,7 +156,7 @@ async def generate_response_node(state: ConversationState) -> dict:
                     call_site="generate_response",
                     request_sent_ts_iso=request_sent_at,
                     prompt_len=len(system_prompt) + len(user_query),
-                    prompt_preview=user_query[:200])
+                    prompt_preview=user_query)
         try:
             response = await llm.generate_response(
                 user_text=user_query,
@@ -147,7 +169,7 @@ async def generate_response_node(state: ConversationState) -> dict:
                            call_site="generate_response",
                            request_sent_ts_iso=request_sent_at,
                            error_type=type(llm_err).__name__,
-                           error_msg=str(llm_err)[:500],
+                           error_msg=str(llm_err),
                            elapsed_ms=round(elapsed_err * 1000))
             raise
         response_received_at = datetime.now().isoformat()
@@ -157,7 +179,7 @@ async def generate_response_node(state: ConversationState) -> dict:
             response = "죄송합니다. 답변을 생성하지 못했습니다. 다시 말씀해 주시겠어요?"
         # API 오류 등으로 LLM이 에러 문구를 반환한 경우 → 모르는 내용 고정 응답 + 후처리 플래그
         elif _is_llm_error_fallback(response):
-            logger.warning("generate_response_llm_error_fallback", response_preview=response[:80])
+            logger.warning("generate_response_llm_error_fallback", response_preview=response)
             response = RESPONSE_UNKNOWN_NEEDS_FOLLOWUP
             needs_follow_up = True
         # 응답이 모르는 내용 유도 문구와 유사하면 후처리 플래그 (LLM이 규칙 3을 따른 경우)
@@ -177,10 +199,22 @@ async def generate_response_node(state: ConversationState) -> dict:
 
         logger.info("timing_segment", segment="generate_response", elapsed_sec=round(elapsed, 3))
         logger.info("⏱️ [TIMING] generate_response (LLM 호출)",
-                   query=user_query[:50],
+                   query=user_query,
                    response_len=len(response),
                    chunks=len(chunks),
                    llm_elapsed=f"{elapsed:.3f}s")
+
+        call_id = state.get("_call_id") or ""
+        if call_id:
+            log_call_data(
+                call_id,
+                "timing",
+                "llm_generate_response",
+                elapsed_sec=round(elapsed, 3),
+                intent=intent,
+                rag_hit_count=len(rag_results or []),
+                response_len=len(response),
+            )
 
         # 대화 기록 업데이트
         updated_messages = list(messages)
@@ -202,6 +236,7 @@ async def generate_response_node(state: ConversationState) -> dict:
             confidence = state.get("confidence", 0.0)  # From adaptive_rag or step_back
 
         # llm_exchange는 rag_processor에서 통화 단위로 기록 (중복 방지)
+        _rag_src = "vector_knowledge" if rag_results else "llm_prompt_no_reference"
 
         return {
             "response": response,
@@ -210,6 +245,7 @@ async def generate_response_node(state: ConversationState) -> dict:
             "confidence": confidence,
             "needs_follow_up": needs_follow_up,
             "follow_up_user_query": user_query if needs_follow_up else "",
+            **_llm_exchange_rag_fields(state, rag_results, context_source=_rag_src),
         }
 
     except Exception as e:
@@ -221,6 +257,7 @@ async def generate_response_node(state: ConversationState) -> dict:
             "confidence": 0.0,
             "needs_follow_up": True,
             "follow_up_user_query": user_query if user_query else "",
+            **_llm_exchange_rag_fields(state, rag_results, context_source="llm_generation_error"),
         }
 
 

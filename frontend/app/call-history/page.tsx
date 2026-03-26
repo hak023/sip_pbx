@@ -10,6 +10,7 @@ import {
   type RecordingFileInfo,
 } from '@/lib/recordings';
 import type { FollowUpItem } from '@/types/api';
+import { RagSearchDoneDetail, stripRagHitsFromRow } from '@/components/RagSearchDoneDetail';
 
 interface CallDataRecordRow {
   ts: string;
@@ -534,9 +535,10 @@ export default function CallHistoryPage() {
                                                 delete rest.call_id;
                                                 delete rest.category;
                                                 delete rest.event;
+                                                const forJson = stripRagHitsFromRow(rest);
                                                 const extra =
-                                                  Object.keys(rest).length > 0
-                                                    ? JSON.stringify(rest, null, 2)
+                                                  Object.keys(forJson).length > 0
+                                                    ? JSON.stringify(forJson, null, 2)
                                                     : '';
                                                 return (
                                                   <div
@@ -554,6 +556,7 @@ export default function CallHistoryPage() {
                                                       </span>
                                                       <span className="text-slate-900 font-semibold">{rec.event}</span>
                                                     </div>
+                                                    <RagSearchDoneDetail row={rec as Record<string, unknown>} />
                                                     {extra ? (
                                                       <pre className="mt-1 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-40 overflow-y-auto bg-slate-50 rounded px-1 py-0.5">
                                                         {extra}

@@ -15,7 +15,9 @@ ConversationState를 공유하는 StateGraph 워크플로우.
 """
 
 import asyncio
-from typing import Optional
+import time
+from collections import defaultdict
+from typing import Any, Dict, Optional, Tuple
 
 import structlog
 
@@ -34,10 +36,84 @@ from src.ai_voicebot.langgraph.nodes.response_shortcuts import (
     repeat_response_node,
     clarification_response_node,
     help_response_node,
-    fallback_response_node,
 )
+from src.common.call_data_record_logger import log_call_data
 
 logger = structlog.get_logger(__name__)
+
+# build_conversation_graph() 노드명과 동기화 (astream_events에서 구간 시간 집계용)
+_LANGGRAPH_NODE_NAMES = frozenset(
+    {
+        "classify_intent",
+        "check_cache",
+        "rewrite_query",
+        "adaptive_rag",
+        "step_back",
+        "generate_response",
+        "hitl_alert",
+        "update_cache",
+        "update_state",
+        "template_response",
+        "repeat_response",
+        "clarification_response",
+        "help_response",
+        "check_greeting_farewell_cache",
+    }
+)
+
+
+async def _invoke_graph_with_node_timing(
+    graph: Any, invoke_state: Dict[str, Any]
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, float]]:
+    """
+    단일 그래프 실행으로 최종 state + 노드별 wall 시간을 수집한다.
+
+    우선 stream_mode=["updates","values"] (한 번의 실행)로 updates 키=노드명,
+    마지막 values 청크=병합된 전체 state.
+    미지원 시 values만으로 최종 state만 수집하거나 (None, {}) 로 ainvoke 폴백.
+    """
+    ast = getattr(graph, "astream", None)
+    if not callable(ast):
+        return None, {}
+
+    node_sec: Dict[str, float] = defaultdict(float)
+    last_values: Optional[Dict[str, Any]] = None
+    prev_wall = time.perf_counter()
+
+    try:
+        async for packet in ast(invoke_state, stream_mode=["updates", "values"]):
+            if not isinstance(packet, tuple) or len(packet) != 2:
+                continue
+            mode, chunk = packet
+            now = time.perf_counter()
+            if mode == "updates" and isinstance(chunk, dict):
+                dt = max(0.0, now - prev_wall)
+                prev_wall = now
+                named = [k for k in chunk if k in _LANGGRAPH_NODE_NAMES]
+                if named:
+                    share = dt / len(named)
+                    for k in named:
+                        node_sec[k] += share
+            elif mode == "values" and isinstance(chunk, dict):
+                last_values = chunk
+                prev_wall = time.perf_counter()
+    except TypeError:
+        try:
+            prev = time.perf_counter()
+            async for chunk in ast(invoke_state, stream_mode="values"):
+                if isinstance(chunk, dict):
+                    last_values = chunk
+                    _ = time.perf_counter() - prev
+                    prev = time.perf_counter()
+        except Exception as e:
+            logger.debug("langgraph_astream_values_only_failed", error=str(e))
+            return None, {}
+    except Exception as e:
+        logger.debug("langgraph_astream_updates_values_failed", error=str(e))
+        return None, {}
+
+    rounded = {k: round(v, 4) for k, v in sorted(node_sec.items(), key=lambda x: -x[1])}
+    return last_values, rounded
 
 
 def _route_after_cache(state: ConversationState) -> str:
@@ -63,12 +139,8 @@ def _route_after_intent(state: ConversationState) -> str:
         return "clarification_response"
     if intent == "help":
         return "help_response"
-    if intent in ("out_of_scope", "nlu_fallback"):
-        return "fallback_response"
-    # 잡담: RAG/semantic cache 없이 LLM만으로 짧게 응답
-    if intent == "chitchat":
-        return "generate_response"
-    # question, complaint, transfer, unknown → 캐시·RAG 경로
+    # question / complaint / transfer / chitchat / unknown 계열 / nlu_fallback / out_of_scope:
+    # 캐시·RAG 후 LLM (chitchat·범위밖도 동일 경로 — generate_response의 chitchat_rule·일반 규칙 적용)
     return "check_cache"
 
 
@@ -134,7 +206,6 @@ def build_conversation_graph():
     graph.add_node("repeat_response", repeat_response_node)
     graph.add_node("clarification_response", clarification_response_node)
     graph.add_node("help_response", help_response_node)
-    graph.add_node("fallback_response", fallback_response_node)
     graph.add_node("check_greeting_farewell_cache", check_greeting_farewell_cache_node)
 
     # ── 엣지 정의 ──
@@ -145,15 +216,12 @@ def build_conversation_graph():
         "classify_intent",
         _route_after_intent,
         {
-            "update_state": "update_state",
-            "generate_response": "generate_response",
             "check_cache": "check_cache",
             "check_greeting_farewell_cache": "check_greeting_farewell_cache",
             "template_response": "template_response",
             "repeat_response": "repeat_response",
             "clarification_response": "clarification_response",
             "help_response": "help_response",
-            "fallback_response": "fallback_response",
         },
     )
 
@@ -168,7 +236,7 @@ def build_conversation_graph():
     )
 
     # 단축 응답 노드 → update_state → END (캐시/RAG/hitl_alert 스킵)
-    for node_name in ("template_response", "repeat_response", "clarification_response", "help_response", "fallback_response"):
+    for node_name in ("template_response", "repeat_response", "clarification_response", "help_response"):
         graph.add_edge(node_name, "update_state")
 
     # check_cache → (hit → update_state, miss → rewrite_query)
@@ -259,7 +327,7 @@ class ConversationAgent:
         else:
             logger.warning("conversation_agent_graph_build_failed")
 
-    async def process_utterance(self, user_text: str, call_id: Optional[str] = None) -> dict:
+    async def process_utterance(self, user_text: str, call_id: Optional[str] = None, **kwargs) -> dict:
         """
         사용자 발화 처리 (메인 API).
 
@@ -271,12 +339,17 @@ class ConversationAgent:
             dict with keys: response, confidence, intent, needs_human, hitl_reason,
                            business_state, response_chunks, rag_cache_hit
         """
-        import time
         utterance_start = time.time()
 
         if not self.graph:
             logger.error("conversation_agent_no_graph")
-            return {"response": "시스템 오류가 발생했습니다.", "confidence": 0.0}
+            return {
+                "response": "시스템 오류가 발생했습니다.",
+                "confidence": 0.0,
+                "llm_rag_applied": [],
+                "llm_rag_context_source": "no_graph",
+                "rag_search_trace": {},
+            }
 
         # 기관 정보 로드
         org_context = ""
@@ -303,7 +376,19 @@ class ConversationAgent:
 
         try:
             graph_start = time.time()
-            result = await self.graph.ainvoke(invoke_state)
+            timed_result, node_durations_sec = await _invoke_graph_with_node_timing(
+                self.graph, invoke_state
+            )
+            if timed_result is not None:
+                result = timed_result
+            else:
+                logger.debug(
+                    "langgraph_ainvoke_no_astream_events_or_empty",
+                    call_id=call_id or "",
+                    note="astream_events 미수신 시 단일 ainvoke",
+                )
+                result = await self.graph.ainvoke(invoke_state)
+                node_durations_sec = {}
             graph_elapsed = time.time() - graph_start
 
             # 단축 경로/캐시 히트 경로는 messages를 반환하지 않음 → 이 턴의 user+assistant 보강
@@ -323,17 +408,40 @@ class ConversationAgent:
             self._state["business_state"] = result.get("business_state", self._state["business_state"])
 
             total_elapsed = time.time() - utterance_start
-            
+
+            cid = call_id or ""
+            if cid:
+                log_call_data(
+                    cid,
+                    "timing",
+                    "agent_graph_total",
+                    graph_elapsed_sec=round(graph_elapsed, 3),
+                    total_elapsed_sec=round(total_elapsed, 3),
+                    intent=result.get("intent", "unknown"),
+                    rag_cache_hit=result.get("rag_cache_hit", False),
+                    agent_graph_node_durations_sec=node_durations_sec or None,
+                )
+            if node_durations_sec:
+                logger.info(
+                    "langgraph_node_durations_sec",
+                    call_id=cid,
+                    progress="timing",
+                    node_durations_sec=node_durations_sec,
+                    graph_elapsed_sec=round(graph_elapsed, 3),
+                    note="astream_events v2/v1 on_chain_* 로 집계; 노드명은 StateGraph 노드와 일치",
+                )
+
             # ✅ 구간별 타이밍 로그 (6.2 지연 구간 점검: classify_intent(LLM), generate_response(LLM) 로그 참고)
             logger.info("process_utterance_complete",
-                       user_text=user_text[:50],
+                       user_text=user_text,
                        total_elapsed=f"{total_elapsed:.3f}s",
                        langgraph_elapsed=f"{graph_elapsed:.3f}s",
                        intent=result.get("intent", "unknown"),
                        confidence=f"{result.get('confidence', 0.0):.3f}",
                        cache_hit=result.get("rag_cache_hit", False),
                        response_len=len(result.get("response", "")),
-                       note="지연 시 ⏱️ [TIMING] classify_intent (LLM) / generate_response (LLM) 로그로 구간 확인")
+                       node_durations_sec=node_durations_sec or {},
+                       note="노드별: langgraph_node_durations_sec / call_data agent_graph_node_durations_sec; 지연 시 generate_response·classify_intent 등 상위 항목 확인")
 
             return {
                 "response": result.get("response", ""),
@@ -346,6 +454,11 @@ class ConversationAgent:
                 "rag_cache_hit": result.get("rag_cache_hit", False),
                 "needs_follow_up": result.get("needs_follow_up", False),
                 "follow_up_user_query": result.get("follow_up_user_query", ""),
+                "llm_rag_applied": result.get("llm_rag_applied") or [],
+                "llm_rag_context_source": result.get("llm_rag_context_source") or "",
+                "rag_search_trace": result.get("rag_search_trace") or {},
+                "semantic_cache_score": result.get("semantic_cache_score"),
+                "greeting_farewell_cache_score": result.get("greeting_farewell_cache_score"),
             }
 
         except Exception as e:
@@ -358,20 +471,18 @@ class ConversationAgent:
                 "needs_human": False,
                 "needs_follow_up": False,
                 "follow_up_user_query": "",
+                "llm_rag_applied": [],
+                "llm_rag_context_source": "invoke_error",
+                "rag_search_trace": {},
             }
 
     async def generate_greeting(self) -> str:
         """
-        1차 인사 메시지 생성 (통화 시작 시 호출).
+        1차 인사 (통화 시작, LLM 없음).
 
-        우선순위:
-        1) 지식베이스 `knowledge` 컬렉션 category=greeting_phase1 (owner 일치)
-        2) tenant_config `greeting_templates` (OrganizationInfoManager)
-        3) 기본 문구
-
-        LLM 호출 없이 즉시 반환.
+        지식베이스 `documents` 본문 category=greeting_phase1 (owner 일치) 우선.
+        없거나 조회 실패 시 기본 문구로 TTS.
         """
-        # 1) 지식베이스 greeting_phase1 (CHROMADB_CATEGORY_DESIGN)
         if self.vector_db and self.owner:
             try:
                 from src.ai_voicebot.knowledge.knowledge_service import get_knowledge_greeting_text
@@ -388,33 +499,29 @@ class ConversationAgent:
                         "greeting_from_kb_greeting_phase1",
                         owner=self.owner,
                         text_len=len(kb_text),
-                        preview=kb_text[:120],
-                        note="지식베이스 greeting_phase1 문서 본문 사용",
+                        text=kb_text,
+                        note="지식베이스 greeting_phase1 문서 본문 → TTS",
                     )
                     return kb_text.strip()
             except Exception as e:
                 logger.debug("greeting_kb_phase1_lookup_failed", owner=self.owner, error=str(e))
 
-        org_name = "AI 비서"
-        if self.org_manager:
-            org_name = self.org_manager.get_organization_name()
-            try:
-                template = self.org_manager.get_random_greeting_template()
-                if template and len(template.strip()) >= 5:
-                    # tenant_config greeting_templates — 짧은 멘트·다양한 표현 허용
-                    return template.strip()
-            except Exception:
-                pass
-        full = f"안녕하세요. {org_name} AI 통화 비서입니다. 무엇을 도와드릴까요?"
-        return full
+        from src.ai_voicebot.greeting_defaults import DEFAULT_GREETING_PHASE1
+
+        logger.info(
+            "greeting_phase1_default_tts_fallback",
+            owner=self.owner or "",
+            reason="kb_empty_or_no_owner_or_lookup_failed",
+            text_len=len(DEFAULT_GREETING_PHASE1),
+            note="Chroma/지식 greeting_phase1 없음 → 기본 문구 TTS",
+        )
+        return DEFAULT_GREETING_PHASE1
 
     async def generate_capability_guide(self) -> str:
         """
-        2차 인사말: 업무 안내 메시지 생성.
+        2차 인사 (LLM 없음).
 
-        우선순위:
-        1) 지식베이스 category=greeting_phase2
-        2) capabilities 기반 자동 문장
+        지식베이스 category=greeting_phase2 본문 우선. 없거나 조회 실패 시 기본 문구로 TTS.
         """
         if self.vector_db and self.owner:
             try:
@@ -432,29 +539,23 @@ class ConversationAgent:
                         "greeting_phase2_from_kb",
                         owner=self.owner,
                         text_len=len(kb_text),
-                        preview=kb_text[:120],
-                        note="지식베이스 greeting_phase2 문서 본문 사용",
+                        text=kb_text,
+                        note="지식베이스 greeting_phase2 문서 본문 → TTS",
                     )
                     return kb_text.strip()
             except Exception as e:
                 logger.debug("greeting_kb_phase2_lookup_failed", owner=self.owner, error=str(e))
 
-        capabilities = []
-        org_name = "AI 비서"
+        from src.ai_voicebot.greeting_defaults import DEFAULT_GREETING_PHASE2
 
-        if self.org_manager:
-            org_name = self.org_manager.get_organization_name()
-            try:
-                await self.org_manager.load_capabilities()
-                capabilities = self.org_manager.get_capabilities()
-            except Exception:
-                pass
-
-        if not capabilities:
-            return "어떤 내용이 궁금하시면 편하게 말씀해 주세요."
-
-        cap_text = ", ".join(capabilities[:7])
-        return f"저는 {cap_text}을 도와드릴 수 있어요. 어떤 것이 궁금하신가요?"
+        logger.info(
+            "greeting_phase2_default_tts_fallback",
+            owner=self.owner or "",
+            reason="kb_empty_or_no_owner_or_lookup_failed",
+            text_len=len(DEFAULT_GREETING_PHASE2),
+            note="Chroma/지식 greeting_phase2 없음 → 기본 문구 TTS",
+        )
+        return DEFAULT_GREETING_PHASE2
 
     def reset(self):
         """상태 초기화 (새 통화 시작)"""

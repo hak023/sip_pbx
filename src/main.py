@@ -531,22 +531,8 @@ async def run_server(config: Config) -> int:
         except Exception as e:
             logger.warning("hitl_timeout_register_failed", error=str(e))
         
-        # VectorDB 시드 선실행 (통화 수락 전에 tenant_config 등 로드 → org_manager_tenant_config_not_found 방지)
-        try:
-            from src.services.knowledge_service import get_knowledge_service
-            from src.services.seed_data import seed_initial_data
-            _ks = get_knowledge_service()
-            await seed_initial_data(_ks)
-            logger.info("seed_data_run_from_main")
-        except Exception as e:
-            err_msg = str(e)
-            logger.warning("seed_data_from_main_failed", error=err_msg)
-            if "collections.topic" in err_msg:
-                logger.warning(
-                    "chromadb_schema_fix_hint",
-                    hint="pip install 'chromadb>=0.5.0' 또는 data/chroma 폴더 삭제 후 재시작. docs/reports/CHROMA_COLLECTIONS_TOPIC_ERROR.md",
-                )
-        
+        # Chroma 초기 데이터는 scripts/seed_data.py·수동 API 등으로만 적재 (기동 시 자동 시드 없음)
+
         # 같은 프로세스에서 API 서버 기동 (GET /api/calls/active가 CallManager를 사용하려면 필요)
         _api_port = getattr(config, 'api_port', None) or getattr(getattr(config, 'api', None), 'port', None) or 8000
         try:

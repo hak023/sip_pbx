@@ -116,6 +116,13 @@ def log_call_data(
         category: 구분 (llm | stt | tts | rag | knowledge | call_event | hitl)
         event: 이벤트 이름 (예: llm_request, llm_response, stt_final, tts_started)
         **kwargs: 추가 키/값 (문자열·숫자·리스트 등, JSON 직렬화 가능해야 함)
+            rag_search_done 시: rag_hits_retrieval, rag_hits_llm_context (지식베이스 상위·LLM전달분, src.common.rag_hit_serializer),
+                rag_search_trace (Chroma knowledge 컬렉션·where·intent·카테고리 제한·히트 요약, RAGEngine.search)
+            llm_exchange: user_text_full·response_full(파일 로그 전체), WebSocket은 길이 제한으로 축소될 수 있음.
+            semantic_cache_miss: miss_reason, miss_detail, criteria(임계값·필터·hit_rules), top_candidate, query_full.
+            유저 간 통화: call_event call_connected(human_human)·human_human_call_ended·post_call_extraction_* .
+            knowledge_judgement(llm): 사후 추출 LLM judge_usefulness 요약(judgement 필드).
+            chroma_knowledge_upsert(knowledge): doc_id·owner·category·embedding_dims·text_preview·chromadb_* .
     """
     try:
         f = _ensure_file()

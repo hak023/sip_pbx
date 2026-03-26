@@ -16,6 +16,9 @@ from src.common.logger import get_async_logger
 
 logger = get_async_logger(__name__)
 
+# 브로드캐스트 콜백 미등록 시 텍스트는 나와도 대시보드로 안 감 → 1회 경고
+_bypass_stt_no_callback_logged = False
+
 # 8kHz telephony (G.711)
 SAMPLE_RATE_HZ = 8000
 # 100ms 단위로 STT에 전달 (권장)
@@ -53,6 +56,10 @@ def decode_rtp_payload(payload: bytes, codec: str) -> bytes:
         return _decode_pcmu(payload)
     if codec_upper == "PCMA":
         return _decode_pcma(payload)
+    if codec_upper in ("OPUS", "OPUS/48000/2", "OPUS/48000"):
+        # 유저 간 STT는 현재 G.711만 지원. OPUS SDP인데 PCMU로 착각하면 여기로 오지 않고
+        # 잘못 ulaw 디코딩되어 빈/무의미 PCM이 될 수 있음 → feed_audio 쪽에서 codec 불일치 점검 권장.
+        return b""
     return b""
 
 
@@ -74,8 +81,19 @@ def get_broadcast_callback() -> Optional[Callable[[str, str, bool, str], None]]:
 
 
 def _invoke_broadcast(call_id: str, text: str, is_final: bool, channel: str) -> None:
+    global _bypass_stt_no_callback_logged
     cb = get_broadcast_callback()
-    if not cb or not text.strip():
+    if not text.strip():
+        return
+    if not cb:
+        if not _bypass_stt_no_callback_logged:
+            _bypass_stt_no_callback_logged = True
+            logger.warning(
+                "bypass_stt_broadcast_skipped_no_callback",
+                call_id=call_id,
+                channel=channel,
+                note="WebSocket에 set_broadcast_callback 미등록 — main.py WS 스레드·install_bypass_realtime_stt_callback 점검",
+            )
         return
     try:
         cb(call_id, text.strip(), is_final, channel)
@@ -92,7 +110,7 @@ def _invoke_broadcast(call_id: str, text: str, is_final: bool, channel: str) -> 
                 "stt",
                 "stt_bypass_final",
                 speaker=channel,
-                text=t[:4000],
+                text=t,
                 text_len=len(t),
             )
         except Exception:
@@ -129,6 +147,9 @@ class _StreamSession:
             logger.warning("bypass_stt_speech_client_failed", call_id=self.call_id, error=str(e))
             return
 
+        # google-cloud-speech 2.x: streaming_recognize(config, requests) — 예전처럼
+        # 제너레이터 하나만 넘기면 config로 잡히고 requests가 빠져
+        # "missing 1 required positional argument: 'requests'" 발생.
         config = speech.StreamingRecognitionConfig(
             config=speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -139,8 +160,7 @@ class _StreamSession:
             interim_results=True,
         )
 
-        def request_generator():
-            yield speech.StreamingRecognizeRequest(streaming_config=config)
+        def audio_request_iterator():
             while not self._stop.is_set():
                 try:
                     chunk = self._queue.get(timeout=0.5)
@@ -151,8 +171,15 @@ class _StreamSession:
                 except queue.Empty:
                     continue
 
+        first_result_logged = False
         try:
-            responses = client.streaming_recognize(request_generator())
+            responses = client.streaming_recognize(config, audio_request_iterator())
+            logger.info(
+                "bypass_stt_gcp_stream_iter_started",
+                call_id=self.call_id,
+                channel=self.channel,
+                note="streaming_recognize 제너레이터 진입 — 이후 무응답이면 오디오 포맷·무음·API 권한 점검",
+            )
             for r in responses:
                 if self._stop.is_set():
                     break
@@ -163,11 +190,27 @@ class _StreamSession:
                         continue
                     text = result.alternatives[0].transcript or ""
                     is_final = result.is_final
+                    if text.strip() and not first_result_logged:
+                        first_result_logged = True
+                        logger.info(
+                            "bypass_stt_gcp_first_transcript",
+                            call_id=self.call_id,
+                            channel=self.channel,
+                            is_final=is_final,
+                            text_len=len(text.strip()),
+                            note="GCP에서 첫 전사 수신 — 대시보드 미표시면 WebSocket(stt_transcript) 또는 프론트 call_id 불일치 점검",
+                        )
                     _invoke_broadcast(self.call_id, text, is_final, self.channel)
         except Exception as e:
             if not self._stop.is_set():
-                logger.info("bypass_stt_stream_ended",
-                            call_id=self.call_id, channel=self.channel, error=str(e))
+                logger.warning(
+                    "bypass_stt_stream_ended",
+                    call_id=self.call_id,
+                    channel=self.channel,
+                    error=str(e),
+                    had_transcript_before_error=first_result_logged,
+                    note="스트림 비정상 종료 — google-cloud-speech·GOOGLE_APPLICATION_CREDENTIALS·Speech API 활성화 확인",
+                )
         finally:
             self._stop.set()
 
@@ -195,6 +238,9 @@ class BypassRealtimeSTT:
         self._lock = threading.Lock()
         self._buffers: dict[tuple[str, str], bytearray] = {}
         self._enabled = True
+        # 디코딩 실패·WS 미준비 등 1회만 경고 (로그 폭주 방지)
+        self._empty_pcm_logged: set[tuple[str, str]] = set()
+        self._ws_install_fail_logged = False
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
@@ -202,8 +248,40 @@ class BypassRealtimeSTT:
     def feed_audio(self, call_id: str, channel: str, payload: bytes, codec: str = "PCMU") -> None:
         if not self._enabled or not payload or not call_id or channel not in ("caller", "callee"):
             return
+        try:
+            from src.websocket.server import install_bypass_realtime_stt_callback
+
+            if not install_bypass_realtime_stt_callback():
+                if not self._ws_install_fail_logged:
+                    self._ws_install_fail_logged = True
+                    logger.warning(
+                        "bypass_stt_callback_install_failed",
+                        call_id=call_id,
+                        channel=channel,
+                        note="WebSocket 서버(_sio) 미기동 시 STT 결과가 대시보드에 안 갈 수 있음. main.py WS 스레드·8001 포트 확인",
+                    )
+        except Exception as ex:
+            if not self._ws_install_fail_logged:
+                self._ws_install_fail_logged = True
+                logger.warning(
+                    "bypass_stt_callback_install_exception",
+                    call_id=call_id,
+                    error=str(ex),
+                )
         pcm = decode_rtp_payload(payload, codec)
         if not pcm:
+            key = (call_id, channel)
+            if key not in self._empty_pcm_logged and len(payload) >= 8:
+                self._empty_pcm_logged.add(key)
+                cu = (codec or "PCMU").upper()
+                logger.warning(
+                    "bypass_stt_pcm_empty_after_decode",
+                    call_id=call_id,
+                    channel=channel,
+                    codec=cu,
+                    payload_len=len(payload),
+                    note="페이로드는 있는데 PCM 변환 결과가 비었습니다. OPUS 등 G.711 외 코덱이면 SDP→codec 반영 또는 디코더 추가 필요. 잘못된 코덱으로 ulaw 해석 시에도 무음에 가깝게 나올 수 있음",
+                )
             return
         key = (call_id, channel)
         with self._lock:

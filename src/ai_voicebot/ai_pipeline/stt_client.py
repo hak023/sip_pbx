@@ -185,7 +185,7 @@ class STTClient:
                 self.total_results += 1
 
                 logger.debug("STT result",
-                           text=transcript[:50] if len(transcript) > 50 else transcript,
+                           text=transcript,
                            is_final=is_final)
 
                 # 이벤트 루프로 콜백 전달 (스레드 안전)

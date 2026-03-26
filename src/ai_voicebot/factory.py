@@ -246,12 +246,20 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         
         # 9. RAG Engine
         rag_config = config.get("rag", {})
+        _dt_allow = rag_config.get("doc_type_allowlist")
+        if isinstance(_dt_allow, str):
+            _dt_allow = [x.strip() for x in _dt_allow.split(",") if x.strip()]
+        elif isinstance(_dt_allow, (list, tuple)):
+            _dt_allow = [str(x).strip() for x in _dt_allow if str(x).strip()]
+        else:
+            _dt_allow = None
         rag = RAGEngine(
             vector_db=vector_db,
             embedder=embedder,
             top_k=rag_config.get("top_k", 3),
             similarity_threshold=rag_config.get("similarity_threshold", 0.55),
-            reranking_enabled=rag_config.get("reranking_enabled", False)
+            reranking_enabled=rag_config.get("reranking_enabled", False),
+            doc_type_allowlist=_dt_allow,
         )
         logger.info("RAG Engine initialized")
         

@@ -9,9 +9,17 @@ from typing import List, Dict, Optional
 import asyncio
 from pathlib import Path
 import json
+from datetime import datetime
 import structlog
 
 from src.common.sip_owner import normalize_owner_username
+from src.common.call_data_record_logger import log_call_data
+from src.common.knowledge_call_data_helpers import (
+    chroma_context_for_call_data,
+    judgment_summary_for_call_data,
+)
+from src.ai_voicebot.knowledge.extraction_category import normalize_extraction_category
+from src.ai_voicebot.knowledge.rag_knowledge_text import apply_rag_knowledge_prefix
 
 logger = structlog.get_logger(__name__)
 
@@ -103,7 +111,7 @@ class KnowledgeExtractor:
                 logger.info(
                     "knowledge_extract_owner_normalized",
                     call_id=call_id,
-                    owner_raw_preview=owner_raw[:80] if owner_raw else "",
+                    owner_raw_preview=owner_raw if owner_raw else "",
                     owner_normalized=owner_id,
                 )
             logger.info("🔄 [VectorDB Flow] Step 1/6: Knowledge extraction started",
@@ -111,6 +119,19 @@ class KnowledgeExtractor:
                        owner_id=owner_id,
                        speaker=speaker,
                        transcript_path=transcript_path)
+            log_call_data(
+                call_id,
+                "knowledge",
+                "knowledge_extraction_started",
+                extractor="KnowledgeExtractor",
+                owner_id=owner_id,
+                speaker_filter=speaker,
+                transcript_path=transcript_path,
+                min_confidence=self.min_confidence,
+                chunk_size=self.chunk_size,
+                pii_review_queue_enabled=self.pii_review_queue_enabled,
+                **chroma_context_for_call_data(),
+            )
             
             # 1. 전사 텍스트 로드
             logger.info("🔄 [VectorDB Flow] Step 2/6: Loading transcript", 
@@ -120,12 +141,21 @@ class KnowledgeExtractor:
             transcript = await self._load_transcript(transcript_path)
             if not transcript:
                 logger.warning("❌ [VectorDB Flow] Empty transcript - Aborting", call_id=call_id)
+                log_call_data(
+                    call_id,
+                    "knowledge",
+                    "knowledge_extraction_outcome",
+                    outcome="aborted_empty_transcript",
+                    owner_id=owner_id,
+                    speaker_filter=speaker,
+                    **chroma_context_for_call_data(),
+                )
                 return {"success": False, "extracted_count": 0, "confidence": 0.0}
             
             logger.info("✅ [VectorDB Flow] Transcript loaded", 
                        call_id=call_id,
                        transcript_length=len(transcript),
-                       preview=transcript[:100] + "..." if len(transcript) > 100 else transcript)
+                       preview=transcript)
             
             # 2. 화자 필터링 (또는 전체 대화 사용)
             logger.info("🔄 [VectorDB Flow] Step 3/6: Filtering by speaker",
@@ -147,12 +177,23 @@ class KnowledgeExtractor:
                           speaker=speaker,
                           text_length=len(speaker_text) if speaker_text else 0,
                           min_required=self.min_text_length)
+                log_call_data(
+                    call_id,
+                    "knowledge",
+                    "knowledge_extraction_outcome",
+                    outcome="aborted_insufficient_speaker_text",
+                    owner_id=owner_id,
+                    speaker_filter=speaker,
+                    text_length=len(speaker_text) if speaker_text else 0,
+                    min_required=self.min_text_length,
+                    **chroma_context_for_call_data(),
+                )
                 return {"success": False, "extracted_count": 0, "confidence": 0.0}
             
             logger.info("✅ [VectorDB Flow] Speaker text filtered",
                        call_id=call_id,
                        filtered_length=len(speaker_text),
-                       preview=speaker_text[:100] + "..." if len(speaker_text) > 100 else speaker_text)
+                       preview=speaker_text)
             
             # 3. LLM 지식 정제 — 설계서: 맥락 파악을 위해 전체 전사(발신자+착신자) 전달, 저장 후보는 착신자만
             logger.info("🔄 [VectorDB Flow] Step 4/6: LLM refining knowledge (full transcript for context)",
@@ -169,11 +210,30 @@ class KnowledgeExtractor:
                        is_useful=judgment["is_useful"],
                        confidence=judgment.get("confidence", 0.0),
                        reason=judgment.get("reason", "N/A"))
+            log_call_data(
+                call_id,
+                "llm",
+                "knowledge_judgement",
+                context="KnowledgeExtractor.judge_usefulness",
+                owner_id=owner_id,
+                speaker_filter=speaker,
+                min_confidence_threshold=self.min_confidence,
+                judgement=judgment_summary_for_call_data(judgment),
+                **chroma_context_for_call_data(),
+            )
             
             if not judgment["is_useful"]:
                 logger.info("❌ [VectorDB Flow] Content not useful - Skipping storage", 
                           call_id=call_id,
                           reason=judgment.get("reason", "N/A"))
+                log_call_data(
+                    call_id,
+                    "knowledge",
+                    "knowledge_extraction_outcome",
+                    outcome="skipped_not_useful",
+                    owner_id=owner_id,
+                    **chroma_context_for_call_data(),
+                )
                 return {
                     "success": True, 
                     "extracted_count": 0, 
@@ -185,6 +245,16 @@ class KnowledgeExtractor:
                           call_id=call_id,
                           confidence=judgment["confidence"],
                           min_required=self.min_confidence)
+                log_call_data(
+                    call_id,
+                    "knowledge",
+                    "knowledge_extraction_outcome",
+                    outcome="skipped_low_confidence",
+                    confidence=judgment["confidence"],
+                    min_required=self.min_confidence,
+                    owner_id=owner_id,
+                    **chroma_context_for_call_data(),
+                )
                 return {
                     "success": True, 
                     "extracted_count": 0, 
@@ -221,23 +291,42 @@ class KnowledgeExtractor:
                 chunks = self._chunk_text(text)
                 contains_pii = info.get("contains_pii", False)
                 category = info.get("category", "기타")
+                store_category = normalize_extraction_category(category, "knowledge")
+                if store_category != (category or "").strip():
+                    logger.debug(
+                        "knowledge_extractor_category_normalized",
+                        call_id=call_id,
+                        category_raw=category,
+                        category_stored=store_category,
+                    )
                 keywords = info.get("keywords", [])
                 
                 logger.info(f"  📄 Processing info block {idx + 1}/{len(extracted_info)}",
                            call_id=call_id,
                            chunks_count=len(chunks),
-                           category=category,
+                           category=store_category,
                            contains_pii=contains_pii)
                 
                 # §7 PII 파이프라인: contains_pii이고 검토 대기열 사용 시 VectorDB 건너뛰고 대기열에만 적재
                 if contains_pii and self.pii_review_queue_enabled and self._pending_store:
+                    log_call_data(
+                        call_id,
+                        "knowledge",
+                        "chroma_upsert_deferred",
+                        reason="pii_review_queue",
+                        owner_id=owner_id,
+                        category=store_category,
+                        info_block_index=idx,
+                        chunk_count=len(chunks),
+                        **chroma_context_for_call_data(),
+                    )
                     for chunk_idx, chunk in enumerate(chunks):
                         await self._pending_store.add(
                             call_id=call_id,
                             owner=owner_id,
                             speaker=speaker,
                             text=chunk,
-                            category=category,
+                            category=store_category,
                             keywords=keywords if isinstance(keywords, list) else (keywords.split(",") if isinstance(keywords, str) else []),
                             contains_pii=True,
                             confidence=float(judgment.get("confidence", 0)),
@@ -247,12 +336,14 @@ class KnowledgeExtractor:
                     continue
                 
                 for chunk_idx, chunk in enumerate(chunks):
+                    chunk_for_rag = apply_rag_knowledge_prefix(chunk)
+                    _chunk_ts = datetime.now().isoformat()
                     # 임베딩 생성
                     logger.debug(f"    🔢 Generating embedding for chunk {chunk_idx + 1}/{len(chunks)}",
                                 call_id=call_id,
-                                chunk_preview=chunk[:50] + "...")
+                                chunk_preview=chunk_for_rag)
                     
-                    embedding = await self.embedder.embed(chunk)
+                    embedding = await self.embedder.embed(chunk_for_rag)
                     
                     # Vector DB 저장
                     doc_id = f"{call_id}_chunk_{idx}_{chunk_idx}"
@@ -260,7 +351,13 @@ class KnowledgeExtractor:
                         "call_id": call_id,
                         "owner": owner_id,
                         "speaker": speaker,
-                        "category": category,
+                        "category": store_category,
+                        "doc_type": "knowledge",
+                        "source": "call",
+                        "created_at": _chunk_ts,
+                        "extraction_source": "call",
+                        "extraction_call_id": call_id,
+                        "extraction_timestamp": _chunk_ts,
                         "keywords": keywords,
                         "chunk_index": chunk_idx,
                         "confidence": judgment["confidence"],
@@ -277,8 +374,24 @@ class KnowledgeExtractor:
                     await self.vector_db.upsert(
                         doc_id=doc_id,
                         embedding=embedding,
-                        text=chunk,
+                        text=chunk_for_rag,
                         metadata=metadata
+                    )
+                    log_call_data(
+                        call_id,
+                        "knowledge",
+                        "chroma_knowledge_upsert",
+                        doc_id=doc_id,
+                        owner_id=owner_id,
+                        category=store_category,
+                        speaker=speaker,
+                        chunk_index=chunk_idx,
+                        info_block_index=idx,
+                        embedding_dims=len(embedding) if embedding else 0,
+                        contains_pii=contains_pii,
+                        text_preview=chunk,
+                        metadata_keys=list(metadata.keys()),
+                        **chroma_context_for_call_data(),
                     )
                     
                     stored_count += 1
@@ -295,6 +408,16 @@ class KnowledgeExtractor:
                        total_chunks_stored=stored_count,
                        confidence=judgment["confidence"],
                        owner_id=owner_id)
+            log_call_data(
+                call_id,
+                "knowledge",
+                "knowledge_extraction_completed",
+                extractor="KnowledgeExtractor",
+                stored_chunks=stored_count,
+                confidence=judgment["confidence"],
+                owner_id=owner_id,
+                **chroma_context_for_call_data(),
+            )
             
             return {
                 "success": True,
@@ -307,6 +430,15 @@ class KnowledgeExtractor:
                         call_id=call_id, 
                         error=str(e),
                         exc_info=True)
+            log_call_data(
+                call_id,
+                "knowledge",
+                "knowledge_extraction_outcome",
+                outcome="error",
+                error_type=type(e).__name__,
+                error_message=str(e),
+                **chroma_context_for_call_data(),
+            )
             return {"success": False, "extracted_count": 0, "confidence": 0.0}
     
     async def _load_transcript(self, path: str) -> str:

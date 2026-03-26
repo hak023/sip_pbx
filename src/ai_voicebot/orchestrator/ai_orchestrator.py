@@ -288,13 +288,13 @@ class AIOrchestrator:
         # 0. Phase 1(인사말) 구간에서는 STT 무시, TTS 응대만 진행
         if self.state == ConversationState.GREETING:
             logger.debug("STT result ignored (Phase 1 greeting)",
-                        text=text[:50] if text else "", is_final=is_final)
+                        text=text or "", is_final=is_final)
             return
 
         # 1. Barge-in Controller로 필터링
         if not self.barge_in_controller.should_process_speech(is_final):
             logger.debug("STT result ignored (TTS speaking or barge-in disabled)",
-                        text=text[:50] if text else "",
+                        text=text or "",
                         is_final=is_final)
             return
 
@@ -304,7 +304,7 @@ class AIOrchestrator:
         if not is_final:
             # Interim result
             self.current_user_speech = text
-            logger.debug("STT interim", text=text[:50])
+            logger.debug("STT interim", text=text)
             return
         
         # 3. 침묵 감지 (2초 이상 말이 없으면 발화 완료로 간주)
@@ -393,7 +393,7 @@ class AIOrchestrator:
             
             logger.info("LLM response generated", 
                        response_length=len(response_text),
-                       response_preview=response_text[:100] if len(response_text) > 100 else response_text)
+                       response_preview=response_text)
             
             # 대화 메시지 추가
             if self.conversation:
@@ -424,7 +424,7 @@ class AIOrchestrator:
             await self.barge_in_controller.on_tts_start()
             
             logger.info("🔊 TTS started", text_length=len(text), 
-                       text_preview=text[:50] if len(text) > 50 else text)
+                       text_preview=text)
             logger.info("orchestrator_speak_start",
                         call_id=self.call_id,
                         text_len=len(text),
@@ -747,7 +747,7 @@ class AIOrchestrator:
             logger.info("outbound_ai_call_started",
                        call_id=call_id,
                        outbound_id=outbound_context.get('outbound_id'),
-                       purpose=outbound_context.get('purpose', '')[:50],
+                       purpose=outbound_context.get('purpose', ''),
                        questions_count=len(outbound_context.get('questions', [])))
             
         except Exception as e:

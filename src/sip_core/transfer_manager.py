@@ -501,8 +501,11 @@ class TransferManager:
             try:
                 await self._emit_event_cb(event_type, record.to_dict())
             except Exception as e:
-                logger.error("transfer_event_emit_error",
-                            event=event_type, error=str(e))
+                logger.error(
+                    "transfer_event_emit_error",
+                    event_type=event_type,
+                    error=str(e),
+                )
     
     # =========================================================================
     # 조회

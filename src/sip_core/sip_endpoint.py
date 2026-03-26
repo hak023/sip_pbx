@@ -328,6 +328,13 @@ class SIPEndpoint:
                 emit_event=self._emit_transfer_event,
             )
             logger.info("transfer_manager_initialized")
+
+        # WebSocket·API 등에서 src.call_transfer.manager.initiate_call_transfer /
+        # manual_transfer_from_operator 가 전역 TransferManager 를 쓰므로 SIPEndpoint
+        # 에서 만든 인스턴스를 반드시 등록한다.
+        from src.call_transfer.manager import set_transfer_manager as _set_call_transfer_manager_global
+
+        _set_call_transfer_manager_global(self._transfer_manager)
         
         # ★ Outbound Manager 초기화
         self._outbound_manager = None
@@ -426,32 +433,31 @@ class SIPEndpoint:
             try:
                 from src.websocket import manager as ws_manager
                 if ws_manager:
-                    await ws_manager.broadcast({
-                        "type": event_type,
-                        "data": data,
-                    })
+                    await ws_manager.broadcast_global(event_type, data)
             except ImportError:
                 pass
         except Exception as e:
-            logger.error("outbound_event_emit_error",
-                        event=event_type, error=str(e))
+            logger.error(
+                "outbound_event_emit_error",
+                event_type=event_type,
+                error=str(e),
+            )
     
     async def _emit_transfer_event(self, event_type: str, data: dict):
         """Transfer 이벤트 발행 (WebSocket)"""
         try:
-            # WebSocket manager가 있으면 broadcast
             try:
                 from src.websocket import manager as ws_manager
                 if ws_manager:
-                    await ws_manager.broadcast_json({
-                        "event": event_type,
-                        "data": data,
-                    })
+                    await ws_manager.broadcast_global(event_type, data)
             except ImportError:
                 pass
         except Exception as e:
-            logger.error("transfer_event_broadcast_error",
-                        event=event_type, error=str(e))
+            logger.error(
+                "transfer_event_broadcast_error",
+                event_type=event_type,
+                error=str(e),
+            )
     
     def _setup_sip_traffic_log(self) -> None:
         """SIP 트래픽 로그 파일 설정"""
@@ -589,7 +595,7 @@ class SIPEndpoint:
                     logger.warning("decode_fallback_to_latin1", from_addr=f"{addr[0]}:{addr[1]}")
                 except Exception as e:
                     logger.error("decode_failed", error=str(e), 
-                               raw_bytes=data[:100].hex(), from_addr=f"{addr[0]}:{addr[1]}")
+                               raw_bytes=data.hex(), from_addr=f"{addr[0]}:{addr[1]}")
                     return
             
             # 빈 메시지 또는 너무 짧은 메시지 무시
@@ -622,7 +628,7 @@ class SIPEndpoint:
                         direction="RECV",
                         from_addr=f"{addr[0]}:{addr[1]}",
                         size=len(data),
-                        message=message[:500] if len(message) > 500 else message)  # 메시지가 너무 길면 잘라서 로깅
+                        message=message)
             
             # 파일에 로깅 (try-except로 보호)
             try:
@@ -742,7 +748,7 @@ class SIPEndpoint:
                     direction="SEND",
                     to_addr=f"{addr[0]}:{addr[1]}",
                     size=len(response),
-                    message=response[:500] if len(response) > 500 else response)  # 메시지가 너무 길면 잘라서 로깅
+                    message=response)
         
         # 파일에 로깅 (try-except로 보호)
         try:
@@ -961,6 +967,30 @@ class SIPEndpoint:
                             "started_at": _at.isoformat() if _at and hasattr(_at, "isoformat") else _now,
                         },
                     ))
+                    # B2BUA 유저 간: CallManager ACK 경로 없을 수 있음 → call_data_record에 연결 행 보강
+                    if not call_info.get("ai_mode_activated", False):
+                        try:
+                            from src.common.call_data_record_logger import log_call_data
+                            from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
+
+                            _cm = self.call_manager
+                            log_call_data(
+                                original_call_id,
+                                "call_event",
+                                "call_connected",
+                                mode="human_human",
+                                path="b2bua_200_ok",
+                                is_ai_handled=False,
+                                realtime_llm_intent_rag="none",
+                                note="B2BUA 응답 200 OK 시점. 사후 지식 추출은 CallManager.cleanup_terminated_call에서 스케줄.",
+                                recording_enabled=bool(_cm and getattr(_cm, "recording_enabled", False)),
+                                knowledge_extractor_configured=bool(
+                                    _cm and getattr(_cm, "knowledge_extractor", None) is not None
+                                ),
+                                **chroma_context_for_call_data(),
+                            )
+                        except Exception as _e:
+                            logger.debug("b2bua_human_call_connected_call_data_failed", error=str(_e))
                 except Exception as e:
                     logger.warning("b2bua_call_started_ws_failed", call_id=original_call_id, error=str(e))
                 
@@ -1255,7 +1285,7 @@ class SIPEndpoint:
             if not cseq_header:
                 logger.error("ack_cseq_missing",
                            call_id=call_info.get('original_call_id'),
-                           response_preview=error_response[:200])
+                           response_preview=error_response)
                 return
             
             # CSeq 헤더 파싱 (예: "CSeq: 1 INVITE" → "1")
@@ -2544,7 +2574,7 @@ class SIPEndpoint:
                 logger.debug("sdp_info",
                            call_id=call_id,
                            sdp_length=len(sdp),
-                           sdp_preview=sdp[:200] if len(sdp) > 200 else sdp)
+                           sdp_preview=sdp)
             
             media_session = self.media_session_manager.create_session(
                 call_id=call_id,
@@ -3374,8 +3404,8 @@ class SIPEndpoint:
             if not target_addr:
                 raise ValueError(f"Cannot resolve transfer target: {transfer_to}")
             
-            # 2. 미디어 포트 할당 (Bridge용)
-            bridge_ports = self._port_pool.allocate(2)  # [rtp, rtcp]
+            # 2. 미디어 포트 할당 (Bridge용 RTP/RTCP 쌍)
+            bridge_ports = self._port_pool.allocate_media_pair(transfer_leg_call_id)
             
             # 3. B2BUA IP 가져오기
             b2bua_ip = self._get_b2bua_ip()
@@ -3392,6 +3422,23 @@ class SIPEndpoint:
             
             # 원래 호의 SDP에서 session 정보 추출 (가능하면)
             original_call_info = self._active_calls.get(call_id)
+            # From URI user 부분이 비면 많은 단말이 400 Bad Request 반환
+            effective_caller = (caller_display or "").strip()
+            if not effective_caller and original_call_info:
+                cu = original_call_info.get("caller_username")
+                if isinstance(cu, str) and cu.strip():
+                    effective_caller = cu.strip()
+            if not effective_caller:
+                effective_caller = "caller"
+            if effective_caller != (caller_display or "").strip():
+                logger.info(
+                    "transfer_invite_caller_id_resolved",
+                    call_id=call_id,
+                    effective_caller=effective_caller,
+                    had_caller_display_param=bool((caller_display or "").strip()),
+                    note="Transfer INVITE From·sip:user@ — 비어 있으면 단말 400 거절 가능",
+                )
+
             if original_call_info:
                 original_sdp = original_call_info.get('sdp', '')
                 if original_sdp:
@@ -3426,11 +3473,11 @@ class SIPEndpoint:
                 f"INVITE sip:{target_user}@{target_addr[0]}:{target_addr[1]} SIP/2.0\r\n"
                 f"Via: SIP/2.0/UDP {b2bua_ip}:{self.config.sip.listen_port};branch={via_branch}\r\n"
                 f"Max-Forwards: 70\r\n"
-                f'From: "{caller_display}" <sip:{caller_display}@{b2bua_ip}>;tag={from_tag}\r\n'
+                f'From: "{effective_caller}" <sip:{effective_caller}@{b2bua_ip}>;tag={from_tag}\r\n'
                 f"To: <sip:{target_user}@{target_addr[0]}>\r\n"
                 f"Call-ID: {transfer_leg_call_id}\r\n"
                 f"CSeq: 1 INVITE\r\n"
-                f"Contact: <sip:{b2bua_ip}:{self.config.sip.listen_port}>\r\n"
+                f"Contact: <sip:{effective_caller}@{b2bua_ip}:{self.config.sip.listen_port}>\r\n"
                 f"Content-Type: application/sdp\r\n"
                 f"Content-Length: {len(transfer_sdp)}\r\n"
                 f"\r\n"
@@ -3468,6 +3515,10 @@ class SIPEndpoint:
                         call_id=call_id,
                         transfer_to=transfer_to,
                         error=str(e))
+            try:
+                self._port_pool.release_ports(transfer_leg_call_id)
+            except Exception:
+                pass
             # TransferManager에 실패 통보
             if hasattr(self, '_transfer_manager') and self._transfer_manager:
                 await self._transfer_manager.on_transfer_rejected(
@@ -3640,6 +3691,10 @@ class SIPEndpoint:
             # 정리
             self._active_calls.pop(transfer_leg_call_id, None)
             self._call_mapping.pop(transfer_leg_call_id, None)
+            try:
+                self._port_pool.release_ports(transfer_leg_call_id)
+            except Exception:
+                pass
     
     async def _send_transfer_ack(self, call_info: dict, addr: tuple):
         """Transfer 레그에 ACK 전송"""
@@ -3768,15 +3823,15 @@ class SIPEndpoint:
             if not target_addr:
                 raise ValueError(f"Cannot resolve outbound target: {to_number}")
             
-            # 2. 미디어 포트 할당 (AI 모드용)
-            media_ports = self._port_pool.allocate(2)  # [rtp, rtcp]
-            
-            # 3. B2BUA IP
-            b2bua_ip = self._get_b2bua_ip()
-            
-            # 4. Call-ID 생성
+            # 2. Call-ID 생성 (포트 풀 키로 사용)
             import random
             call_id = f"outbound-{outbound_id}-{random.randint(10000000, 99999999)}"
+            
+            # 3. 미디어 포트 할당 (AI 모드용 RTP/RTCP 쌍)
+            media_ports = self._port_pool.allocate_media_pair(call_id)
+            
+            # 4. B2BUA IP
+            b2bua_ip = self._get_b2bua_ip()
             
             # 5. SDP 구성 (검증된 AI 200 OK / Transfer INVITE와 동일한 형식)
             import time as _time
@@ -3852,6 +3907,12 @@ class SIPEndpoint:
                         to_number=to_number,
                         outbound_id=outbound_id,
                         error=str(e))
+            cid = locals().get("call_id")
+            if cid:
+                try:
+                    self._port_pool.release_ports(cid)
+                except Exception:
+                    pass
             raise
     
     def _resolve_outbound_target(self, number: str):

@@ -37,7 +37,7 @@ class CallManager:
         recording_dir: str = "./recordings",  # 녹음 파일 저장 디렉토리
         knowledge_extractor = None,  # Knowledge Extractor (optional, 신규)
         gcp_credentials_path: Optional[str] = None,  # GCP 인증 파일 경로 (STT용)
-        enable_post_stt: bool = True,  # 후처리 STT 활성화
+        enable_post_stt: bool = False,  # WAV 후처리 STT (실시간 파이프라인 대본이 없을 때만 사용)
         stt_language: str = "ko-KR",  # STT 언어
     ):
         """초기화
@@ -1015,6 +1015,31 @@ class CallManager:
                 ))
             except Exception as e:
                 logger.warning("call_started_event_failed", call_id=call_session.call_id, error=str(e))
+
+            # 유저 간 통화: AI 파이프라인 없음 — call_data_record에 연결·사후 Chroma 흐름 요약
+            if call_session.call_id not in self.ai_enabled_calls:
+                try:
+                    from src.common.call_data_record_logger import log_call_data
+                    from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
+
+                    log_call_data(
+                        call_session.call_id,
+                        "call_event",
+                        "call_connected",
+                        mode="human_human",
+                        is_ai_handled=False,
+                        realtime_llm_intent_rag="none",
+                        note=(
+                            "실시간 LangGraph/Pipecat 미사용. Bypass RTP·실시간 STT는 stt_bypass_final 등으로 기록. "
+                            "통화 종료 후 transcript.txt가 있으면 KnowledgeExtractor/ExtractionPipeline이 "
+                            "LLM judge_usefulness → Chroma knowledge 컬렉션 upsert."
+                        ),
+                        recording_enabled=self.recording_enabled,
+                        knowledge_extractor_configured=self.knowledge_extractor is not None,
+                        **chroma_context_for_call_data(),
+                    )
+                except Exception as e:
+                    logger.debug("human_call_connected_call_data_failed", error=str(e))
         
         # Outgoing leg에서 ACK 수신 (re-INVITE 시나리오)
         else:
@@ -1135,6 +1160,40 @@ class CallManager:
             
             self.ai_enabled_calls.discard(call_session.call_id)
         else:
+            # 일반 SIP 통화: 종료 시 call_data_record 요약 (AI 파이프라인 없음)
+            try:
+                from src.common.call_data_record_logger import log_call_data
+                from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
+
+                _will_schedule = bool(
+                    self.knowledge_extractor and self.recording_enabled and recording_dir_name
+                )
+                log_call_data(
+                    call_session.call_id,
+                    "call_event",
+                    "human_human_call_ended",
+                    mode="human_human",
+                    is_ai_handled=False,
+                    recording_dir_name=recording_dir_name or "",
+                    recording_enabled=self.recording_enabled,
+                    knowledge_extractor_configured=self.knowledge_extractor is not None,
+                    post_call_extraction_scheduled=_will_schedule,
+                    post_call_extraction_skip_reason=(
+                        None
+                        if _will_schedule
+                        else (
+                            "no_knowledge_extractor"
+                            if not self.knowledge_extractor
+                            else "recording_disabled"
+                            if not self.recording_enabled
+                            else "no_recording_dir"
+                        )
+                    ),
+                    **chroma_context_for_call_data(),
+                )
+            except Exception as e:
+                logger.debug("human_call_ended_call_data_failed", error=str(e))
+
             # 일반 SIP 통화 지식 추출 (신규)
             if self.knowledge_extractor and self.recording_enabled and recording_dir_name:
                 try:
@@ -1163,17 +1222,78 @@ class CallManager:
                             logger.warning("⚠️ [Knowledge Flow] Transcript file not found after delay",
                                          call_id=call_session.call_id,
                                          path=str(transcript_path))
+                            try:
+                                from src.common.call_data_record_logger import log_call_data
+
+                                log_call_data(
+                                    call_session.call_id,
+                                    "knowledge",
+                                    "post_call_extraction_skipped",
+                                    reason="transcript_missing_after_delay",
+                                    transcript_path=str(transcript_path),
+                                    speaker_filter="callee",
+                                    owner_id=callee_id,
+                                )
+                            except Exception:
+                                pass
                             return
                         
                         logger.info("🚀 [Knowledge Flow] Starting knowledge extraction",
                                    call_id=call_session.call_id)
-                        
-                        await self.knowledge_extractor.extract_from_call(
+                        try:
+                            from src.common.call_data_record_logger import log_call_data
+                            from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
+
+                            log_call_data(
+                                call_session.call_id,
+                                "knowledge",
+                                "post_call_extraction_started",
+                                transcript_path=str(transcript_path),
+                                speaker_filter="callee",
+                                owner_id=callee_id,
+                                extractor_type=type(self.knowledge_extractor).__name__,
+                                **chroma_context_for_call_data(),
+                            )
+                        except Exception:
+                            pass
+
+                        res = await self.knowledge_extractor.extract_from_call(
                             call_id=call_session.call_id,
                             transcript_path=str(transcript_path),
                             owner_id=callee_id,
                             speaker="callee"  # 착신자 발화만 추출
                         )
+                        try:
+                            from src.common.call_data_record_logger import log_call_data
+                            from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
+
+                            if hasattr(res, "stored_count"):
+                                log_call_data(
+                                    call_session.call_id,
+                                    "knowledge",
+                                    "post_call_extraction_finished",
+                                    pipeline_version=getattr(res, "pipeline_version", "v2"),
+                                    success=bool(getattr(res, "success", False)),
+                                    stored_count=int(getattr(res, "stored_count", 0)),
+                                    skipped_duplicate=int(getattr(res, "skipped_duplicate", 0)),
+                                    skipped_quality=int(getattr(res, "skipped_quality", 0)),
+                                    skipped_hallucination=int(getattr(res, "skipped_hallucination", 0)),
+                                    error=(getattr(res, "error", None) or ""),
+                                    **chroma_context_for_call_data(),
+                                )
+                            elif isinstance(res, dict):
+                                log_call_data(
+                                    call_session.call_id,
+                                    "knowledge",
+                                    "post_call_extraction_finished",
+                                    pipeline_version="v1_knowledge_extractor",
+                                    success=bool(res.get("success")),
+                                    stored_count=int(res.get("extracted_count", 0)),
+                                    confidence=res.get("confidence"),
+                                    **chroma_context_for_call_data(),
+                                )
+                        except Exception:
+                            pass
                     
                     asyncio.create_task(delayed_extraction())
                     
@@ -1228,17 +1348,82 @@ class CallManager:
                     logger.warning("⚠️ [Knowledge Flow] Transcript file not found after delay",
                                  call_id=call_id,
                                  path=str(transcript_path))
+                    try:
+                        from src.common.call_data_record_logger import log_call_data
+
+                        log_call_data(
+                            call_id,
+                            "knowledge",
+                            "post_call_extraction_skipped",
+                            reason="transcript_missing_after_delay",
+                            path="trigger_knowledge_extraction",
+                            transcript_path=str(transcript_path),
+                            speaker_filter="both",
+                            owner_id=callee_id,
+                        )
+                    except Exception:
+                        pass
                     return
                 
                 logger.info("🚀 [Knowledge Flow] Starting knowledge extraction",
                            call_id=call_id)
-                
-                await self.knowledge_extractor.extract_from_call(
+                try:
+                    from src.common.call_data_record_logger import log_call_data
+                    from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
+
+                    log_call_data(
+                        call_id,
+                        "knowledge",
+                        "post_call_extraction_started",
+                        path="trigger_knowledge_extraction",
+                        transcript_path=str(transcript_path),
+                        speaker_filter="both",
+                        owner_id=callee_id,
+                        extractor_type=type(self.knowledge_extractor).__name__,
+                        **chroma_context_for_call_data(),
+                    )
+                except Exception:
+                    pass
+
+                res = await self.knowledge_extractor.extract_from_call(
                     call_id=call_id,
                     transcript_path=str(transcript_path),
                     owner_id=callee_id,
                     speaker="both"  # ✅ 발신자+착신자 모두 추출 (대화 전체)
                 )
+                try:
+                    from src.common.call_data_record_logger import log_call_data
+                    from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
+
+                    if hasattr(res, "stored_count"):
+                        log_call_data(
+                            call_id,
+                            "knowledge",
+                            "post_call_extraction_finished",
+                            path="trigger_knowledge_extraction",
+                            pipeline_version=getattr(res, "pipeline_version", "v2"),
+                            success=bool(getattr(res, "success", False)),
+                            stored_count=int(getattr(res, "stored_count", 0)),
+                            skipped_duplicate=int(getattr(res, "skipped_duplicate", 0)),
+                            skipped_quality=int(getattr(res, "skipped_quality", 0)),
+                            skipped_hallucination=int(getattr(res, "skipped_hallucination", 0)),
+                            error=(getattr(res, "error", None) or ""),
+                            **chroma_context_for_call_data(),
+                        )
+                    elif isinstance(res, dict):
+                        log_call_data(
+                            call_id,
+                            "knowledge",
+                            "post_call_extraction_finished",
+                            path="trigger_knowledge_extraction",
+                            pipeline_version="v1_knowledge_extractor",
+                            success=bool(res.get("success")),
+                            stored_count=int(res.get("extracted_count", 0)),
+                            confidence=res.get("confidence"),
+                            **chroma_context_for_call_data(),
+                        )
+                except Exception:
+                    pass
             
             asyncio.create_task(delayed_extraction())
             

@@ -2,7 +2,7 @@
 Semantic Cache 노드.
 
 유사한 질문이 이전에 응답된 적 있으면 캐시에서 즉시 응답.
-유사도 0.95 이상, TTL 내에 있는 경우 캐시 히트.
+유사도 임계치(SIMILARITY_THRESHOLD) 이상, TTL 내, 저장 답변이 폴백/절단이 아닐 때 히트.
 
 컬렉션: qa_cache (ChromaDB)
 """
@@ -23,6 +23,36 @@ SIMILARITY_THRESHOLD = 0.92  # 캐시 히트 임계치 (코사인 유사도)
 TTL_FAQ_SECONDS = 86400   # question/greeting: 24h (필요 시 43200으로 단축)
 TTL_OTHER_SECONDS = 3600  # 그 외: 1h
 MIN_CONFIDENCE_TO_CACHE = 0.6  # 이 값 미만이면 캐시 저장 스킵 (선택 적용)
+SEMANTIC_CACHE_TOP_K = 1
+
+
+def _semantic_cache_criteria_ref(intent_filter: Optional[dict]) -> dict:
+    """semantic_cache_miss / 히트 판정 시 로그에 넣는 기준 스냅샷."""
+    return {
+        "collection": CACHE_COLLECTION,
+        "top_k": SEMANTIC_CACHE_TOP_K,
+        "similarity_threshold": SIMILARITY_THRESHOLD,
+        "intent_where_filter": intent_filter,
+        "ttl_default_seconds_faq": TTL_FAQ_SECONDS,
+        "ttl_default_seconds_other": TTL_OTHER_SECONDS,
+        "hit_rules": [
+            "top_1_score >= similarity_threshold",
+            "metadata.cached_at 존재하고 TTL 미만료(metadata.ttl, 기본 TTL_OTHER_SECONDS)",
+            "answer 비어 있지 않음",
+            "answer가 폴백 멘트(_is_fallback_message) 아님",
+            "answer가 완결 문장(_looks_complete_sentence)",
+        ],
+    }
+
+
+def _cache_entry_age_seconds(cached_at_str: str) -> Optional[float]:
+    if not cached_at_str:
+        return None
+    try:
+        cached_at = datetime.fromisoformat(cached_at_str)
+        return (datetime.now() - cached_at).total_seconds()
+    except Exception:
+        return None
 
 
 async def check_cache_node(state: ConversationState) -> dict:
@@ -36,11 +66,58 @@ async def check_cache_node(state: ConversationState) -> dict:
     query = state.get("user_query", "")
     vector_db = state.get("_vector_db")
     embedder = state.get("_embedder")
+    intent = state.get("intent", "")
+    where_filter: Optional[dict] = {"intent": intent} if intent else None
+    criteria = _semantic_cache_criteria_ref(where_filter)
+    call_id = state.get("_call_id") or ""
+
+    def _log_miss(
+        *,
+        miss_reason: str,
+        miss_detail: Optional[dict] = None,
+        top_candidate: Optional[dict] = None,
+    ) -> dict:
+        elapsed = time.time() - _start
+        logger.info(
+            "timing_segment",
+            segment="check_cache",
+            elapsed_sec=round(elapsed, 3),
+            hit=False,
+            miss_reason=miss_reason,
+        )
+        logger.info(
+            "semantic_cache_miss",
+            miss_reason=miss_reason,
+            query_preview=query or "",
+            intent=intent or "",
+        )
+        log_call_data(
+            call_id,
+            "rag",
+            "semantic_cache_miss",
+            query=query,
+            query_full=query,
+            query_len=len(query or ""),
+            intent=intent,
+            elapsed_sec=round(elapsed, 3),
+            miss_reason=miss_reason,
+            miss_detail=miss_detail or {},
+            criteria=criteria,
+            top_candidate=top_candidate,
+        )
+        return {"rag_cache_hit": False}
 
     if not vector_db or not embedder or not query:
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="check_cache", elapsed_sec=round(elapsed, 3), skip="no_query_or_db")
-        return {"rag_cache_hit": False}
+        return _log_miss(
+            miss_reason="skipped_no_vector_db_embedder_or_empty_query",
+            miss_detail={
+                "has_vector_db": bool(vector_db),
+                "has_embedder": bool(embedder),
+                "query_empty": not (query or "").strip(),
+            },
+        )
 
     try:
         # 쿼리 임베딩 (TextEmbedder는 embed_text 사용 — embed 메서드 없음)
@@ -52,75 +129,163 @@ async def check_cache_node(state: ConversationState) -> dict:
         else:
             elapsed = time.time() - _start
             logger.warning("semantic_cache_no_embedder", elapsed_sec=round(elapsed, 3))
-            return {"rag_cache_hit": False}
+            return _log_miss(
+                miss_reason="skipped_embedder_has_no_embed_method",
+                miss_detail={"embedder_type": type(embedder).__name__},
+            )
+
+        if not query_embedding:
+            return _log_miss(
+                miss_reason="empty_query_embedding",
+                miss_detail={"embedder_type": type(embedder).__name__},
+            )
 
         # qa_cache 컬렉션에서 검색 (intent별 필터 — CHROMADB_CATEGORY_DESIGN §4.2)
-        intent = state.get("intent", "")
-        where_filter = {"intent": intent} if intent else None
         results = await vector_db.search_collection(
             collection_name=CACHE_COLLECTION,
             vector=query_embedding,
-            top_k=1,
+            top_k=SEMANTIC_CACHE_TOP_K,
             where=where_filter,
         )
 
-        if results and len(results) > 0:
-            top = results[0]
-            score = top.get("score", 0.0)
+        if not results:
+            return _log_miss(
+                miss_reason="no_search_results",
+                miss_detail={"raw_result_count": 0},
+            )
 
-            if score >= SIMILARITY_THRESHOLD:
-                metadata = top.get("metadata", {})
-                # TTL 체크
-                cached_at = metadata.get("cached_at", "")
-                ttl = metadata.get("ttl", TTL_OTHER_SECONDS)
-                if cached_at and not _is_expired(cached_at, ttl):
-                    cached_answer = metadata.get("answer", "")
-                    # 저장된 폴백 응답은 히트로 쓰지 않음 → RAG 경로로 진행
-                    if cached_answer and _is_fallback_message(cached_answer):
-                        logger.info("semantic_cache_skip_fallback_hit",
-                                    query=query[:60], score=f"{score:.3f}")
-                    elif cached_answer and _looks_complete_sentence(cached_answer):
-                        elapsed = time.time() - _start
-                        logger.info("timing_segment", segment="check_cache", elapsed_sec=round(elapsed, 3), hit=True)
-                        logger.info("semantic_cache_hit",
-                                   score=f"{score:.3f}",
-                                   query=query[:60])
-                        call_id = state.get("_call_id") or ""
-                        log_call_data(
-                            call_id,
-                            "rag",
-                            "semantic_cache_hit",
-                            query=query[:300],
-                            score=round(score, 3),
-                            elapsed_sec=round(elapsed, 3),
-                        )
-                        return {
-                            "rag_cache_hit": True,
-                            "response": cached_answer,
-                            "confidence": metadata.get("confidence", 0.9),
-                        }
-                    if cached_answer and not _looks_complete_sentence(cached_answer):
-                        logger.info("semantic_cache_skip_truncated",
-                                    query=query[:60], answer_preview=cached_answer[-30:])
+        top = results[0]
+        try:
+            score = float(top.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+
+        raw_meta = top.get("metadata")
+        metadata = raw_meta if isinstance(raw_meta, dict) else {}
+        cached_at = metadata.get("cached_at", "") or ""
+        ttl = metadata.get("ttl", TTL_OTHER_SECONDS)
+        try:
+            ttl = int(ttl) if ttl is not None else TTL_OTHER_SECONDS
+        except (TypeError, ValueError):
+            ttl = TTL_OTHER_SECONDS
+        cached_answer = metadata.get("answer", "") or ""
+
+        top_candidate = {
+            "score": round(score, 4),
+            "doc_id_preview": str(top.get("id", "")),
+            "has_cached_at": bool(cached_at),
+            "ttl_effective": ttl,
+            "answer_len": len(cached_answer),
+            "metadata_intent": metadata.get("intent"),
+        }
+
+        if score < SIMILARITY_THRESHOLD:
+            return _log_miss(
+                miss_reason="score_below_threshold",
+                miss_detail={
+                    "top_score": round(score, 4),
+                    "required_min_score": SIMILARITY_THRESHOLD,
+                    "shortfall": round(SIMILARITY_THRESHOLD - score, 4),
+                },
+                top_candidate=top_candidate,
+            )
+
+        if not cached_at:
+            return _log_miss(
+                miss_reason="missing_cached_at_metadata",
+                miss_detail={
+                    "top_score": round(score, 4),
+                    "metadata_keys": list(metadata.keys()),
+                },
+                top_candidate=top_candidate,
+            )
+
+        expired = _is_expired(cached_at, ttl)
+        age_sec = _cache_entry_age_seconds(cached_at)
+        if expired:
+            return _log_miss(
+                miss_reason="ttl_expired",
+                miss_detail={
+                    "top_score": round(score, 4),
+                    "cached_at": cached_at,
+                    "ttl_seconds": ttl,
+                    "age_seconds": round(age_sec, 3) if age_sec is not None else None,
+                },
+                top_candidate=top_candidate,
+            )
+
+        if not cached_answer:
+            logger.info(
+                "semantic_cache_skip_empty_answer",
+                query=query,
+                score=f"{score:.3f}",
+            )
+            return _log_miss(
+                miss_reason="empty_cached_answer",
+                miss_detail={"top_score": round(score, 4)},
+                top_candidate=top_candidate,
+            )
+
+        if _is_fallback_message(cached_answer):
+            logger.info(
+                "semantic_cache_skip_fallback_hit",
+                query=query,
+                score=f"{score:.3f}",
+            )
+            return _log_miss(
+                miss_reason="rejected_stored_fallback_answer",
+                miss_detail={
+                    "top_score": round(score, 4),
+                    "answer_preview": cached_answer,
+                },
+                top_candidate=top_candidate,
+            )
+
+        if not _looks_complete_sentence(cached_answer):
+            logger.info(
+                "semantic_cache_skip_truncated",
+                query=query,
+                answer_preview=cached_answer,
+            )
+            return _log_miss(
+                miss_reason="rejected_incomplete_cached_answer",
+                miss_detail={
+                    "top_score": round(score, 4),
+                    "answer_preview": cached_answer,
+                },
+                top_candidate=top_candidate,
+            )
 
         elapsed = time.time() - _start
-        logger.info("timing_segment", segment="check_cache", elapsed_sec=round(elapsed, 3), hit=False)
-        logger.debug("semantic_cache_miss", query=query[:60])
-        call_id = state.get("_call_id") or ""
+        logger.info("timing_segment", segment="check_cache", elapsed_sec=round(elapsed, 3), hit=True)
+        logger.info("semantic_cache_hit", score=f"{score:.3f}", query=query)
         log_call_data(
             call_id,
             "rag",
-            "semantic_cache_miss",
-            query=query[:300],
+            "semantic_cache_hit",
+            query=query,
+            query_full=query,
+            query_len=len(query or ""),
+            score=round(score, 3),
             elapsed_sec=round(elapsed, 3),
+            criteria=criteria,
         )
-        return {"rag_cache_hit": False}
+        return {
+            "rag_cache_hit": True,
+            "response": cached_answer,
+            "confidence": metadata.get("confidence", 0.9),
+            "llm_rag_applied": [],
+            "llm_rag_context_source": "semantic_cache",
+            "semantic_cache_score": round(score, 3),
+            "rag_search_trace": {},
+        }
 
     except Exception as e:
-        elapsed = time.time() - _start
-        logger.info("timing_segment", segment="check_cache", elapsed_sec=round(elapsed, 3), error=str(e))
-        logger.warning("semantic_cache_check_error", error=str(e))
-        return {"rag_cache_hit": False}
+        logger.warning("semantic_cache_check_error", error=str(e), exc_info=True)
+        return _log_miss(
+            miss_reason="check_cache_exception",
+            miss_detail={"error_type": type(e).__name__, "error_message": str(e)},
+        )
 
 
 async def update_cache_node(state: ConversationState) -> dict:
@@ -147,13 +312,13 @@ async def update_cache_node(state: ConversationState) -> dict:
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="update_cache", elapsed_sec=round(elapsed, 3), skip="truncated_or_error")
         logger.debug("semantic_cache_skip_save",
-                     reason="truncated_or_error", response_preview=response[:80])
+                     reason="truncated_or_error", response_preview=response)
         return {}
     # RAG 0건일 때의 폴백 응답은 캐시에 넣지 않음 (지식 추가 후에도 캐시로 잘못 나오는 것 방지)
     if _is_fallback_message(response):
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="update_cache", elapsed_sec=round(elapsed, 3), skip="fallback_response")
-        logger.debug("semantic_cache_skip_save", reason="fallback_response", response_preview=response[:80])
+        logger.debug("semantic_cache_skip_save", reason="fallback_response", response_preview=response)
         return {}
     # question 의도인데 RAG 결과 0건이면 저장하지 않음
     intent = state.get("intent", "question")
@@ -211,7 +376,7 @@ async def update_cache_node(state: ConversationState) -> dict:
         )
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="update_cache", elapsed_sec=round(elapsed, 3))
-        logger.info("semantic_cache_updated", query=query[:60], ttl=ttl)
+        logger.info("semantic_cache_updated", query=query, ttl=ttl)
     except Exception as e:
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="update_cache", elapsed_sec=round(elapsed, 3), error=str(e))

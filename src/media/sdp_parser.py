@@ -404,7 +404,7 @@ class SDPManipulator:
                 is_problematic = any(line_stripped.startswith(f'a={attr}') for attr in problematic_attributes)
                 
                 if is_problematic:
-                    logger.debug("problematic_attribute_removed", attribute=line_stripped[:30])
+                    logger.debug("problematic_attribute_removed", attribute=line_stripped)
                     continue  # 이 라인 건너뛰기
             
             modified_lines.append(line_stripped)
@@ -442,7 +442,7 @@ class SDPManipulator:
                 removed = True
                 logger.debug("rtcp_attribute_removed",
                             media_type=media_type,
-                            line=line_stripped[:50])
+                            line=line_stripped)
                 continue  # 이 라인은 건너뜀
             
             modified_lines.append(line_stripped)
@@ -583,7 +583,7 @@ class SDPManipulator:
                 if should_remove:
                     removed_count += 1
                     logger.debug("sdp_attribute_removed_for_compatibility",
-                                attribute=line_stripped[:50])  # 로그에는 앞 50자만
+                                attribute=line_stripped)
                     continue  # 이 라인은 건너뜀
             
             # 안전한 라인은 유지

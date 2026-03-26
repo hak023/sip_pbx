@@ -135,7 +135,7 @@ class OutboundCallManager:
         logger.info("outbound_call_created",
                     outbound_id=record.outbound_id,
                     callee=callee_number,
-                    purpose=purpose[:50])
+                    purpose=purpose)
         
         await self._emit_event("outbound_queued", record)
         
@@ -573,8 +573,11 @@ class OutboundCallManager:
             try:
                 await self._emit_event_cb(event_type, record.to_dict())
             except Exception as e:
-                logger.error("outbound_event_emit_error",
-                            event=event_type, error=str(e))
+                logger.error(
+                    "outbound_event_emit_error",
+                    event_type=event_type,
+                    error=str(e),
+                )
     
     # =========================================================================
     # 조회

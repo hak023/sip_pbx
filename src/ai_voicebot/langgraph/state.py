@@ -23,7 +23,12 @@ class ConversationState(TypedDict, total=False):
     rewritten_query: str          # Query Rewriting 결과
     rag_results: list             # RAG 검색 결과 문서들
     rag_cache_hit: bool           # Semantic Cache 히트 여부
+    rag_search_trace: dict        # 벡터 검색 필터·컬렉션 등 (adaptive_rag)
     confidence: float             # 응답 신뢰도 (0.0 ~ 1.0)
+
+    # ── llm_exchange / 디버깅 (프롬프트에 실제 반영된 RAG 스니펫) ──
+    llm_rag_applied: list         # build_rag_hits_llm_context 형태
+    llm_rag_context_source: str  # vector_knowledge | semantic_cache | …
 
     # ── 응답 ──
     response: str                 # 생성된 응답 텍스트

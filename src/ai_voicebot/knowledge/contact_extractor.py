@@ -87,12 +87,12 @@ class ContactKnowledgeExtractor:
             query_embedding = self._get_embedding(query)
             if not query_embedding:
                 logger.warning("contact_search_embedding_failed",
-                              query=query[:50])
+                              query=query)
                 return None
             
             # 2. ChromaDB 검색
             logger.info("contact_search_query",
-                       query=query[:100],
+                       query=query,
                        tenant_id=tenant_id)
             
             results = self.vector_db.collection.query(
@@ -110,7 +110,7 @@ class ContactKnowledgeExtractor:
             # 3. 결과 확인
             if not results or not results.get('ids') or len(results['ids'][0]) == 0:
                 logger.info("contact_search_no_results",
-                           query=query[:50],
+                           query=query,
                            tenant_id=tenant_id,
                            note="category='contact'인 지식 없음")
                 return None
@@ -137,7 +137,7 @@ class ContactKnowledgeExtractor:
             # 7. 로그 (전화번호는 마스킹)
             masked_phone = contact["phone_number"][:8] + "***" if len(contact["phone_number"]) > 8 else "***"
             logger.info("contact_search_found",
-                       query=query[:50],
+                       query=query,
                        department=contact["department"],
                        name=contact["name"],
                        phone_masked=masked_phone,
@@ -148,7 +148,7 @@ class ContactKnowledgeExtractor:
             
         except Exception as e:
             logger.error("contact_search_error",
-                        query=query[:50],
+                        query=query,
                         tenant_id=tenant_id,
                         error=str(e),
                         exc_info=True)

@@ -120,7 +120,7 @@ class TaskTracker:
         except json.JSONDecodeError as e:
             logger.warning("task_state_parse_error",
                           error=str(e),
-                          raw=match.group(1).strip()[:200])
+                          raw=match.group(1).strip())
             return None
     
     @staticmethod

@@ -13,8 +13,30 @@ from datetime import datetime
 import structlog
 from src.ai_voicebot.langgraph.state import ConversationState
 from src.ai_voicebot.ai_pipeline.query_hints import should_treat_as_question_not_transfer
+from src.common.call_data_record_logger import log_call_data
 
 logger = structlog.get_logger(__name__)
+
+
+def _log_intent_classify_timing(
+    call_id: str,
+    *,
+    elapsed_sec: float,
+    path: str,
+    intent: str,
+    query_preview: str = "",
+) -> None:
+    if not call_id:
+        return
+    log_call_data(
+        call_id,
+        "timing",
+        "intent_classify",
+        elapsed_sec=round(elapsed_sec, 3),
+        path=path,
+        intent=intent,
+        query_preview=(query_preview or ""),
+    )
 
 # 키워드 기반 빠른 분류 (LLM 호출 없이). 설계 §8.2 키워드 예시 반영
 INTENT_KEYWORDS = {
@@ -32,7 +54,18 @@ INTENT_KEYWORDS = {
     # C. 일상/제어
     "repeat": ["다시", "다시 말해", "뭐라고", "한번 더", "못 들었어요", "다시 말해줘"],
     "clarification": ["무슨 뜻이에요", "뭔 소리야", "이해가 안 가요", "어느 부분이요"],
-    "help": ["도와줘", "도움", "어떻게 해요", "어떻게 하죠", "뭘 할 수 있어요"],
+    "help": [
+        "도와줘",
+        "도움",
+        "어떻게 해요",
+        "어떻게 하죠",
+        "뭘 할 수 있어요",
+        "어떤 일",
+        "할 수 있어",
+        "할수있어",
+        "무엇을 할",
+        "뭐 할 수",
+    ],
 }
 
 # 인사말과 함께 나올 수 있는 질문/요청 패턴. 이 패턴이 있으면 greeting보다 question 우선.
@@ -75,8 +108,14 @@ async def classify_intent_node(state: ConversationState) -> dict:
     import time
     node_start = time.time()
     
+    call_id = state.get("_call_id") or ""
+
     query = state.get("user_query", "").strip()
     if not query:
+        elapsed = time.time() - node_start
+        _log_intent_classify_timing(
+            call_id, elapsed_sec=elapsed, path="empty_query", intent="nlu_fallback"
+        )
         return {"intent": "nlu_fallback", "slots": {}, "confidence": 0.0}
 
     query_lower = query.lower()
@@ -89,12 +128,18 @@ async def classify_intent_node(state: ConversationState) -> dict:
                 elapsed = time.time() - node_start
                 logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="keyword")
                 logger.info("⏱️ [TIMING] classify_intent (keyword, greeting+question→question)",
-                           intent="question", query=query[:60], elapsed=f"{elapsed:.3f}s")
+                           intent="question", query=query, elapsed=f"{elapsed:.3f}s")
+                _log_intent_classify_timing(
+                    call_id, elapsed_sec=elapsed, path="keyword_greeting_to_question", intent="question", query_preview=query
+                )
                 return {"intent": "question", "slots": {}, "confidence": 1.0}
             elapsed = time.time() - node_start
             logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="keyword")
             logger.info("⏱️ [TIMING] classify_intent (keyword)",
-                       intent=intent, query=query[:60], elapsed=f"{elapsed:.3f}s")
+                       intent=intent, query=query, elapsed=f"{elapsed:.3f}s")
+            _log_intent_classify_timing(
+                call_id, elapsed_sec=elapsed, path="keyword", intent=intent, query_preview=query
+            )
             return {"intent": intent, "slots": {}, "confidence": 1.0}
 
     # 1.5차: 방문·찾아가기·교통 안내 vs transfer 오분류 완화 (LLM 전에 적용)
@@ -110,14 +155,25 @@ async def classify_intent_node(state: ConversationState) -> dict:
         logger.info(
             "classify_intent_visit_direction_to_question",
             intent="question",
-            query=query[:80],
+            query=query,
             note="방문/오시는 길/교통 문의로 보이며 명시적 연결 요청 없음 → question",
+        )
+        _log_intent_classify_timing(
+            call_id,
+            elapsed_sec=elapsed,
+            path="visit_direction_override",
+            intent="question",
+            query_preview=query,
         )
         return {"intent": "question", "slots": {}, "confidence": 0.95}
 
     # 2차: 짧은 발화는 question으로 간주 (LLM 없을 때)
     llm = state.get("_llm_client")
     if not llm:
+        elapsed = time.time() - node_start
+        _log_intent_classify_timing(
+            call_id, elapsed_sec=elapsed, path="no_llm_default_question", intent="question", query_preview=query
+        )
         return {"intent": "question", "slots": {}, "confidence": 0.7}
 
     # 3차: LLM 기반 분류 (키워드 미매칭 발화). 설계 §7 Phase 1, §13.2 의도 분류에 맥락
@@ -144,7 +200,7 @@ async def classify_intent_node(state: ConversationState) -> dict:
                     call_site="classify_intent",
                     request_sent_ts_iso=request_sent_at,
                     prompt_len=len(classify_prompt),
-                    prompt_preview=classify_prompt[:200].replace("\n", " "))
+                    prompt_preview=classify_prompt.replace("\n", " "))
         try:
             result = await llm.generate_response(
                 classify_prompt, context_docs=[], system_prompt="의도 분류기"
@@ -155,7 +211,7 @@ async def classify_intent_node(state: ConversationState) -> dict:
                            call_site="classify_intent",
                            request_sent_ts_iso=request_sent_at,
                            error_type=type(llm_err).__name__,
-                           error_msg=str(llm_err)[:500],
+                           error_msg=str(llm_err),
                            elapsed_ms=round(elapsed * 1000))
             raise
         response_received_at = datetime.now().isoformat()
@@ -182,10 +238,16 @@ async def classify_intent_node(state: ConversationState) -> dict:
                     intent=intent)
         logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="llm")
         logger.info("⏱️ [TIMING] classify_intent (LLM)",
-                   intent=intent, query=query[:60], elapsed=f"{elapsed:.3f}s")
+                   intent=intent, query=query, elapsed=f"{elapsed:.3f}s")
+        _log_intent_classify_timing(
+            call_id, elapsed_sec=elapsed, path="llm", intent=intent, query_preview=query
+        )
         return {"intent": intent, "slots": {}, "confidence": confidence}
     except Exception as e:
         elapsed = time.time() - node_start
         logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="error", error=str(e))
         logger.warning("intent_classification_error", error=str(e))
+        _log_intent_classify_timing(
+            call_id, elapsed_sec=elapsed, path="error", intent="nlu_fallback", query_preview=query
+        )
         return {"intent": "nlu_fallback", "slots": {}, "confidence": 0.0}

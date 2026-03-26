@@ -178,7 +178,7 @@ async def log_llm_process(
         await _db_client.execute(query, {
             "call_id": call_id,
             "timestamp": datetime.now(),
-            "input_prompt": input_prompt[:1000] if input_prompt else None,  # 최대 1000자
+            "input_prompt": input_prompt if input_prompt else None,
             "output_text": output_text,
             "confidence": confidence,
             "latency_ms": latency_ms,
@@ -235,7 +235,7 @@ async def log_knowledge_match(
             "timestamp": datetime.now(),
             "matched_knowledge_id": matched_knowledge_id,
             "similarity_score": similarity_score,
-            "knowledge_text": knowledge_text[:500],  # 최대 500자
+            "knowledge_text": knowledge_text,
             "category": category
         })
         

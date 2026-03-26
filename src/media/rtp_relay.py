@@ -4,6 +4,7 @@ RTP/RTCP 패킷 relay (Bypass Mode)
 """
 
 import asyncio
+import struct
 import time
 from typing import Optional, Tuple
 from dataclasses import dataclass
@@ -625,11 +626,11 @@ class RTPRelayWorker:
                                            error=str(parse_error),
                                            packet_size=len(data))
                             else:
-                                # 너무 짧은 패킷은 스킵
+                                # 녹음만 스킵 — 아래 bypass STT·RTP 통계는 계속 진행
                                 logger.warning("rtp_packet_too_short",
                                              call_id=self.media_session.call_id,
                                              packet_size=len(data))
-                                return
+                                audio_payload = b""
                         
                         # 방향 결정
                         direction = "caller" if "caller" in socket_type else "callee"
@@ -637,16 +638,17 @@ class RTPRelayWorker:
                         # 코덱 결정 (MediaSession에서 가져오기, 기본값 PCMU)
                         codec = getattr(self.media_session, 'codec', 'PCMU')
                         
-                        # 비동기 태스크로 녹음 패킷 전달
-                        asyncio.create_task(
-                            self.sip_recorder.add_rtp_packet(
-                                call_id=self.media_session.call_id,
-                                audio_data=audio_payload,
-                                direction=direction,
-                                codec=codec
+                        if audio_payload:
+                            # 비동기 태스크로 녹음 패킷 전달
+                            asyncio.create_task(
+                                self.sip_recorder.add_rtp_packet(
+                                    call_id=self.media_session.call_id,
+                                    audio_data=audio_payload,
+                                    direction=direction,
+                                    codec=codec
+                                )
                             )
-                        )
-                        self.stats["recording_packets"] += 1
+                            self.stats["recording_packets"] += 1
                     except Exception as e:
                         logger.error("recording_packet_forward_error",
                                    call_id=self.media_session.call_id,
@@ -760,6 +762,11 @@ class RTPRelayWorker:
         empty_timeout_count = 0  # 큐 비어서 1초 대기한 횟수 (언더런 지표)
         last_was_empty_timeout = False
         _logged_3s = False  # 3초 상당 전송 시 1회 로그
+        # TTS RTP 상세 추적 (늘어짐/끊김: 스케줄 지연·간격·seq/ts 연속성)
+        behind_schedule_count = 0
+        last_rtp_seq_sent: Optional[int] = None
+        last_rtp_ts_sent: Optional[int] = None
+        recent_intervals_ms: list = []  # 최근 패킷 간격(직전→현재), 최대 50개
 
         while self._pipecat_mode and self._pipecat_pcm_queue is not None:
             try:
@@ -796,15 +803,18 @@ class RTPRelayWorker:
                 
                 if pcm_data is None:  # Sentinel
                     if packets_sent > 0 or empty_timeout_count > 0:
-                        logger.info("rtp_sender_session_end",
-                                   call_id=self.media_session.call_id,
-                                   packets_sent=packets_sent,
-                                   total_sent=self.stats["rtp_tts_packets_sent"],
-                                   total_dropped=self.stats["rtp_tts_packets_dropped"],
-                                   send_errors=self.stats["rtp_tts_send_errors"],
-                                   interval_violations=interval_violations,
-                                   empty_timeout_count=empty_timeout_count,
-                                   note="TTS 발송 루프 종료 (empty_timeout_count>0이면 해당 구간 끊김 가능)")
+                        logger.info(
+                            "rtp_sender_session_end",
+                            call_id=self.media_session.call_id,
+                            packets_sent=packets_sent,
+                            total_sent=self.stats["rtp_tts_packets_sent"],
+                            total_dropped=self.stats["rtp_tts_packets_dropped"],
+                            send_errors=self.stats["rtp_tts_send_errors"],
+                            interval_violations=interval_violations,
+                            behind_schedule_count=behind_schedule_count,
+                            empty_timeout_count=empty_timeout_count,
+                            note="TTS 발송 루프 종료 — behind_schedule_count=스케줄보다 늦은 전송 횟수",
+                        )
                     break
                 
                 # Phase2 등 "큐 비었다가 새 청크" 도착 시 이 청크만 새 구간으로 base_time 설정.
@@ -896,10 +906,36 @@ class RTPRelayWorker:
                     if not self._pipecat_mode:
                         break
                     
+                    # RTP 헤더 (전송 전): seq/ts 로그·연속성 검사용
+                    _rtp_seq_hdr = struct.unpack_from("!H", packet, 2)[0]
+                    _rtp_ts_hdr = struct.unpack_from("!I", packet, 4)[0]
+                    
                     # 절대 시간 기반: 목표 전송 시간 계산
                     target_time = self._rtp_base_time + (self._rtp_packets_sent_total * interval_sec)
                     now_before_sleep = time.perf_counter()
                     sleep_needed = target_time - now_before_sleep
+                    
+                    # 목표 시각보다 늦음 → "따라잡기" 버스트(수신 측에서 늘어짐·지터 유발 가능)
+                    if sleep_needed < 0:
+                        behind_schedule_count += 1
+                        _late_ms = -sleep_needed * 1000.0
+                        if behind_schedule_count <= 20 or behind_schedule_count % 50 == 0:
+                            logger.warning(
+                                "rtp_send_behind_schedule",
+                                call_id=self.media_session.call_id,
+                                progress="rtp_timing",
+                                late_ms=round(_late_ms, 2),
+                                behind_schedule_count=behind_schedule_count,
+                                packets_sent_so_far=packets_sent,
+                                chunk_inner_idx=idx,
+                                rtp_seq=_rtp_seq_hdr,
+                                rtp_ts=_rtp_ts_hdr,
+                                pcm_queue_size=self._pipecat_pcm_queue.qsize(),
+                                expected_from_base_ms=round(
+                                    self._rtp_packets_sent_total * self._RTP_PACKET_MS, 2
+                                ),
+                                note="20ms 스케줄보다 늦게 전송 시도 — 이벤트 루프 지연·PCM 버스트·CPU 경합 추적",
+                            )
                     
                     # ✅ Hybrid sleep: asyncio.sleep + busy-wait (정밀 타이밍)
                     # asyncio.sleep은 부정확하므로 목표 시간 1ms 전까지만 sleep
@@ -942,14 +978,21 @@ class RTPRelayWorker:
                         if abs(interval_from_prev_ms - self._RTP_PACKET_MS) > INTERVAL_TOLERANCE_MS:
                             interval_violations += 1
                             if interval_violations <= 5 or interval_violations % 50 == 0:
-                                logger.warning("rtp_interval_violation",
-                                             call_id=self.media_session.call_id,
-                                             expected_ms=self._RTP_PACKET_MS,
-                                             actual_ms=round(interval_from_prev_ms, 1),
-                                             violation_count=interval_violations,
-                                             packets_sent=packets_sent,
-                                             timing_error_ms=round(current_error_ms, 2),
-                                             note="20ms 간격 이탈 (절대 시간 오차 포함)")
+                                logger.warning(
+                                    "rtp_interval_violation",
+                                    call_id=self.media_session.call_id,
+                                    progress="rtp_timing",
+                                    expected_ms=self._RTP_PACKET_MS,
+                                    actual_ms=round(interval_from_prev_ms, 1),
+                                    violation_count=interval_violations,
+                                    packets_sent=packets_sent,
+                                    timing_error_ms=round(current_error_ms, 2),
+                                    rtp_seq=_rtp_seq_hdr,
+                                    rtp_ts=_rtp_ts_hdr,
+                                    chunk_inner_idx=idx,
+                                    pcm_queue_size=self._pipecat_pcm_queue.qsize(),
+                                    note="20ms 간격 이탈 (절대 시간 오차 포함) — seq/ts로 패킷 단위 추적",
+                                )
                     
                     # 누적 오차가 너무 크면 base_time 리셋 (1초 이상). Phase2 첫 패킷 이전에는 미적용.
                     if getattr(self, "_rtp_new_segment_after_empty", False):
@@ -998,6 +1041,61 @@ class RTPRelayWorker:
                             _transport.sendto(packet, (caller_ip, caller_port))
                         packets_sent += 1
                         self.stats["rtp_tts_packets_sent"] += 1
+                        
+                        # RTP seq/ts 연속성 (단일 스트림에서 +1 / +160 기대)
+                        if last_rtp_seq_sent is not None:
+                            _exp_seq = (last_rtp_seq_sent + 1) & 0xFFFF
+                            if _rtp_seq_hdr != _exp_seq:
+                                logger.warning(
+                                    "rtp_seq_discontinuity",
+                                    call_id=self.media_session.call_id,
+                                    progress="rtp_timing",
+                                    expected_seq=_exp_seq,
+                                    actual_seq=_rtp_seq_hdr,
+                                    packets_sent=packets_sent,
+                                    chunk_inner_idx=idx,
+                                    note="RTP sequence 비연속 — 빌더 재생성·중복 전송·패킷 드롭 의심 시 확인",
+                                )
+                        if last_rtp_ts_sent is not None:
+                            _exp_ts = (last_rtp_ts_sent + self._rtp_packet_builder.timestamp_increment) & 0xFFFFFFFF
+                            if _rtp_ts_hdr != _exp_ts:
+                                _delta = (_rtp_ts_hdr - last_rtp_ts_sent) & 0xFFFFFFFF
+                                logger.warning(
+                                    "rtp_timestamp_discontinuity",
+                                    call_id=self.media_session.call_id,
+                                    progress="rtp_timing",
+                                    expected_ts=_exp_ts,
+                                    actual_ts=_rtp_ts_hdr,
+                                    delta_from_prev=_delta,
+                                    packets_sent=packets_sent,
+                                    chunk_inner_idx=idx,
+                                    note="RTP timestamp 스텝 비정상 — 코덱/프레임 경계 불일치 추적",
+                                )
+                        last_rtp_seq_sent = _rtp_seq_hdr
+                        last_rtp_ts_sent = _rtp_ts_hdr
+                        
+                        if interval_from_prev_ms > 0:
+                            recent_intervals_ms.append(round(interval_from_prev_ms, 2))
+                            if len(recent_intervals_ms) > 50:
+                                recent_intervals_ms.pop(0)
+                        if packets_sent > 0 and packets_sent % 50 == 0 and recent_intervals_ms:
+                            _iv = recent_intervals_ms
+                            logger.info(
+                                "rtp_tts_send_window_stats",
+                                call_id=self.media_session.call_id,
+                                progress="rtp_timing",
+                                window_size=len(_iv),
+                                interval_min_ms=min(_iv),
+                                interval_max_ms=max(_iv),
+                                interval_avg_ms=round(sum(_iv) / len(_iv), 2),
+                                interval_violations_cumulative=interval_violations,
+                                behind_schedule_cumulative=behind_schedule_count,
+                                pcm_queue_size=self._pipecat_pcm_queue.qsize(),
+                                last_rtp_seq=_rtp_seq_hdr,
+                                last_rtp_ts=_rtp_ts_hdr,
+                                timing_error_ms=round(current_error_ms, 2),
+                                note="최근 N패킷 간격 요약 — 늘어짐 원인(간격 과대/과소) 상관 분석용",
+                            )
                     except Exception as send_err:
                         self.stats["rtp_tts_send_errors"] += 1
                         logger.error("rtp_sendto_failed",

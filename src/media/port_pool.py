@@ -128,7 +128,53 @@ class PortPoolManager:
                        utilization=self.get_utilization())
             
             return allocated_ports
-    
+
+    def allocate_media_pair(self, leg_id: str) -> List[int]:
+        """RTP/RTCP 한 쌍(2포트)만 할당.
+
+        전환 INVITE·아웃바운드 등 보조 레그는 오디오 1채널만 필요하므로
+        `allocate_ports`(호당 8포트) 대신 이 메서드를 사용한다.
+
+        Args:
+            leg_id: 풀에 등록할 고유 ID(예: transfer 레그 Call-ID, outbound Call-ID)
+
+        Returns:
+            [rtp_port, rtcp_port]
+
+        Raises:
+            PortPoolExhaustedError: 짝수 RTP 베이스 포트 부족
+            ValueError: 동일 leg_id로 이미 할당됨
+        """
+        with self._lock:
+            if leg_id in self._allocations:
+                raise ValueError(f"Ports already allocated for leg_id: {leg_id}")
+            if len(self._available_ports) < 1:
+                utilization = self.get_utilization()
+                logger.warning(
+                    "port_pool_exhausted_media_pair",
+                    leg_id=leg_id,
+                    available_pairs=len(self._available_ports),
+                    utilization=utilization,
+                )
+                raise PortPoolExhaustedError(
+                    f"Insufficient ports for media pair: need 1 RTP base, "
+                    f"available {len(self._available_ports)} (utilization: {utilization:.1%})"
+                )
+            port = min(self._available_ports)
+            self._available_ports.remove(port)
+            allocated_ports = [port, port + 1]
+            self._allocations[leg_id] = PortAllocation(
+                call_id=leg_id, ports=allocated_ports
+            )
+            logger.info(
+                "media_pair_allocated",
+                leg_id=leg_id,
+                ports=allocated_ports,
+                available_pairs=len(self._available_ports),
+                utilization=self.get_utilization(),
+            )
+            return allocated_ports
+
     def release_ports(self, call_id: str) -> bool:
         """포트 해제
         

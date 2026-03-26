@@ -45,7 +45,7 @@ class KnowledgeCreateRequest(BaseModel):
     source: Optional[str] = Field("api", description="출처 (api|hitl|call|seed)")
     call_id: Optional[str] = Field(None, description="통화 ID")
     # contact category용 추가 필드
-    phone_number: Optional[str] = Field(None, description="전화번호 (contact 시 필수)")
+    phone_number: Optional[str] = Field(None, description="전화번호 (contact 메타데이터, 선택)")
     department: Optional[str] = Field(None, description="부서명")
     name: Optional[str] = Field(None, description="담당자명")
 
@@ -107,9 +107,11 @@ async def post_knowledge(
                 query_params=query_params,
                 has_query=bool(query_params),
                 body_text_len=len(body.text),
+                body_text=body.text,
                 body_owner=body.owner,
                 body_category=body.category,
                 has_answer=bool(body.answer),
+                body_answer=body.answer,
                 source=body.source)
     
     text = body.text.strip()
@@ -142,17 +144,6 @@ async def post_knowledge(
             detail=f"category 필수이며 다음 중 하나: {sorted(VALID_CATEGORIES)}",
         )
     
-    # contact category 유효성 검증 추가
-    if category == "contact":
-        if not phone_number:
-            logger.warning("knowledge_api_validation_failed",
-                          reason="contact_missing_phone",
-                          category=category)
-            raise HTTPException(
-                status_code=400,
-                detail="contact category는 phone_number 필수"
-            )
-    
     # doc_type 유효성 검증 추가
     valid_doc_types = ["knowledge", "faq"]
     if doc_type not in valid_doc_types:
@@ -176,7 +167,8 @@ async def post_knowledge(
                 doc_type=doc_type,
                 source=source,
                 has_contact_info=bool(phone_number),
-                text_preview=text[:50])
+                text=text,
+                answer=answer)
 
     result = add_knowledge(
         vector_db=vector_db,

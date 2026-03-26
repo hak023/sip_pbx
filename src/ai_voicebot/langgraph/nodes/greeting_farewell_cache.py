@@ -97,7 +97,7 @@ async def check_greeting_farewell_cache_node(state: ConversationState) -> dict:
             call_id,
             "rag",
             "greeting_farewell_cache_hit",
-            query=query[:300],
+            query=query,
             score=round(score, 3),
             elapsed_sec=round(elapsed, 3),
             intent=intent,
@@ -106,6 +106,10 @@ async def check_greeting_farewell_cache_node(state: ConversationState) -> dict:
             "rag_cache_hit": True,
             "response": cached_answer.strip(),
             "confidence": metadata.get("confidence", 0.9),
+            "llm_rag_applied": [],
+            "llm_rag_context_source": "greeting_farewell_cache",
+            "greeting_farewell_cache_score": round(score, 3),
+            "rag_search_trace": {},
         }
     except Exception as e:
         logger.warning("greeting_farewell_cache_error", error=str(e))

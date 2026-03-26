@@ -279,7 +279,7 @@ class TemporalExpressionNormalizer:
         if not expressions:
             # 시간 표현 없음
             logger.debug("temporal_expression_not_found",
-                        query=query[:100],
+                        query=query,
                         note="시간 표현 없음, 원본 query 사용")
             return query
         
@@ -309,8 +309,8 @@ class TemporalExpressionNormalizer:
         # 로깅
         if replaced_count > 0:
             logger.info("temporal_expression_normalized",
-                       original=query[:100],
-                       normalized=rewritten[:100],
+                       original=query,
+                       normalized=rewritten,
                        expressions_found=[e['text'] for e in expressions],
                        replaced_count=replaced_count,
                        base_time=self.base_time.isoformat(),

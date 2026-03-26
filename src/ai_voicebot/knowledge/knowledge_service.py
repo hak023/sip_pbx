@@ -59,14 +59,12 @@ def add_knowledge(
 ) -> Dict[str, Any]:
     """
     지식 1건 추가. category 필수 (설계 §3.2).
-    greeting_phase1/2, farewell 이면 answer 사용해 qa_cache 즉시 upsert.
+    greeting_phase1/2, farewell 이면 qa_cache 즉시 upsert (answer 우선, 없으면 text를 응답 문구로 사용).
     doc_type: knowledge | faq (KNOWLEDGE_DOC_TYPE_DESIGN)
     source: api | hitl | call | seed
     
-    contact category 추가 필드:
-        phone_number: 전화번호 (contact 시 필수)
-        department: 부서명
-        name: 담당자명
+    contact category 추가 필드 (선택, 메타데이터·호전환용):
+        phone_number, department, name
     """
     if not text or not owner or not category:
         return {"ok": False, "error": "text, owner, category 필수"}
@@ -75,26 +73,25 @@ def add_knowledge(
         return {"ok": False, "error": "owner가 비었거나 정규화 후 비어 있습니다"}
     if category not in VALID_CATEGORIES:
         return {"ok": False, "error": f"category must be one of {sorted(VALID_CATEGORIES)}"}
-    
-    # contact category 유효성 검증
-    if category == "contact":
-        if not phone_number:
-            return {"ok": False, "error": "contact category는 phone_number 필수"}
-    
+
     embedding = _get_embedding(embedder, text)
     if not embedding:
         return {"ok": False, "error": "embedder not available or embedding failed"}
 
     doc_id = f"kb_{uuid.uuid4().hex[:16]}"
+    _ts = datetime.now().isoformat()
     metadata = {
         "owner": owner,
         "category": category,
         "doc_type": doc_type,
         "source": source,
-        "created_at": datetime.now().isoformat(),
+        "created_at": _ts,
+        "extraction_source": source,
+        "extraction_timestamp": _ts,
     }
     if call_id:
         metadata["call_id"] = call_id
+        metadata["extraction_call_id"] = call_id
     
     # contact category 메타데이터 추가
     if category == "contact":
@@ -118,10 +115,11 @@ def add_knowledge(
 
     result = {"ok": True, "doc_id": doc_id, "category": category}
 
-    # 즉시 캐싱 (설계 §3.2) — API에서 needs_immediate_cache True일 때 immediate_cache_for_knowledge 호출
-    if category in IMMEDIATE_CACHE_CATEGORIES and answer:
-        response_text = (answer or text).strip()
-        if response_text:
+    # 즉시 캐싱 — API에서 needs_immediate_cache True일 때 immediate_cache_for_knowledge 호출
+    if category in IMMEDIATE_CACHE_CATEGORIES:
+        ans = (answer or "").strip()
+        response_text = (ans if ans else text).strip()
+        if len(response_text) >= 2:
             result["needs_immediate_cache"] = True
             result["_cache_query_text"] = text
             result["_cache_answer_text"] = response_text
