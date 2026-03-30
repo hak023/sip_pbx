@@ -127,31 +127,193 @@ class CallManager:
                 )
                 logger.info("✅ [Transfer] TransferManager connected to AI Orchestrator")
         
-            # ★ OutboundCallManager를 AI Orchestrator에 연결
+            # ★ OutboundCallManager를 Pipecat 파이프라인에 연결
             outbound_manager = getattr(self._sip_endpoint, '_outbound_manager', None)
             if outbound_manager:
-                # start_ai 콜백: 아웃바운드 200 OK 시 AI 시작
-                async def _start_outbound_ai(call_id, outbound_context):
-                    if ai_orchestrator:
-                        await ai_orchestrator.handle_outbound_call(call_id, outbound_context)
-                
-                # stop_ai 콜백: 부분 결과 수집
-                async def _stop_outbound_ai(call_id):
-                    if ai_orchestrator and ai_orchestrator.call_id == call_id:
-                        result = await ai_orchestrator.get_partial_outbound_result()
-                        await ai_orchestrator.end_call()
-                        return result
-                    return None
-                
+                _self_ref = self  # CallManager 약한 참조 (클로저 순환 방지)
+
+                async def _start_outbound_ai(call_id: str, outbound_context: dict):
+                    """아웃바운드 200 OK 수신 시 Pipecat 파이프라인 기동.
+
+                    인바운드 handle_no_answer_timeout과 동일한 Pipecat 경로를 사용한다.
+                    - RTP Worker는 sip_endpoint.handle_outbound_response(200 OK) 시 이미 생성됨
+                    - enable_pipecat_mode() → build_and_run() → _pipecat_tasks 등록
+                    """
+                    logger.info("outbound_pipecat_start",
+                                call_id=call_id,
+                                outbound_id=outbound_context.get("outbound_id"),
+                                has_pipecat_builder=_self_ref.pipecat_builder is not None)
+
+                    if not _self_ref.pipecat_builder:
+                        logger.error("outbound_pipecat_no_builder",
+                                     call_id=call_id,
+                                     note="pipecat_builder가 없음 — AI 응대 불가")
+                        return
+
+                    # RTP Worker 가져오기 (send_outbound_invite에서 미디어 포트 할당 완료)
+                    rtp_worker = None
+                    if _self_ref._sip_endpoint:
+                        rtp_worker = _self_ref._sip_endpoint._rtp_workers.get(call_id)
+
+                    if not rtp_worker:
+                        logger.error("outbound_pipecat_no_rtp_worker",
+                                     call_id=call_id,
+                                     note="RTP Worker 없음 — sip_endpoint에서 outbound RTP 등록 확인")
+                        return
+
+                    # Pipecat 모드로 전환 (오디오 큐 생성·RTP→파이프라인 라우팅)
+                    rtp_worker.enable_pipecat_mode()
+
+                    # 대시보드 등록 (활성 통화 목록)
+                    callee_number = outbound_context.get("callee_number", "")
+                    _self_ref.ai_enabled_calls.add(call_id)
+                    try:
+                        from src.api.routers.calls import register_active_call
+                        register_active_call(
+                            call_id=call_id,
+                            callee=callee_number,
+                            caller=outbound_context.get("caller_display_name", ""),
+                            is_ai_handled=True,
+                        )
+                    except Exception as _e:
+                        logger.debug("outbound_register_active_call_failed",
+                                     call_id=call_id, error=str(_e))
+
+                    # WebSocket call_started 이벤트
+                    try:
+                        from src.websocket import manager as ws_manager
+                        await ws_manager.emit_call_started(call_id, {
+                            "callee": callee_number,
+                            "caller": outbound_context.get("caller_display_name", ""),
+                            "is_ai_handled": True,
+                            "status": "AI 아웃바운드 응대 중",
+                            "sip_phase": "ai_active",
+                            "outbound_id": outbound_context.get("outbound_id", ""),
+                            "purpose": outbound_context.get("purpose", ""),
+                        })
+                    except Exception as _e:
+                        logger.warning("outbound_emit_call_started_failed",
+                                       call_id=call_id, error=str(_e))
+
+                    # STT / TTS 통화별 인스턴스 생성
+                    _stt_pipecat = None
+                    _tts_pipecat = None
+                    try:
+                        from src.ai_voicebot.factory import (
+                            create_google_stt_service_per_pipeline,
+                            create_google_tts_service_per_pipeline,
+                        )
+                        _stt_pipecat = await create_google_stt_service_per_pipeline()
+                        _tts_pipecat = await create_google_tts_service_per_pipeline(call_id=call_id)
+                    except Exception as svc_err:
+                        logger.error("outbound_pipecat_stt_tts_failed",
+                                     call_id=call_id, error=str(svc_err))
+                        _stt_pipecat = getattr(_self_ref.ai_orchestrator, 'stt', None)
+                        _tts_pipecat = getattr(_self_ref.ai_orchestrator, 'tts', None)
+
+                    # VAD 래핑
+                    _vad_raw = getattr(_self_ref.ai_orchestrator, 'vad', None)
+                    _vad_processor = None
+                    if _vad_raw:
+                        try:
+                            from src.ai_voicebot.pipecat.processors.vad_processor import PipecatVADProcessor
+                            _vad_processor = PipecatVADProcessor(
+                                vad_detector=_vad_raw,
+                                enable_barge_in=True,
+                            )
+                        except Exception as _e:
+                            logger.warning("outbound_vad_wrap_failed",
+                                           call_id=call_id, error=str(_e))
+
+                    # HITL 콜백
+                    _hitl_on_alert = None
+                    try:
+                        from src.websocket import manager as ws_manager
+                        async def _outbound_hitl_alert(context: dict):
+                            cid = context.get("call_id", "")
+                            question = context.get("question", "")
+                            urgency = context.get("urgency", "medium")
+                            await ws_manager.emit_hitl_requested(cid, question, context, urgency)
+                        _hitl_on_alert = _outbound_hitl_alert
+                    except Exception:
+                        pass
+
+                    # Knowledge Service
+                    _knowledge_service = None
+                    try:
+                        from src.services.knowledge_service import get_knowledge_service
+                        _knowledge_service = get_knowledge_service()
+                    except Exception:
+                        pass
+
+                    # RAG 엔진
+                    _rag = getattr(_self_ref.ai_orchestrator, 'rag', None) if _self_ref.ai_orchestrator else None
+
+                    # 아웃바운드 전용 시스템 프롬프트 (목적·질문 주입)
+                    _purpose = outbound_context.get("purpose", "")
+                    _questions = outbound_context.get("questions", [])
+                    _display_name = outbound_context.get("caller_display_name", "AI 봇")
+                    _qs_text = "\n".join(f"- {q}" for q in _questions) if _questions else ""
+                    _outbound_system_prompt = (
+                        f"당신은 {_display_name}를 대표하는 AI 어시스턴트입니다. "
+                        f"이 통화의 목적은 다음과 같습니다: {_purpose}\n"
+                        + (f"확인이 필요한 사항:\n{_qs_text}\n" if _qs_text else "")
+                        + "상대방과 자연스럽게 대화하며 목적을 달성하세요. "
+                        "모든 질문에 대한 답변을 얻으면 정중히 통화를 마무리하세요."
+                    )
+
+                    # 미션 완료 시 SIP BYE 전송 콜백
+                    async def _outbound_hangup(cid: str):
+                        logger.info("outbound_mission_hangup", call_id=cid)
+                        if _self_ref._sip_endpoint:
+                            await _self_ref._sip_endpoint.send_outbound_bye(cid)
+
+                    _coro = _self_ref.pipecat_builder.build_and_run(
+                        callee_number,
+                        rtp_worker,
+                        vad=_vad_processor,
+                        stt=_stt_pipecat,
+                        tts=_tts_pipecat,
+                        llm_client=getattr(_self_ref.ai_orchestrator, 'llm', None) if _self_ref.ai_orchestrator else None,
+                        rag_engine=_rag,
+                        knowledge_service=_knowledge_service,
+                        hitl_on_alert=_hitl_on_alert,
+                        embedder=getattr(_rag, 'embedder', None) if _rag else None,
+                        vector_db=getattr(_rag, 'vector_db', None) if _rag else None,
+                        system_prompt=_outbound_system_prompt,
+                        outbound_purpose=_purpose,
+                        outbound_questions=_questions,
+                        hangup_callback=_outbound_hangup,
+                    )
+                    pipeline_task = asyncio.create_task(_coro)
+                    _self_ref._pipecat_tasks[call_id] = pipeline_task
+
+                    def _on_done(t):
+                        _self_ref._pipecat_tasks.pop(call_id, None)
+                        _self_ref.ai_enabled_calls.discard(call_id)
+                        logger.info("outbound_pipecat_pipeline_done", call_id=call_id)
+                    pipeline_task.add_done_callback(_on_done)
+
+                    logger.info("outbound_pipecat_pipeline_started",
+                                call_id=call_id,
+                                outbound_id=outbound_context.get("outbound_id"),
+                                callee=callee_number)
+
+                async def _stop_outbound_ai(call_id: str):
+                    """아웃바운드 통화 중단 — Pipecat 파이프라인 태스크 취소."""
+                    logger.info("outbound_pipecat_stop", call_id=call_id)
+                    cancelled = await _self_ref.cancel_pipeline(call_id)
+                    _self_ref.ai_enabled_calls.discard(call_id)
+                    logger.info("outbound_pipecat_cancelled",
+                                call_id=call_id, cancelled=cancelled)
+                    return None  # 부분 결과는 Pipecat 경로에서 별도 수집 불필요
+
                 outbound_manager.set_callbacks(
                     start_ai=_start_outbound_ai,
                     stop_ai=_stop_outbound_ai,
                 )
-                
-                # 아웃바운드 완료 콜백 (AI → OutboundManager)
-                ai_orchestrator.set_outbound_complete_callback(outbound_manager.on_task_completed)
-                
-                logger.info("✅ [Outbound] OutboundCallManager connected to AI Orchestrator")
+
+                logger.info("✅ [Outbound] OutboundCallManager connected to Pipecat pipeline")
         
         logger.info("✅ [AI Injection] AI Orchestrator injected into CallManager",
                    ai_available=ai_orchestrator is not None)

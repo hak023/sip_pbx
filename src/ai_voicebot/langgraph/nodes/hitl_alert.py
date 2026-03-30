@@ -15,7 +15,7 @@ from src.ai_voicebot.langgraph.state import ConversationState
 
 logger = structlog.get_logger(__name__)
 
-HITL_CONFIDENCE_THRESHOLD = 0.3
+HITL_CONFIDENCE_THRESHOLD = 0.15  # RAG similarity_threshold=0.35 기준 최저 confidence ~0.16 수준에 맞춤
 MAX_LOW_CONFIDENCE_TURNS = 2  # 연속 낮은 신뢰도 N회 시 HITL
 
 

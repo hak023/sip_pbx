@@ -585,12 +585,23 @@ async def start_server() -> None:
             category = resolve_hitl_kb_category(data.get("category"), "")
 
         q_from_fifo = (req_ctx.question if req_ctx else "").strip()
-        question = q_from_client or oq or q_from_fifo
-        if question and not q_from_client and q_from_fifo:
-            logger.info(
-                "hitl_kb_question_from_fifo call_id=%s note=클라이언트_질문_누락_FIFO로_보강",
-                call_id,
-            )
+        # rewritten_query: LLM이 정제한 쿼리 — STT 오인식("기 삼성" 등) 보정 목적
+        # KB 저장 Q 텍스트 우선순위: 클라이언트 전달 > original_question > rewritten_query > STT 원문(q_from_fifo)
+        q_rewritten = (getattr(req_ctx, "rewritten_query", "") if req_ctx else "").strip()
+        question = q_from_client or oq or q_rewritten or q_from_fifo
+        if question and not q_from_client:
+            if q_rewritten and not oq:
+                logger.info(
+                    "hitl_kb_question_from_rewritten_query call_id=%s "
+                    "note=STT오인식_보정_rewritten_query_사용 rewritten_preview=%s",
+                    call_id,
+                    q_rewritten[:60],
+                )
+            elif q_from_fifo and not oq and not q_rewritten:
+                logger.info(
+                    "hitl_kb_question_from_fifo call_id=%s note=클라이언트_질문_누락_FIFO로_보강",
+                    call_id,
+                )
         if not question:
             logger.warning(
                 "hitl_kb_question_empty call_id=%s save_to_kb=%s note=지식반영_및_콜인사이트_스킵_가능",

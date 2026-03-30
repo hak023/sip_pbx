@@ -53,6 +53,12 @@ class ConversationState(TypedDict, total=False):
     needs_follow_up: bool         # 모르는 내용 응답 시, 나중에 확인·연락 필요
     follow_up_user_query: str     # 사용자가 물어본 내용 (확인할 사항)
 
+    # ── 아웃바운드 미션 추적 ──
+    outbound_questions: List[str]          # 확인해야 할 질문 목록 (아웃바운드 전용)
+    outbound_answers: dict                 # {질문: 답변} 수집된 응답 (아웃바운드 전용)
+    outbound_mission_done: bool            # 모든 질문 답변 완료 여부
+    outbound_purpose: str                  # 통화 목적 (아웃바운드 전용)
+
     # ── 내부 참조 (노드 간 공유) ──
     _llm_client: object           # LLM 클라이언트 참조
     _rag_engine: object           # RAG 엔진 참조
@@ -61,3 +67,4 @@ class ConversationState(TypedDict, total=False):
     _org_manager: object          # 기관 정보 관리자 참조
     _owner: str                    # 착신번호 (테넌트 ID, 예: "1004")
     _call_id: Optional[str]        # 통화 ID (로그/DB 연계용)
+    _hangup_callback: object       # 미션 완료 시 BYE 전송 콜백 (아웃바운드 전용)

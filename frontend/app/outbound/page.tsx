@@ -157,7 +157,7 @@ export default function OutboundPage() {
         "/api/outbound/create",
         {
           method: "POST",
-          body: {
+          body: JSON.stringify({
             caller_number: callerNumber,
             callee_number: calleeNumber,
             purpose,
@@ -165,7 +165,7 @@ export default function OutboundPage() {
             caller_display_name: displayName,
             max_duration: maxDuration,
             retry_on_no_answer: retryOnNoAnswer,
-          },
+          }),
         }
       );
 
@@ -176,7 +176,7 @@ export default function OutboundPage() {
         setQuestions([""]);
         fetchData();
       } else {
-        alert(`생성 실패: ${res.error || "알 수 없는 오류"}`);
+        alert(`생성 실패: ${res.ok === false ? res.message : "알 수 없는 오류"}`);
       }
     } catch (e: any) {
       alert(`생성 실패: ${e?.message || e}`);
@@ -193,7 +193,7 @@ export default function OutboundPage() {
         "/api/outbound/cancel",
         {
           method: "POST",
-          body: { outbound_id: outboundId, reason: "operator_cancel" },
+          body: JSON.stringify({ outbound_id: outboundId, reason: "operator_cancel" }),
         }
       );
 
@@ -201,7 +201,7 @@ export default function OutboundPage() {
         alert("취소되었습니다.");
         fetchData();
       } else {
-        alert(`취소 실패: ${res.error}`);
+        alert(`취소 실패: ${res.ok === false ? res.message : ""}`);
       }
     } catch (e: any) {
       alert(`취소 실패: ${e?.message || e}`);
@@ -216,7 +216,7 @@ export default function OutboundPage() {
         "/api/outbound/retry",
         {
           method: "POST",
-          body: { outbound_id: outboundId },
+          body: JSON.stringify({ outbound_id: outboundId }),
         }
       );
 
@@ -224,7 +224,7 @@ export default function OutboundPage() {
         alert(`재시도가 시작되었습니다.\n새 ID: ${res.data.new_outbound_id}`);
         fetchData();
       } else {
-        alert(`재시도 실패: ${res.error}`);
+        alert(`재시도 실패: ${res.ok === false ? res.message : ""}`);
       }
     } catch (e: any) {
       alert(`재시도 실패: ${e?.message || e}`);

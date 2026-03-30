@@ -349,7 +349,7 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
             vector_db=vector_db,
             embedder=embedder,
             top_k=rag_config.get("top_k", 8),
-            similarity_threshold=rag_config.get("similarity_threshold", 0.38),
+            similarity_threshold=rag_config.get("similarity_threshold", 0.35),
             reranking_enabled=rag_config.get("reranking_enabled", False),
             doc_type_allowlist=_dt_allow,
         )

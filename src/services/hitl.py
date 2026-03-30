@@ -36,6 +36,7 @@ class HitlRequestContext:
     intent: str
     alert_type: str
     ts: float
+    rewritten_query: str = ""  # LLM이 정제한 검색 쿼리 (STT 오인식 보정용)
 
 
 class HITLService:
@@ -149,25 +150,34 @@ class HITLService:
         question: str,
         intent: str = "",
         alert_type: str = "",
+        rewritten_query: str = "",
     ) -> None:
-        """에이전트가 needs_human일 때 호출 — 이후 운영자 응답과 intent 매칭용."""
+        """에이전트가 needs_human일 때 호출 — 이후 운영자 응답과 intent 매칭용.
+
+        rewritten_query: LLM이 정제한 검색 쿼리. STT 오인식("기 삼성" 등)이 포함된
+        question 대신 KB 저장 Q 텍스트로 우선 사용된다.
+        """
         if not call_id:
             return
         q = (question or "").strip()
+        rq = (rewritten_query or "").strip()
         self._hitl_request_fifo.setdefault(call_id, deque()).append(
             HitlRequestContext(
                 question=q,
                 intent=(intent or "").strip(),
                 alert_type=(alert_type or "").strip(),
                 ts=time.time(),
+                rewritten_query=rq,
             )
         )
         logger.info(
-            "hitl_request_context_recorded call_id=%s question_len=%s intent=%s queue_depth=%s",
+            "hitl_request_context_recorded call_id=%s question_len=%s intent=%s "
+            "queue_depth=%s has_rewritten_query=%s",
             call_id,
             len(q),
             intent,
             len(self._hitl_request_fifo[call_id]),
+            bool(rq),
         )
 
     def pop_hitl_request_context(self, call_id: str) -> Optional[HitlRequestContext]:

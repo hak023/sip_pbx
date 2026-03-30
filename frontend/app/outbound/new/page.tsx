@@ -73,7 +73,7 @@ export default function NewOutboundCallPage() {
 
     setSubmitting(true);
     try {
-      const res = await axios.post(`${API_BASE}/api/outbound/`, {
+      const res = await axios.post(`${API_BASE}/api/outbound/create`, {
         caller_number: form.caller_number,
         callee_number: form.callee_number,
         purpose: form.purpose,

@@ -9,6 +9,30 @@
 
 ## 1. 시스템 개요
 
+### 1.0 배경 및 목표
+
+**배경: 기존 AI 응대 CallBot의 한계**
+
+- 인위적인 시나리오 구축에 따른 초기 투자 비용으로 **무거운 구축형 시스템**에 의존하는 경우가 많다.
+- Call Server ARS의 **경직된 Tree 구조**로 사용자와 관리자 모두 활용 범위가 제한된다.
+- **고정된 답변(문제은행 형태)** 위주로 응답 범위가 좁고 유연하지 않다.
+
+**목표: Agentic AI 차세대 AICC 솔루션**
+
+- 기존 시나리오 기반 챗봇·콜봇의 한계를 넘어 **스스로 학습하고 행동하는(Agentic)** 차세대 AI 컨택센터(AICC) 솔루션을 지향한다.
+- 상담 이력의 **실시간 자산화(Active RAG)**와 **인간–AI 협업 루프(HITL)**로 시간이 지날수록 운영 비용이 줄고 지능이 높아지는 **Zero Marginal Cost** 모델을 추구한다.
+- **자율형 AI 콜봇(Agentic AI CallBot)**을 SIP B2BUA·RAG·음성 파이프라인과 결합해 구현한다.
+
+**기존 시스템 vs 제안 시스템 비교**
+
+| 구분 | 기존 시스템 (As-Is) | 제안 시스템 (To-Be) |
+|---|---|---|
+| 지식 구축 | 수개월의 시나리오 및 답변셋 구축 공수 발생 | 통화 이력 기반 자동 생성(Auto-Gen) 및 즉시 반영 |
+| ARS 구조 | 고정된 트리(Tree) 구조의 낮은 유연성 | 목적 지향형 AI Agent의 유연한 의도 파악 |
+| 응대 품질 | Rule-based 기반의 단편적 문장 매칭 | LLM 기반 추론(Reasoning) 및 해결(Action) |
+| 음성 경험 | 기계적 TTS 및 높은 지연 시간(Latency) | Natural Voice 기반의 인간 수준 대화 체감 |
+| 비즈니스 민첩성 | 스크립트 변경 시 시스템 재설계 필요 | VectorDB 연동을 통한 실시간 지식 최신화 |
+
 ### 1.1 핵심 가치
 
 | 가치 | 설명 |
@@ -177,21 +201,53 @@ RTP 수신 오디오
   → [5] LLM 병합 호출 — intent + search_query 동시 생성 (1회 LLM)
 ```
 
-**17가지 의도**:
+**17가지 의도** (참고 목록):
 `greeting`, `farewell`, `affirm`, `deny`, `gratitude`, `doubt`,
 `positive_reaction`, `negative_reaction`, `chitchat`, `repeat`,
 `clarification`, `help`, `question`, `complaint`, `transfer`,
 `out_of_scope`, `nlu_fallback`
 
-**응답 경로**:
+**17개 의도 분류 및 처리 경로 상세**
+
+| 그룹 | 의도 | 처리 방식 | LLM 호출 | 지식베이스 활용 |
+|---|---|---|---|---|
+| **A: 즉시 응답** | greeting | ChromaDB persona 컬렉션에서 인사말 조회 | 0회 | persona KB |
+| **A: 즉시 응답** | farewell | ChromaDB에서 작별 인사 조회 | 0회 | persona KB |
+| **B: 템플릿** | affirm, deny, gratitude, doubt, positive_reaction, negative_reaction, repeat | 고정 템플릿 랜덤 선택 또는 마지막 발화 재생 | 0회 | 없음 |
+| **C: 소셜** | chitchat | 페르소나 임베딩 유사도 < 0.6 → 페르소나 템플릿 응답 | 0~1회 | persona KB |
+| **D: 지식 검색** | question, complaint, clarification, help | 시맨틱 캐시 → RAG 검색 → LLM → HITL 판단 | 1~2회 | qa_cache + knowledge KB |
+| **E: 특수 처리** | transfer | 호 전환 로직 실행 (TransferManager) | 0회 | 없음 |
+| **F: 범위 외** | out_of_scope | 페르소나 기반 범위 외 응답 | 0~1회 | persona KB |
+| **G: 폴백** | nlu_fallback | HITL 에스컬레이션 또는 모름 응답 | 1회 | 없음 |
+
+**지식베이스(ChromaDB) 활용 경로**
+
+```
+사용자 발화
+  → [의도 분류]
+      ├─ greeting/farewell → persona 컬렉션 직접 조회 (0ms)
+      ├─ chitchat/out_of_scope → persona 컬렉션 템플릿 조회
+      ├─ question/complaint/help/clarification
+      │     → qa_cache 컬렉션 시맨틱 검색 (유사도≥0.85 → 즉시 응답)
+      │     → knowledge 컬렉션 RAG 검색 (top 3 문서)
+      │     → LLM에 RAG 컨텍스트 주입 → 응답 생성
+      │     → confidence < 0.3 → HITL 에스컬레이션
+      │     → HITL 답변 → knowledge 컬렉션 자동 저장 (학습)
+      └─ nlu_fallback → HITL 에스컬레이션
+```
+
+**응답 경로 요약**
 
 | 의도 | 처리 | LLM 호출 |
 |---|---|---|
-| greeting / farewell | ChromaDB에서 직접 인사말 조회 | 0회 (~0.01초) |
+| greeting / farewell | ChromaDB persona에서 직접 인사·작별 조회 | 0회 (~0.01초) |
 | affirm, deny 등 B그룹 | 고정 템플릿 랜덤 선택 | 0회 |
 | repeat | 마지막 AI 발화 재생 | 0회 |
-| chitchat | 페르소나 템플릿 또는 LLM | 0~1회 |
-| question, complaint 등 | 캐시 → RAG → LLM → HITL | 1~2회 |
+| chitchat | 페르소나 템플릿(유사도 기준) 또는 LLM | 0~1회 |
+| question, complaint, clarification, help | 캐시 → RAG → LLM → HITL | 1~2회 |
+| transfer | TransferManager 호 전환 | 0회 |
+| out_of_scope | 페르소나 기반 범위 외 | 0~1회 |
+| nlu_fallback | HITL 또는 모름 응답 | 1회 |
 
 **기능적 장점**:
 - 그래프 컴파일 캐시로 ~7초 재컴파일 방지
@@ -333,6 +389,15 @@ _hitl_response_queue ◄── 운영자 API 응답
 - 유용성 판단(LLM) + 품질 게이트로 저품질 지식 유입 방지
 - 시간이 지날수록 지식베이스가 자동으로 풍부해지는 학습 효과
 
+**유저간 통화 기반 지식 자동 성장**
+
+- 상담원(유저)과 고객 간 통화 내용이 **실시간 STT**로 텍스트화된다.
+- **화자 분리(Diarization)**: 발신자(Caller) 질문 / 착신자(Callee) 답변을 구분·태깅한다.
+- LLM이 인사말·잡담을 제거한 뒤 의미 단위(Chunk)로 나누고, **질문–해결책(Q&A) 쌍**을 자동 추출한다.
+- **메타데이터 구조화**: 문제 유형, 해결 방법, 카테고리 등과 함께 ChromaDB에 저장한다.
+- **중복 방지**: 기존 지식과 **코사인 유사도**를 비교한다. 유사도 **> 0.9**이면 **upsert(업데이트)**, 신규이면 **insert**한다.
+- **효과**: 별도 구축 없이 사람의 통화 정보를 자산화하여 지식 정보 시스템 구축 비용을 줄인다.
+
 ### 2.9 페르소나 서비스
 
 **기능**: 조직별 AI 봇 성격을 정의하고, 발화의 업무 관련성을 판단
@@ -374,7 +439,7 @@ _hitl_response_queue ◄── 운영자 API 응답
 **유저 스토리**: 운영자가 웹 브라우저에서 현재 진행 중인 AI 통화를 실시간으로
 모니터링하고, 필요 시 HITL 응답이나 호 전환으로 개입한다.
 
-**주요 화면**:
+**주요 화면 (요약)**
 
 | 화면 | 기능 |
 |---|---|
@@ -383,12 +448,73 @@ _hitl_response_queue ◄── 운영자 API 응답
 | **통화이력** | 전체 통화 목록, 녹음 재생, 트랜스크립트, CDR 상세 |
 | **로그인** | 테넌트(내선번호) 선택 로그인 |
 
+**대시보드 (메인 화면)**
+
+- **실시간 메트릭 카드**: 총 통화수, AI 처리율, 평균 응답시간, 활성 통화수
+- **실시간 통화 카드**: 현재 진행 중인 AI 통화 목록, 호 전환 버튼
+- **STT 피드**: 사용자 발화 실시간 텍스트 표시
+- **TTS 피드**: AI 응답 텍스트 실시간 표시
+- **AI 사고 처리 과정 트래킹 (CDR)**: 의도 분류, RAG 검색, LLM 응답, HITL 요청 등 처리 단계별 로그
+- **HITL 요청 패널**: AI가 모르는 질문 실시간 알림 + 운영자 답변 입력창
+- **통화이력 (대시보드 하단)**: 최근 통화 목록, 녹음 재생 버튼
+
+**통화이력 화면**
+
+- 전체 통화 목록 (날짜, 발신번호, 착신번호, 통화시간, AI 처리 여부)
+- **녹음 재생**: 브라우저 내 오디오 플레이어
+- **트랜스크립트**: STT 변환 텍스트 전문
+- **CDR 상세**: 통화 중 AI 처리 단계별 기록 (`call_data_record` 로그)
+
+**AI 발신 기능**
+
+- 발신 목적(`purpose`) 및 확인 질문 목록(`questions`) 설정
+- AI 봇이 지정 번호로 발신 후 목적에 따른 미션 수행
+- 발신 이력 및 상태 관리 (`pending` / `calling` / `answered` / `completed` / `failed`)
+- **재시도(retry)** 기능
+
+**지식베이스 관리**
+
+- 지식 **CRUD** (카테고리별 분류)
+- **TXT 파일 업로드** (자동 청킹 및 임베딩)
+- **페르소나 설정** (AI 봇 역할 및 업무 범위 정의)
+
 **실시간 통신**:
 - Socket.IO (`ws://localhost:8001`)로 통화 이벤트 수신
 - 연결 끊김 시 REST 폴링(20초) 자동 전환
 - 재연결 성공 시 전체 상태 갱신
 
 **기술 스택**: Next.js 14 + Tailwind CSS + Radix UI + Socket.IO Client
+
+### 2.12 멀티 테넌트 구조 (테넌트별 독립 AI)
+
+**기능**: SIP 내선(테넌트) 단위로 지식·캐시·페르소나를 격리하여, 최소 설정으로 테넌트별 독립 AI 봇을 운용한다.
+
+- **테넌트 = SIP 내선번호** (예: 1004, 1005, 1006).
+- 테넌트별 **독립 ChromaDB 컬렉션** (`owner` 필드로 격리):
+  - `knowledge_{owner}`: 지식베이스
+  - `qa_cache_{owner}`: 시맨틱 캐시
+  - `persona_{owner}`: 페르소나 정의
+- **최소 설정으로 나만의 AI 봇 운용**:
+  1. SIP 내선 등록 (기존 IP PBX 연동)
+  2. 페르소나 설정 (역할, 업무 범위, 인사말)
+  3. 초기 지식 업로드 (선택, TXT 파일)
+  4. 이후 통화 이력으로 자동 학습 시작
+- 유저간 통화가 쌓일수록 **해당 테넌트의 AI만** 독립적으로 성장한다.
+- 다른 테넌트의 지식·캐시·페르소나와 **완전 격리** → 보안 및 개인화 보장.
+
+**Active RAG 자율 학습 사이클**
+
+```
+유저간 통화 발생
+  → STT 실시간 변환
+    → 화자 분리 (발신자 질문 / 착신자 답변)
+      → LLM 품질 게이트 (유용성 판단)
+        → 중복 검사 (코사인 유사도 > 0.9 → upsert)
+          → ChromaDB 저장 (해당 owner 컬렉션)
+            → 다음 통화부터 RAG에 즉시 활용
+              → 동일 질문 AI 자동 응답 (HITL 불필요)
+                → 한계 비용(Marginal Cost) 점진적 감소
+```
 
 ---
 

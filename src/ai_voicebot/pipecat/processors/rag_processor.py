@@ -135,6 +135,14 @@ class RAGLLMProcessor(FrameProcessor):
             logger.info("hitl_manager_initialized", has_on_alert=hitl_on_alert is not None)
         except Exception as e:
             logger.debug("hitl_manager_not_available", error=str(e))
+
+        # 아웃바운드 미션 추적
+        # hangup_callback: 미션 완료 시 호출 → SIP BYE 전송 (아웃바운드 전용)
+        self._outbound_questions: List[str] = []
+        self._outbound_answers: dict = {}
+        self._outbound_mission_done: bool = False
+        self._outbound_purpose: str = ""
+        self._hangup_callback: Optional[Callable[..., Any]] = None
         
         # Phase 2: LangGraph Agent 초기화 시도
         try:
@@ -160,6 +168,162 @@ class RAGLLMProcessor(FrameProcessor):
             # Legacy fallback: 기존 messages 기반
             self._messages: List[dict] = []
     
+    def set_outbound_mission(
+        self,
+        purpose: str,
+        questions: List[str],
+        hangup_callback: Optional[Callable[..., Any]] = None,
+    ) -> None:
+        """아웃바운드 미션 설정. build_and_run 이후 pipeline._rag_llm을 통해 호출한다."""
+        self._outbound_purpose = purpose
+        self._outbound_questions = list(questions)
+        self._outbound_answers = {}
+        self._outbound_mission_done = False
+        self._hangup_callback = hangup_callback
+        logger.info(
+            "outbound_mission_set",
+            call_id=self._call_id,
+            purpose=purpose,
+            question_count=len(questions),
+            has_hangup_callback=hangup_callback is not None,
+        )
+
+    async def _check_outbound_mission_complete(self, ai_response: str) -> None:
+        """AI 응답 후 아웃바운드 미션 완료 여부를 판단한다.
+
+        질문이 없는 경우: purpose 달성 여부를 LLM으로 판단.
+        질문이 있는 경우: 대화 이력에서 각 질문에 대한 답변 수집 여부 확인.
+        모든 질문에 답변이 수집되면 farewell TTS 후 hangup_callback 호출.
+        """
+        if self._outbound_mission_done:
+            return
+        if not self._outbound_purpose and not self._outbound_questions:
+            return
+
+        call_id = self._call_id or ""
+
+        # 대화 이력 수집
+        history_text = ""
+        if self._agent_available and self._agent:
+            try:
+                msgs = self._agent._state.get("messages", [])
+                history_text = "\n".join(
+                    f"{'사용자' if m.get('role') == 'user' else 'AI'}: {m.get('content', '')}"
+                    for m in msgs[-20:]
+                )
+            except Exception:
+                pass
+
+        if not history_text:
+            return
+
+        # 질문 목록이 있으면 각 질문 답변 수집 여부 LLM 판단
+        if self._outbound_questions:
+            unanswered = [q for q in self._outbound_questions if q not in self._outbound_answers]
+            if not unanswered:
+                # 이미 모두 수집됨
+                await self._trigger_mission_complete(call_id)
+                return
+
+            # LLM에게 미수집 질문 중 답변이 나왔는지 확인
+            check_prompt = (
+                f"다음은 AI 아웃바운드 통화 대화 기록입니다.\n\n"
+                f"[대화 기록]\n{history_text}\n\n"
+                f"[확인해야 할 질문 목록]\n"
+                + "\n".join(f"{i+1}. {q}" for i, q in enumerate(unanswered))
+                + "\n\n위 질문들 중 상대방이 명확히 답변한 것이 있으면 JSON으로 알려주세요.\n"
+                "형식: {\"answered\": [{\"question\": \"질문\", \"answer\": \"답변\"}], \"all_done\": true/false}\n"
+                "답변이 없으면: {\"answered\": [], \"all_done\": false}"
+            )
+            try:
+                result_text = None
+                if hasattr(self._llm, 'generate_response'):
+                    result_text = await self._llm.generate_response(check_prompt, context_docs=[])
+                elif hasattr(self._llm, 'generate'):
+                    result_text = await self._llm.generate(check_prompt)
+
+                if result_text:
+                    import json, re
+                    m = re.search(r'\{.*\}', result_text, re.DOTALL)
+                    if m:
+                        data = json.loads(m.group())
+                        for item in data.get("answered", []):
+                            q = item.get("question", "")
+                            a = item.get("answer", "")
+                            if q and a:
+                                self._outbound_answers[q] = a
+                                logger.info("outbound_question_answered",
+                                            call_id=call_id, question=q, answer=a[:50])
+
+                        all_done = data.get("all_done", False)
+                        remaining = [q for q in self._outbound_questions if q not in self._outbound_answers]
+                        logger.info("outbound_mission_check",
+                                    call_id=call_id,
+                                    answered_count=len(self._outbound_answers),
+                                    total=len(self._outbound_questions),
+                                    remaining=len(remaining),
+                                    llm_all_done=all_done)
+                        if all_done or not remaining:
+                            await self._trigger_mission_complete(call_id)
+            except Exception as e:
+                logger.warning("outbound_mission_check_error", call_id=call_id, error=str(e))
+        else:
+            # 질문 없이 purpose만 있는 경우: LLM이 목적 달성 여부 판단
+            check_prompt = (
+                f"다음은 AI 아웃바운드 통화 대화 기록입니다.\n\n"
+                f"[통화 목적]\n{self._outbound_purpose}\n\n"
+                f"[대화 기록]\n{history_text}\n\n"
+                "위 통화 목적이 달성되었나요? 예/아니오로만 답하세요."
+            )
+            try:
+                result_text = None
+                if hasattr(self._llm, 'generate_response'):
+                    result_text = await self._llm.generate_response(check_prompt, context_docs=[])
+                elif hasattr(self._llm, 'generate'):
+                    result_text = await self._llm.generate(check_prompt)
+
+                if result_text and "예" in result_text:
+                    logger.info("outbound_purpose_achieved",
+                                call_id=call_id, purpose=self._outbound_purpose[:50])
+                    await self._trigger_mission_complete(call_id)
+            except Exception as e:
+                logger.warning("outbound_purpose_check_error", call_id=call_id, error=str(e))
+
+    async def _trigger_mission_complete(self, call_id: str) -> None:
+        """미션 완료 처리: farewell TTS 송출 후 hangup_callback 호출."""
+        if self._outbound_mission_done:
+            return
+        self._outbound_mission_done = True
+
+        logger.info("outbound_mission_complete",
+                    call_id=call_id,
+                    answered_count=len(self._outbound_answers),
+                    purpose=self._outbound_purpose[:50] if self._outbound_purpose else "")
+
+        # farewell 멘트 TTS 송출
+        farewell_text = "필요한 내용을 모두 확인했습니다. 감사합니다. 좋은 하루 되세요."
+        try:
+            await self.push_frame(LLMFullResponseStartFrame())
+            await self.push_frame(TextFrame(text=farewell_text))
+            await self.push_frame(LLMFullResponseEndFrame())
+            logger.info("outbound_farewell_sent", call_id=call_id, text=farewell_text)
+        except Exception as e:
+            logger.warning("outbound_farewell_failed", call_id=call_id, error=str(e))
+
+        # TTS 송출 완료 대기 (약 3초)
+        await asyncio.sleep(3.0)
+
+        # hangup_callback 호출 → SIP BYE 전송
+        if self._hangup_callback:
+            try:
+                if asyncio.iscoroutinefunction(self._hangup_callback):
+                    await self._hangup_callback(call_id)
+                else:
+                    self._hangup_callback(call_id)
+                logger.info("outbound_hangup_triggered", call_id=call_id)
+            except Exception as e:
+                logger.error("outbound_hangup_callback_error", call_id=call_id, error=str(e))
+
     @staticmethod
     def _pipeline_tx_caller(call_id: Optional[str], text: str) -> None:
         if not call_id or not (text or "").strip():
@@ -1199,11 +1363,21 @@ class RAGLLMProcessor(FrameProcessor):
                         if intent == "transfer"
                         else ("complaint" if intent == "complaint" else "low_confidence")
                     )
+                    # rewritten_query: LLM이 정제한 쿼리 — STT 오인식 보정 목적으로 KB Q 텍스트에 우선 사용
+                    _rq = (result.get("rewritten_query") or "").strip()
                     get_hitl_service().note_hitl_request(
                         self._call_id or "",
                         user_text,
                         intent=intent,
                         alert_type=_hitl_alert,
+                        rewritten_query=_rq,
+                    )
+                    logger.info(
+                        "note_hitl_request_rewritten_query",
+                        call_id=self._call_id or "",
+                        has_rewritten_query=bool(_rq),
+                        rewritten_query_preview=_rq[:60] if _rq else "",
+                        note="STT 오인식 보정: rewritten_query 있으면 KB Q 텍스트로 우선 사용",
                     )
                 except Exception as e:
                     logger.warning(
@@ -1431,6 +1605,13 @@ class RAGLLMProcessor(FrameProcessor):
                            tts_push_elapsed=f"{tts_push_elapsed:.3f}s",
                            total_elapsed=f"{total_elapsed:.3f}s",
                            response_len=len(response))
+
+                # 아웃바운드 미션 완료 여부 체크 (비동기 태스크로 파이프라인 블로킹 방지)
+                if self._outbound_purpose or self._outbound_questions:
+                    asyncio.create_task(
+                        self._check_outbound_mission_complete(response),
+                        name=f"outbound_mission_check_{self._call_id}",
+                    )
             else:
                 _efail = "죄송합니다. 답변을 생성하지 못했습니다. 다시 말씀해주시겠어요?"
                 self._pipeline_tx_callee(self._call_id or "", _efail)

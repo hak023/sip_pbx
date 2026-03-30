@@ -222,6 +222,9 @@ class PipelineBuilder:
         max_history_turns: int = 10,
         hitl_on_alert: Optional[Callable[..., Any]] = None,
         stt_post_filter_config: Optional[Dict[str, Any]] = None,
+        outbound_purpose: str = "",
+        outbound_questions: Optional[list] = None,
+        hangup_callback: Optional[Callable[..., Any]] = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -231,6 +234,9 @@ class PipelineBuilder:
             callee: 착신번호 (owner로 사용)
             rtp_worker: RTP Worker
             vad, stt, tts, llm_client: 필수 Voice/AI 컴포넌트
+            outbound_purpose: 아웃바운드 통화 목적 (미션 완료 감지용)
+            outbound_questions: 아웃바운드 확인 질문 목록 (모두 답변 시 자동 BYE)
+            hangup_callback: 미션 완료 시 호출할 BYE 콜백 async def cb(call_id: str)
             나머지: build_pipeline와 동일 (rag_engine, org_manager 등)
         """
         call_id = getattr(getattr(rtp_worker, "media_session", None), "call_id", "") or ""
@@ -265,6 +271,24 @@ class PipelineBuilder:
             tts_sync_context=tts_sync_context,
             **kwargs,
         )
+
+        # 아웃바운드 미션 설정: pipeline._rag_llm에 purpose/questions/hangup_callback 주입
+        if outbound_purpose or outbound_questions:
+            rag_llm = getattr(pipeline, "_rag_llm", None)
+            if rag_llm is not None and hasattr(rag_llm, "set_outbound_mission"):
+                rag_llm.set_outbound_mission(
+                    purpose=outbound_purpose,
+                    questions=outbound_questions or [],
+                    hangup_callback=hangup_callback,
+                )
+                logger.info("outbound_mission_injected",
+                            call_id=call_id,
+                            purpose=outbound_purpose[:50] if outbound_purpose else "",
+                            question_count=len(outbound_questions or []))
+            else:
+                logger.warning("outbound_mission_inject_failed",
+                               call_id=call_id,
+                               note="pipeline._rag_llm 없음 또는 set_outbound_mission 미지원")
 
         # HITL 응답 큐는 RAGLLMProcessor.__init__(동기)에서 등록되어 루프가 비어 있을 수 있음 →
         # WebSocket 스레드에서 enqueue 시 run_coroutine_threadsafe 하려면 여기(파이프라인 루프)에서 루프 고정

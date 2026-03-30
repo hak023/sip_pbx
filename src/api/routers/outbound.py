@@ -62,6 +62,27 @@ class OutboundRetryRequest(BaseModel):
 # ============================================================================
 
 
+def _get_outbound_manager():
+    """웹소켓 서버에 주입된 CallManager에서 OutboundCallManager를 꺼낸다.
+
+    SIP 엔드포인트의 _outbound_manager를 우선 탐색하고, 없으면 CallManager 직속 속성도 확인한다.
+    """
+    try:
+        from src.websocket.server import get_injected_call_manager
+        cm = get_injected_call_manager()
+    except Exception:
+        cm = None
+    if cm is None:
+        return None, None
+    # SIPEndpoint._outbound_manager 탐색 (CallManager → SIPEndpoint 경유)
+    obm = getattr(cm, "_outbound_manager", None)
+    if obm is None:
+        sep = getattr(cm, "_sip_endpoint", None)
+        if sep:
+            obm = getattr(sep, "_outbound_manager", None)
+    return cm, obm
+
+
 @router.post("/create", response_model=OutboundCreateResponse)
 async def create_outbound_call(req: OutboundCreateRequest):
     """아웃바운드 콜 생성 및 발신 시작
@@ -70,18 +91,14 @@ async def create_outbound_call(req: OutboundCreateRequest):
     - 동시 통화 수 제한 체크 후 즉시 발신 또는 대기열 추가
     """
     try:
-        from src.sip_core.call_manager import get_call_manager
-
-        cm = get_call_manager()
+        cm, obm = _get_outbound_manager()
         if not cm:
             raise HTTPException(status_code=503, detail="CallManager not initialized")
 
-        if not hasattr(cm, "_outbound_manager") or not cm._outbound_manager:
+        if not obm:
             raise HTTPException(
                 status_code=503, detail="OutboundCallManager not enabled in config"
             )
-
-        obm = cm._outbound_manager
 
         record = await obm.create_call(
             caller_number=req.caller_number,
@@ -122,13 +139,10 @@ async def cancel_outbound_call(req: OutboundCancelRequest):
     - CONNECTED: AI 중지 + BYE 전송
     """
     try:
-        from src.sip_core.call_manager import get_call_manager
-
-        cm = get_call_manager()
-        if not cm or not getattr(cm, "_outbound_manager", None):
+        _, obm = _get_outbound_manager()
+        if not obm:
             raise HTTPException(status_code=503, detail="OutboundCallManager not available")
 
-        obm = cm._outbound_manager
         result = await obm.cancel_call(req.outbound_id, reason=req.reason)
 
         if not result:
@@ -152,13 +166,10 @@ async def retry_outbound_call(req: OutboundRetryRequest):
     - 이력에서 찾아 같은 요청으로 새로 발신
     """
     try:
-        from src.sip_core.call_manager import get_call_manager
-
-        cm = get_call_manager()
-        if not cm or not getattr(cm, "_outbound_manager", None):
+        _, obm = _get_outbound_manager()
+        if not obm:
             raise HTTPException(status_code=503, detail="OutboundCallManager not available")
 
-        obm = cm._outbound_manager
         new_record = await obm.retry_call(req.outbound_id)
 
         if not new_record:
@@ -190,15 +201,11 @@ async def retry_outbound_call(req: OutboundRetryRequest):
 async def get_active_outbound_calls():
     """활성 아웃바운드 콜 목록 조회"""
     try:
-        from src.sip_core.call_manager import get_call_manager
-
-        cm = get_call_manager()
-        if not cm or not getattr(cm, "_outbound_manager", None):
+        _, obm = _get_outbound_manager()
+        if not obm:
             return {"items": []}
 
-        obm = cm._outbound_manager
         items = obm.get_active_calls()
-
         return {"items": items}
 
     except Exception as e:
@@ -210,15 +217,11 @@ async def get_active_outbound_calls():
 async def get_outbound_call_history(limit: int = 50):
     """아웃바운드 콜 이력 조회"""
     try:
-        from src.sip_core.call_manager import get_call_manager
-
-        cm = get_call_manager()
-        if not cm or not getattr(cm, "_outbound_manager", None):
+        _, obm = _get_outbound_manager()
+        if not obm:
             return {"items": []}
 
-        obm = cm._outbound_manager
         items = obm.get_call_history(limit=min(limit, 200))
-
         return {"items": items}
 
     except Exception as e:
@@ -230,10 +233,8 @@ async def get_outbound_call_history(limit: int = 50):
 async def get_outbound_stats():
     """아웃바운드 콜 통계 조회"""
     try:
-        from src.sip_core.call_manager import get_call_manager
-
-        cm = get_call_manager()
-        if not cm or not getattr(cm, "_outbound_manager", None):
+        _, obm = _get_outbound_manager()
+        if not obm:
             return {
                 "total_calls": 0,
                 "completed_count": 0,
@@ -246,9 +247,7 @@ async def get_outbound_stats():
                 "queue_size": 0,
             }
 
-        obm = cm._outbound_manager
         stats = obm.get_stats()
-
         return stats
 
     except Exception as e:

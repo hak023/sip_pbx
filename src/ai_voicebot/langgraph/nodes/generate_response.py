@@ -5,6 +5,7 @@ RAG 컨텍스트 + 대화 기록 + 시스템 프롬프트 → LLM → 응답.
 Streaming RAG: 첫 문장이 완성되면 즉시 response_chunks에 추가.
 """
 
+import asyncio
 import time
 from datetime import datetime
 

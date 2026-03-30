@@ -1863,7 +1863,31 @@ class SIPEndpoint:
                 )
                 self._send_response(bye_resp, addr)
                 await self._outbound_manager.on_bye_received(call_id)
-                # 정리
+                # RTP Worker 정리 (아웃바운드는 일반 BYE 경로를 타지 않으므로 여기서 직접 정리)
+                rtp_worker_ob = self._rtp_workers.pop(call_id, None)
+                if rtp_worker_ob:
+                    try:
+                        await rtp_worker_ob.stop()
+                    except Exception as _rtp_err:
+                        logger.warning("outbound_rtp_worker_stop_error",
+                                       call_id=call_id, error=str(_rtp_err))
+                try:
+                    self._port_pool.release_ports(call_id)
+                except Exception:
+                    pass
+                # 대시보드 해제
+                try:
+                    from src.api.routers.calls import unregister_active_call
+                    unregister_active_call(call_id)
+                except Exception:
+                    pass
+                if self._call_manager:
+                    self._call_manager.ai_enabled_calls.discard(call_id)
+                    try:
+                        from src.websocket import manager as ws_manager
+                        await ws_manager.emit_call_ended(call_id)
+                    except Exception:
+                        pass
                 self._active_calls.pop(call_id, None)
                 self._call_mapping.pop(call_id, None)
                 return
@@ -3933,11 +3957,13 @@ class SIPEndpoint:
             
             # 6. From tag
             from_tag = f"ob-{random.randint(100000, 999999)}"
-            
+
             # 7. INVITE 메시지 구성
+            # via_branch는 CANCEL 재사용을 위해 call_info에 저장한다 (RFC 3261 §9.1)
             via_branch = f"z9hG4bK-ob-{random.randint(10000000, 99999999)}"
             display_name = from_display or from_number
-            
+            invite_cseq = 1  # 이후 re-INVITE/BYE 에서 증가하여 사용
+
             invite_msg = (
                 f"INVITE sip:{target_user}@{target_addr[0]}:{target_addr[1]} SIP/2.0\r\n"
                 f"Via: SIP/2.0/UDP {b2bua_ip}:{self.config.sip.listen_port};branch={via_branch}\r\n"
@@ -3945,16 +3971,20 @@ class SIPEndpoint:
                 f'From: "{display_name}" <sip:{from_number}@{b2bua_ip}>;tag={from_tag}\r\n'
                 f"To: <sip:{target_user}@{target_addr[0]}>\r\n"
                 f"Call-ID: {call_id}\r\n"
-                f"CSeq: 1 INVITE\r\n"
+                f"CSeq: {invite_cseq} INVITE\r\n"
                 f"Contact: <sip:{from_number}@{b2bua_ip}:{self.config.sip.listen_port}>\r\n"
+                f"Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, NOTIFY, INFO, UPDATE\r\n"
+                f"Supported: replaces, outbound\r\n"
                 f"Content-Type: application/sdp\r\n"
                 f"Content-Length: {len(outbound_sdp)}\r\n"
                 f"X-Outbound-Call-ID: {outbound_id}\r\n"
                 f"\r\n"
                 f"{outbound_sdp}"
             )
-            
+
             # 8. 호 정보 저장
+            # invite_via_branch: CANCEL에서 반드시 동일 branch 재사용 (RFC 3261 §9.1)
+            # invite_cseq: BYE CSeq = invite_cseq + 1 + (re-INVITE 횟수) 계산 기준
             self._active_calls[call_id] = {
                 'is_outbound': True,
                 'outbound_id': outbound_id,
@@ -3969,6 +3999,9 @@ class SIPEndpoint:
                 'b2bua_call_id': call_id,
                 'start_time': datetime.now(),
                 'sdp': outbound_sdp,
+                'invite_via_branch': via_branch,
+                'invite_cseq': invite_cseq,
+                'current_cseq': invite_cseq,  # re-INVITE 시 증가
             }
             
             # call_mapping에 추가
@@ -4042,82 +4075,96 @@ class SIPEndpoint:
         return (clean_number, None)
     
     async def send_outbound_cancel(self, call_id: str):
-        """아웃바운드 콜 CANCEL 전송"""
+        """아웃바운드 콜 CANCEL 전송
+
+        RFC 3261 §9.1: CANCEL은 취소 대상 INVITE 트랜잭션과
+        동일한 Via branch·From·To·Call-ID·CSeq(번호만 같고 method=CANCEL)를 사용해야 한다.
+        """
         try:
             call_info = self._active_calls.get(call_id)
             if not call_info or not call_info.get('is_outbound'):
                 return
-            
+
             target_addr = call_info.get('target_addr')
             if not target_addr:
                 return
-            
+
             b2bua_ip = self._get_b2bua_ip()
             from_tag = call_info.get('from_tag', '')
             target_user = call_info.get('target_user', '')
             from_number = call_info.get('from_number', '')
-            
-            import random
-            via_branch = f"z9hG4bK-ob-cancel-{random.randint(10000000, 99999999)}"
-            
+            # RFC 3261: CANCEL Via branch = INVITE Via branch (동일 트랜잭션)
+            via_branch = call_info.get('invite_via_branch') or f"z9hG4bK-ob-cancel-{from_tag}"
+            invite_cseq = call_info.get('invite_cseq', 1)
+            callee_tag = call_info.get('callee_tag', '')
+
             cancel_msg = (
                 f"CANCEL sip:{target_user}@{target_addr[0]}:{target_addr[1]} SIP/2.0\r\n"
                 f"Via: SIP/2.0/UDP {b2bua_ip}:{self.config.sip.listen_port};branch={via_branch}\r\n"
                 f"Max-Forwards: 70\r\n"
-                f"From: <sip:{from_number}@{b2bua_ip}>;tag={from_tag}\r\n"
-                f"To: <sip:{target_user}@{target_addr[0]}>\r\n"
+                f'From: "{from_number}" <sip:{from_number}@{b2bua_ip}>;tag={from_tag}\r\n'
+                f"To: <sip:{target_user}@{target_addr[0]}>"
+                f"{';tag=' + callee_tag if callee_tag else ''}\r\n"
                 f"Call-ID: {call_id}\r\n"
-                f"CSeq: 1 CANCEL\r\n"
+                f"CSeq: {invite_cseq} CANCEL\r\n"
                 f"Content-Length: 0\r\n"
                 f"\r\n"
             )
-            
+
             self._socket.sendto(cancel_msg.encode(), target_addr)
-            logger.info("outbound_cancel_sent", call_id=call_id)
-            
+            logger.info("outbound_cancel_sent", call_id=call_id,
+                        via_branch=via_branch, cseq=invite_cseq)
+
         except Exception as e:
             logger.error("outbound_cancel_error", call_id=call_id, error=str(e))
     
     async def send_outbound_bye(self, call_id: str):
-        """아웃바운드 콜 BYE 전송"""
+        """아웃바운드 콜 BYE 전송
+
+        BYE CSeq = current_cseq + 1 (이전 INVITE/re-INVITE 다음 값).
+        BYE는 새 트랜잭션이므로 Via branch는 새로 생성한다.
+        """
         try:
             call_info = self._active_calls.get(call_id)
             if not call_info:
                 return
-            
+
             target_addr = call_info.get('target_addr')
             if not target_addr:
                 return
-            
+
             b2bua_ip = self._get_b2bua_ip()
             from_tag = call_info.get('from_tag', '')
             callee_tag = call_info.get('callee_tag', '')
             target_user = call_info.get('target_user', '')
             from_number = call_info.get('from_number', '')
-            
-            import random
+
+            # BYE는 새 트랜잭션 → 새 branch
             via_branch = f"z9hG4bK-ob-bye-{random.randint(10000000, 99999999)}"
-            
+            # CSeq는 현재까지 사용한 최대값+1 (re-INVITE가 있으면 current_cseq가 이미 증가)
+            bye_cseq = call_info.get('current_cseq', 1) + 1
+            call_info['current_cseq'] = bye_cseq
+
             bye_msg = (
                 f"BYE sip:{target_user}@{target_addr[0]}:{target_addr[1]} SIP/2.0\r\n"
                 f"Via: SIP/2.0/UDP {b2bua_ip}:{self.config.sip.listen_port};branch={via_branch}\r\n"
                 f"Max-Forwards: 70\r\n"
-                f"From: <sip:{from_number}@{b2bua_ip}>;tag={from_tag}\r\n"
+                f'From: "{from_number}" <sip:{from_number}@{b2bua_ip}>;tag={from_tag}\r\n'
                 f"To: <sip:{target_user}@{target_addr[0]}>"
                 f"{';tag=' + callee_tag if callee_tag else ''}\r\n"
                 f"Call-ID: {call_id}\r\n"
-                f"CSeq: 2 BYE\r\n"
+                f"CSeq: {bye_cseq} BYE\r\n"
                 f"Content-Length: 0\r\n"
                 f"\r\n"
             )
-            
+
             self._socket.sendto(bye_msg.encode(), target_addr)
-            logger.info("outbound_bye_sent", call_id=call_id)
-            
+            logger.info("outbound_bye_sent", call_id=call_id, cseq=bye_cseq)
+
             # 정리
             self._active_calls.pop(call_id, None)
             self._call_mapping.pop(call_id, None)
-            
+
         except Exception as e:
             logger.error("outbound_bye_error", call_id=call_id, error=str(e))
     
@@ -4153,14 +4200,17 @@ class SIPEndpoint:
             if callee_tag:
                 call_info['callee_tag'] = callee_tag
             call_info['state'] = 'answered'
-            
+
             # SDP 추출
             callee_sdp = self._extract_sdp_body(response)
-            
+
             # ACK 전송
             await self._send_outbound_ack(call_info, addr)
-            
-            # OutboundCallManager에 통보
+
+            # RTP Worker 생성 (아웃바운드 전용 — 미디어 포트는 INVITE 시 할당됨)
+            await self._start_outbound_rtp_worker(call_id, call_info, callee_sdp or "")
+
+            # OutboundCallManager에 통보 (RTP Worker 준비 후 AI 파이프라인 기동)
             await self._outbound_manager.on_answered(call_id, callee_sdp or "")
         
         elif status_code >= 300:
@@ -4205,10 +4255,128 @@ class SIPEndpoint:
             
             self._socket.sendto(ack_msg.encode(), target_addr)
             logger.info("outbound_ack_sent", call_id=call_id)
-            
+
         except Exception as e:
             logger.error("outbound_ack_error", error=str(e))
-    
+
+    async def _start_outbound_rtp_worker(
+        self,
+        call_id: str,
+        call_info: dict,
+        callee_sdp: str,
+    ) -> bool:
+        """아웃바운드 통화 전용 RTP Worker 생성·시작.
+
+        send_outbound_invite에서 할당한 미디어 포트(call_info['media_ports'])를 기반으로
+        RTPRelayWorker를 만들어 _rtp_workers에 등록한다.
+        착신자 SDP에서 RTP 수신 주소를 파싱해 callee_endpoint를 설정한다.
+        Worker는 AI 모드(ai_mode=True)로 기동 — Pipecat 파이프라인이 이후 enable_pipecat_mode()를 호출한다.
+        """
+        try:
+            if call_id in self._rtp_workers:
+                logger.info("outbound_rtp_worker_already_exists", call_id=call_id)
+                return True
+
+            media_ports = call_info.get('media_ports')
+            if not media_ports or len(media_ports) < 2:
+                logger.error("outbound_rtp_worker_no_media_ports",
+                             call_id=call_id,
+                             note="send_outbound_invite에서 포트 할당 실패")
+                return False
+
+            b2bua_ip = self._get_b2bua_ip()
+
+            # B2BUA가 사용할 RTP 포트 (INVITE SDP에 넣었던 포트)
+            local_rtp_port = media_ports[0]
+            local_rtcp_port = media_ports[1]
+
+            # 착신자 SDP에서 RTP 수신 주소·포트 파싱
+            callee_ip = b2bua_ip
+            callee_rtp_port = 0
+            if callee_sdp:
+                for line in callee_sdp.splitlines():
+                    line = line.strip()
+                    if line.startswith("c=IN IP4 "):
+                        callee_ip = line.split()[-1]
+                    elif line.startswith("m=audio "):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            try:
+                                callee_rtp_port = int(parts[1])
+                            except ValueError:
+                                pass
+
+            if not callee_rtp_port:
+                logger.warning("outbound_rtp_worker_no_callee_rtp_port",
+                               call_id=call_id,
+                               note="착신자 SDP에서 RTP 포트 파싱 실패 — 더미 포트 사용")
+                callee_rtp_port = 0
+
+            # MediaSession 생성 (아웃바운드 전용 경량 객체)
+            from src.media.media_session import MediaSession, MediaLeg
+            media_session = MediaSession(call_id=call_id)
+            # caller_leg: B2BUA → 착신자 방향 (실제 RTP 수신은 없음 — AI가 생성)
+            media_session.caller_leg = MediaLeg()
+            media_session.caller_leg.original_ip = callee_ip
+            media_session.caller_leg.original_audio_port = local_rtp_port
+            media_session.caller_leg.allocated_ports = [local_rtp_port, local_rtcp_port]
+            # callee_leg: 착신자 방향
+            media_session.callee_leg = MediaLeg()
+            media_session.callee_leg.original_ip = callee_ip
+            media_session.callee_leg.original_audio_port = callee_rtp_port
+            media_session.callee_leg.allocated_ports = [local_rtp_port, local_rtcp_port]
+
+            caller_endpoint = RTPEndpoint(ip=callee_ip, port=local_rtp_port)
+            callee_endpoint = RTPEndpoint(
+                ip=callee_ip,
+                port=callee_rtp_port if callee_rtp_port else local_rtp_port,
+            )
+
+            rtp_bind_ip = getattr(self.config.media, 'rtp_bind_ip', None) or b2bua_ip
+            sip_recorder = self._call_manager.sip_recorder if self._call_manager else None
+
+            rtp_worker = RTPRelayWorker(
+                media_session=media_session,
+                caller_endpoint=caller_endpoint,
+                callee_endpoint=callee_endpoint,
+                bind_ip=rtp_bind_ip,
+                ai_orchestrator=None,  # Pipecat 경로 — orchestrator 직접 연결 불필요
+                sip_recorder=sip_recorder,
+                rtp_tx_debug=bool(getattr(self.config.media, "rtp_tx_debug", False)),
+                rtp_tx_debug_path=getattr(self.config.media, "rtp_tx_debug_path", None),
+                ai_rtp_silence_keepalive=bool(
+                    getattr(self.config.media, "ai_rtp_silence_keepalive", True)
+                ),
+                ai_rtp_keepalive_interval_sec=float(
+                    getattr(self.config.media, "ai_rtp_keepalive_interval_sec", 8.0)
+                ),
+                ai_rtp_adaptive_interval_enabled=bool(
+                    getattr(self.config.media, "ai_rtp_adaptive_interval", {}).get("enabled", True)
+                ),
+                ai_rtp_adaptive_interval_thresholds=getattr(
+                    self.config.media, "ai_rtp_adaptive_interval", {}
+                ).get("thresholds", None),
+            )
+
+            # 아웃바운드는 처음부터 AI 모드 — 릴레이할 caller/callee 실제 통화 없음
+            rtp_worker.ai_mode = True
+
+            await rtp_worker.start()
+            self._rtp_workers[call_id] = rtp_worker
+
+            logger.info("outbound_rtp_worker_started",
+                        call_id=call_id,
+                        bind_ip=rtp_bind_ip,
+                        local_rtp_port=local_rtp_port,
+                        callee_ip=callee_ip,
+                        callee_rtp_port=callee_rtp_port)
+            return True
+
+        except Exception as e:
+            logger.error("outbound_rtp_worker_error",
+                         call_id=call_id, error=str(e), exc_info=True)
+            return False
+
     def is_running(self) -> bool:
         """서버 실행 중 여부"""
         return self._running
