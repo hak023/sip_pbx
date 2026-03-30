@@ -1507,38 +1507,62 @@ class RTPRelayWorker:
         # 첫 PCM 데이터를 내부 버퍼에 넣고, 이후 메인 루프에서 소비
         pcm_buffer: list[bytes] = []
         self._split_pcm_to_buffer(pcm_data, pcm_buffer)
+        _session_ending = False  # sentinel 수신 시 True → pcm_buffer 소진 후 종료
 
-        while self._pipecat_mode and self._pipecat_pcm_queue is not None:
+        while self._pipecat_pcm_queue is not None:
             try:
                 # 1) 큐에서 비블로킹으로 가능한 한 모두 가져와서 버퍼에 넣기
-                while True:
-                    try:
-                        chunk = self._pipecat_pcm_queue.get_nowait()
-                        if chunk is None:
-                            # 종료 sentinel
-                            logger.info(
-                                "rtp_sender_session_end",
-                                call_id=self.media_session.call_id,
-                                packets_sent=packets_sent,
-                                media_packets=media_packets_sent,
-                                silence_packets=packets_sent - media_packets_sent,
-                                total_sent=self.stats["rtp_tts_packets_sent"],
-                                total_dropped=self.stats["rtp_tts_packets_dropped"],
-                                send_errors=self.stats["rtp_tts_send_errors"],
-                                interval_violations=interval_violations,
-                                behind_schedule_count=behind_schedule_count,
-                                note="TTS 발송 루프 종료 (지속적 20ms 전송 모드)",
-                            )
-                            return
-                        self._split_pcm_to_buffer(chunk, pcm_buffer)
-                    except queue.Empty:
-                        break
+                if not _session_ending:
+                    while True:
+                        try:
+                            chunk = self._pipecat_pcm_queue.get_nowait()
+                            if chunk is None:
+                                # 종료 sentinel: 큐에 남은 청크를 모두 pcm_buffer로 옮긴 뒤 드레인
+                                while True:
+                                    try:
+                                        _extra = self._pipecat_pcm_queue.get_nowait()
+                                        if _extra is None:
+                                            break
+                                        self._split_pcm_to_buffer(_extra, pcm_buffer)
+                                    except queue.Empty:
+                                        break
+                                _remaining = len(pcm_buffer)
+                                if _remaining > 0:
+                                    logger.info(
+                                        "rtp_sender_session_end_draining",
+                                        call_id=self.media_session.call_id,
+                                        pcm_buffer_remaining=_remaining,
+                                        estimated_drain_sec=round(_remaining * FIXED_INTERVAL_SEC, 2),
+                                        packets_sent=packets_sent,
+                                        note="sentinel 수신 → 남은 pcm_buffer 소진 후 종료",
+                                    )
+                                _session_ending = True
+                                break
+                            self._split_pcm_to_buffer(chunk, pcm_buffer)
+                        except queue.Empty:
+                            break
 
                 # 2) 버퍼에서 20ms 프레임 1개 꺼내기 (없으면 무음)
                 if pcm_buffer:
                     frame_data = pcm_buffer.pop(0)
                     pcm_is_silence = False
                     silence_streak = 0
+                elif _session_ending:
+                    # sentinel 수신 후 pcm_buffer 소진 완료 → 종료
+                    logger.info(
+                        "rtp_sender_session_end",
+                        call_id=self.media_session.call_id,
+                        packets_sent=packets_sent,
+                        media_packets=media_packets_sent,
+                        silence_packets=packets_sent - media_packets_sent,
+                        total_sent=self.stats["rtp_tts_packets_sent"],
+                        total_dropped=self.stats["rtp_tts_packets_dropped"],
+                        send_errors=self.stats["rtp_tts_send_errors"],
+                        interval_violations=interval_violations,
+                        behind_schedule_count=behind_schedule_count,
+                        note="TTS 발송 루프 종료 (잔여 버퍼 소진 완료)",
+                    )
+                    return
                 else:
                     frame_data = _PCM_SILENCE_20MS_16K_MONO
                     pcm_is_silence = True
@@ -1595,8 +1619,6 @@ class RTPRelayWorker:
 
                 # 6) 20ms 절대 시간 격자에 맞춰 전송
                 for packet in rtp_packets:
-                    if not self._pipecat_mode:
-                        break
 
                     _rtp_seq_hdr = struct.unpack_from("!H", packet, 2)[0]
                     _rtp_ts_hdr = struct.unpack_from("!I", packet, 4)[0]
@@ -2146,7 +2168,12 @@ class RTPRelayWorker:
                 pass
         th = getattr(self, '_tts_sender_thread', None)
         if th is not None and th.is_alive():
-            th.join(timeout=6.0)
+            # 남은 pcm_buffer 드레인 시간 고려 (최대 15초 TTS + 여유)
+            th.join(timeout=20.0)
+            if th.is_alive():
+                logger.warning("tts_sender_thread_join_timeout",
+                              call_id=self.media_session.call_id,
+                              note="sender thread가 20초 내 종료되지 않음")
         self._tts_sender_thread = None
 
         self._flush_tts_udp_queue_blocking()

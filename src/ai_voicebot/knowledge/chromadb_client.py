@@ -293,6 +293,14 @@ class _VectorDbWrapper:
             metadata["hnsw:space"] = "cosine"
         return self._client.get_or_create_collection(name=collection_name, metadata=metadata)
 
+    def count_collection(self, collection_name: str) -> Optional[int]:
+        """컬렉션 문서 수 반환. 컬렉션이 없거나 오류 시 None."""
+        try:
+            coll = self._client.get_collection(name=collection_name)
+            return coll.count()
+        except Exception:
+            return None
+
     async def search_collection(
         self,
         collection_name: str,

@@ -42,8 +42,8 @@ RESPONSE_UNKNOWN_NEEDS_FOLLOWUP = HITL_CUSTOMER_TTS_MESSAGE
 RESPONSE_QUESTION_NO_KNOWLEDGE = HITL_CUSTOMER_TTS_MESSAGE
 
 
-# 설계 §13.2: 장문 대화 맥락 유지를 위해 8턴
-HISTORY_MAX_TURNS = 8
+# 최적화 4.6: 전화 상담 특성상 3턴이면 충분. 입력 토큰 절감 → 응답 속도 향상
+HISTORY_MAX_TURNS = 3
 
 RESPONSE_SYSTEM_PROMPT = """당신은 {org_name}의 AI 통화 비서입니다.
 
@@ -59,9 +59,10 @@ RESPONSE_SYSTEM_PROMPT = """당신은 {org_name}의 AI 통화 비서입니다.
 
 응답 규칙:
 1. 한국어로 자연스럽게 대화하세요 (구어체).
-2. 검색된 정보를 바탕으로 정확하게 답하세요.
-3. 모르는 내용일 때는 반드시 아래 문장만 사용하세요. 지어내지 마세요.
+2. 검색된 참고 정보가 있으면 최대한 활용해서 답하세요. 참고 정보가 실시간 데이터 안내나 서비스 소개라면 그 내용을 바탕으로 방법·절차를 안내하세요.
+3. 참고 정보와 전혀 관련 없는 내용이라 답변이 불가능할 때만 아래 문장을 사용하세요.
    "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요."
+   참고 정보에 관련 내용이 조금이라도 있으면 그걸 바탕으로 안내하고 이 문장을 쓰지 마세요.
 4. 2~3문장 이내로 간결하게 답하세요 (통화이므로 길면 안 됩니다).
 5. 문장은 반드시 마침표(.) 또는 물음표(?)로 끝내세요. 중간에 끊기지 마세요.
 6. 고객이 불편을 호소하면 공감하고 해결 방안을 제시하세요.
@@ -193,23 +194,53 @@ async def generate_response_node(state: ConversationState) -> dict:
             chitchat_rule=chitchat_rule,
         )
 
-        # LLM 호출 (요청/응답 시각 로그 — 지연·재시도 원인 추적용)
+        # 스트리밍 LLM 호출 (최적화 4.9: 문장 단위로 수집)
         request_sent_at = datetime.now().isoformat()
         logger.info("llm_request_sent",
-                    call_site="generate_response",
+                    call_site="generate_response_streaming",
                     request_sent_ts_iso=request_sent_at,
                     prompt_len=len(system_prompt) + len(user_query),
                     prompt_preview=user_query)
+
+        chunks = []
+        response = ""
         try:
-            response = await llm.generate_response(
-                user_text=user_query,
-                context_docs=[rag_context] if rag_context else [],
-                system_prompt=system_prompt,
-            )
+            has_streaming = hasattr(llm, "generate_response_streaming")
+            if has_streaming:
+                # async generator를 별도 태스크로 수집 — 파이프라인 CancelledError 시
+                # aclose()가 executor 실행 중인 generator와 충돌하는 RuntimeError 방지
+                async def _collect_streaming() -> list:
+                    result = []
+                    async for sentence in llm.generate_response_streaming(
+                        user_text=user_query,
+                        context_docs=[rag_context] if rag_context else [],
+                        system_prompt=system_prompt,
+                    ):
+                        if sentence:
+                            result.append(sentence)
+                    return result
+
+                collect_task = asyncio.create_task(_collect_streaming())
+                try:
+                    chunks = await collect_task
+                except asyncio.CancelledError:
+                    collect_task.cancel()
+                    try:
+                        await collect_task
+                    except (asyncio.CancelledError, RuntimeError):
+                        pass
+                    raise
+                response = " ".join(chunks)
+            else:
+                response = await llm.generate_response(
+                    user_text=user_query,
+                    context_docs=[rag_context] if rag_context else [],
+                    system_prompt=system_prompt,
+                )
         except Exception as llm_err:
             elapsed_err = time.time() - start
             logger.warning("llm_request_failed",
-                           call_site="generate_response",
+                           call_site="generate_response_streaming",
                            request_sent_ts_iso=request_sent_at,
                            error_type=type(llm_err).__name__,
                            error_msg=str(llm_err),
@@ -220,7 +251,7 @@ async def generate_response_node(state: ConversationState) -> dict:
         needs_follow_up = False
         if not response or not response.strip():
             response = "죄송합니다. 답변을 생성하지 못했습니다. 다시 말씀해 주시겠어요?"
-        # API 오류 등으로 LLM이 에러 문구를 반환한 경우 → 모르는 내용 고정 응답 + 후처리 플래그
+            chunks = [response]
         elif _is_llm_error_fallback(response):
             logger.warning("generate_response_llm_error_fallback", response_preview=response)
             if _social or intent in ("chitchat", "out_of_scope", "greeting"):
@@ -229,7 +260,7 @@ async def generate_response_node(state: ConversationState) -> dict:
             else:
                 response = RESPONSE_UNKNOWN_NEEDS_FOLLOWUP
                 needs_follow_up = True
-        # 응답이 모르는 내용 유도 문구와 유사하면 후처리 플래그 (LLM이 규칙 3을 따른 경우)
+            chunks = [response]
         elif _is_unknown_content_response(response):
             needs_follow_up = True
             if _social or intent in ("chitchat", "out_of_scope", "greeting"):
@@ -237,15 +268,12 @@ async def generate_response_node(state: ConversationState) -> dict:
 
         elapsed = time.time() - start
         logger.info("llm_response_received",
-                    call_site="generate_response",
+                    call_site="generate_response_streaming",
                     request_sent_ts_iso=request_sent_at,
                     response_received_ts_iso=response_received_at,
                     elapsed_ms=round(elapsed * 1000),
-                    response_len=len(response))
-
-        # ✅ 청크 분할 제거: Google TTS는 전체 텍스트를 한 번에 받아야 최적
-        # (청크마다 별도 API 호출 시 레이턴시 누적으로 재생 버퍼 고갈)
-        chunks = []
+                    response_len=len(response),
+                    chunk_count=len(chunks))
 
         logger.info("timing_segment", segment="generate_response", elapsed_sec=round(elapsed, 3))
         logger.info("⏱️ [TIMING] generate_response (LLM 호출)",
@@ -278,11 +306,19 @@ async def generate_response_node(state: ConversationState) -> dict:
             "timestamp": datetime.now().isoformat(),
         })
 
-        # Confidence: 일상 직행·잡담은 저신뢰 HITL 방지용으로 높게 유지 (§4.3)
+        # Confidence 결정:
+        # - 잡담/social → 0.9 (HITL 억제)
+        # - LLM이 정상 답변 + needs_follow_up=False → 최소 0.5 보장
+        #   (RAG score가 낮아도 LLM이 적절한 답변을 생성한 경우 불필요한 HITL 방지)
+        # - 그 외 → RAG confidence 그대로
         if intent in ("greeting", "chitchat", "out_of_scope") or _social:
             confidence = 0.9
         else:
-            confidence = state.get("confidence", 0.0)  # From adaptive_rag or step_back
+            rag_confidence = state.get("confidence", 0.0)
+            if not needs_follow_up and response and len(response.strip()) > 10:
+                confidence = max(rag_confidence, 0.5)
+            else:
+                confidence = rag_confidence
 
         # llm_exchange는 rag_processor에서 통화 단위로 기록 (중복 방지)
         _rag_src = "vector_knowledge" if rag_results else "llm_prompt_no_reference"
@@ -352,11 +388,13 @@ def _is_unknown_content_response(text: str) -> bool:
     )
 
 
+MAX_RAG_CONTEXT_FOR_LLM = 3
+
 def _format_rag_context(results: list) -> str:
     if not results:
         return ""
     lines = []
-    for i, doc in enumerate(results, 1):
+    for i, doc in enumerate(results[:MAX_RAG_CONTEXT_FOR_LLM], 1):
         text = doc.get("text", "") if isinstance(doc, dict) else str(doc)
         if text:
             lines.append(f"[{i}] {text}")

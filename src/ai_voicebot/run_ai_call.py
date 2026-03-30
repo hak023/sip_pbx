@@ -91,14 +91,22 @@ async def run_ai_voice_pipeline(
 
     # CallManager.ai_enabled_calls에도 등록 (REST 폴링에서 is_ai_handled 판정용)
     try:
-        from src.api.routers.calls import _call_manager as _cm
+        import src.api.routers.calls as _calls_mod
+        _cm = _calls_mod._call_manager
         if _cm is not None and hasattr(_cm, "ai_enabled_calls"):
             _cm.ai_enabled_calls.add(call_id)
             logger.info("ai_enabled_calls_registered",
                         call_id=call_id,
+                        ai_set_size=len(_cm.ai_enabled_calls),
                         note="run_ai_call에서 ai_enabled_calls에 추가 (호전환 버튼 표시용)")
+        else:
+            logger.warning("ai_enabled_calls_register_skipped",
+                          call_id=call_id,
+                          cm_is_none=_cm is None,
+                          has_attr=hasattr(_cm, "ai_enabled_calls") if _cm else False,
+                          note="CallManager가 None이거나 ai_enabled_calls 미보유")
     except Exception as ae_err:
-        logger.debug("ai_enabled_calls_register_failed", call_id=call_id, error=str(ae_err))
+        logger.warning("ai_enabled_calls_register_failed", call_id=call_id, error=str(ae_err))
 
     # HITL 알림 시 프론트로 전달 (미지정 시 기본 연동)
     if hitl_on_alert is None:

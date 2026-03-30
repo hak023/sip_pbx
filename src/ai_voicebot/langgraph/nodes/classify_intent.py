@@ -341,84 +341,124 @@ async def classify_intent_node(state: ConversationState) -> dict:
         )
         return {"intent": "question", "slots": {}, "confidence": 0.7}
 
-    # 3차: LLM 기반 분류 (키워드 미매칭 발화). 설계 §7 Phase 1, §13.2 의도 분류에 맥락
+    # 3차: LLM 기반 분류+검색쿼리 합침 (최적화 4.4: 1회 호출로 intent + search_query)
     try:
+        import json as _json
         messages = state.get("messages", [])
         history_snippet = _format_recent_for_intent(messages, max_turns=2)
         classify_prompt = (
-            "다음 고객 발화의 의도를 분류하세요. 한 단어만 답하세요.\n"
+            "다음 고객 발화를 분석하세요.\n"
+            "1) intent: 의도를 분류 (아래 목록 중 하나)\n"
+            "2) search_query: 핵심 키워드로 변환한 검색용 쿼리 (원문이 충분하면 그대로)\n\n"
             "가능한 의도: greeting, farewell, affirm, deny, gratitude, doubt, "
             "positive_reaction, negative_reaction, chitchat, repeat, clarification, help, "
-            "question, complaint, transfer, out_of_scope\n"
-            "예: 네 → affirm, 감사해요 → gratitude, 다시 말해줘 → repeat, "
-            "뭘 할 수 있어요 → help, 오늘 날씨 좋다 → chitchat\n"
-            "중요: transfer는 '담당자/상담원/직원에게 연결', '사람 바꿔줘'처럼 "
-            "상담 인력 연결을 요청할 때만 사용하세요.\n"
-            "기관에 '찾아가다', '방문', '오시는 길', '어떻게 가나요', '위치/주소/교통' 등 "
-            "안내를 묻는 말은 정보 질문이므로 question입니다 (transfer 아님).\n"
-            "중요: '예' 뒤에 다른 한글 음절이 붙으면(예보, 예절, 예약 등) affirm이 아닙니다. "
-            "날씨·예보·알려주세요 같은 요청은 question입니다.\n"
-            "중요: chitchat은 업무와 무관한 잡담입니다.\n"
-            "chitchat 예시:\n"
-            "- AI에게 개인적 질문: '너도 좋아하니?', '당신은 어때?', 'AI는 뭘 좋아해?', '너는 행복해?'\n"
-            "- 일상 감상/소감: '날씨 좋네요', '오늘 기분 좋다', '재미있네', '심심해'\n"
-            "- 업무와 무관한 대화: '개나리가 폈더라고', '봄이 왔어', '점심 뭐 먹었어?'\n"
-            "question은 업무 정보를 묻는 것입니다 (날씨 예보, 특보, 위치, 운영시간, 연락처 등).\n"
+            "question, complaint, transfer, out_of_scope\n\n"
+            "규칙:\n"
+            "- transfer: '담당자/상담원/직원에게 연결' 요청만. 방문/위치/교통 안내는 question.\n"
+            "- chitchat: 업무 무관 잡담 (AI에게 개인 질문, 일상 감상 등)\n"
+            "- question: 업무 정보 질문 (날씨 예보, 특보, 위치, 운영시간, 연락처 등)\n"
+            "- search_query: 대명사를 구체 명사로, 구어체를 검색 적합 문장으로 변환\n\n"
+            'JSON만 출력: {"intent": "...", "search_query": "..."}\n'
         )
         if history_snippet:
             classify_prompt += f"최근 대화:\n{history_snippet}\n\n"
-        classify_prompt += f'현재 고객 발화: "{query}"\n의도:'
+        classify_prompt += f'현재 고객 발화: "{query}"'
         request_sent_at = datetime.now().isoformat()
         logger.info("llm_request_sent",
-                    call_site="classify_intent",
+                    call_site="classify_intent_merged",
                     request_sent_ts_iso=request_sent_at,
                     prompt_len=len(classify_prompt),
-                    prompt_preview=classify_prompt.replace("\n", " "))
+                    prompt_preview=classify_prompt.replace("\n", " ")[:200])
         try:
             result = await llm.generate_response(
                 classify_prompt,
                 context_docs=[],
-                system_prompt="의도 분류기",
-                max_output_tokens=64,
+                system_prompt="의도 분류 및 쿼리 변환기",
+                max_output_tokens=128,
             )
         except Exception as llm_err:
             elapsed = time.time() - node_start
             logger.warning("llm_request_failed",
-                           call_site="classify_intent",
+                           call_site="classify_intent_merged",
                            request_sent_ts_iso=request_sent_at,
                            error_type=type(llm_err).__name__,
                            error_msg=str(llm_err),
                            elapsed_ms=round(elapsed * 1000))
             raise
         response_received_at = datetime.now().isoformat()
-        raw = (result or "").strip().lower().replace('"', '').replace("'", "")
-        parts = raw.split()
-        intent = parts[0] if parts else ""
-        if intent == "out" and len(parts) >= 3 and parts[1] == "of" and parts[2] == "scope":
+        raw = (result or "").strip()
+
+        logger.debug("classify_intent_llm_raw",
+                     call_id=call_id,
+                     raw_response=raw[:300],
+                     raw_len=len(raw))
+
+        # JSON 파싱 시도
+        intent = "nlu_fallback"
+        search_query = query
+        confidence = 0.0
+        try:
+            json_str = raw.strip()
+            # 마크다운 코드블록 제거: ```json ... ``` 또는 ``` ... ```
+            if "```" in json_str:
+                # ```json\n{...}\n``` 형태에서 { ... } 부분만 추출
+                # re 모듈은 파일 상단에 이미 import 됨
+                fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", json_str, re.DOTALL)
+                if fence_match:
+                    json_str = fence_match.group(1)
+                else:
+                    # fallback: ``` 제거 후 { } 범위로 추출
+                    json_str = re.sub(r"```(?:json)?", "", json_str).replace("```", "").strip()
+            # { } 범위 추출 (코드블록이 없어도 앞뒤 텍스트가 붙은 경우 대비)
+            if "{" in json_str and "}" in json_str:
+                json_str = json_str[json_str.index("{"):json_str.rindex("}") + 1]
+            parsed = _json.loads(json_str)
+            intent = (parsed.get("intent") or "nlu_fallback").strip().lower()
+            search_query = (parsed.get("search_query") or query).strip()
+        except (_json.JSONDecodeError, ValueError, Exception):
+            raw_lower = raw.lower().replace('"', '').replace("'", "")
+            parts = raw_lower.split()
+            intent = parts[0] if parts else "nlu_fallback"
+            logger.info("classify_intent_json_parse_failed",
+                        call_id=call_id,
+                        raw_preview=raw[:100],
+                        fallback_intent=intent)
+
+        if intent == "out_of_scope" or (intent == "out" and "scope" in raw.lower()):
             intent = "out_of_scope"
-        elif intent in ("positive", "negative") and (len(parts) < 2 or parts[1] != "reaction"):
+        elif intent in ("positive", "negative"):
             intent = intent + "_reaction"
 
         if intent not in VALID_INTENTS:
-            intent = "nlu_fallback"
-            confidence = 0.0
+            # nlu_fallback → question 폴백: 정보를 묻는 발화일 가능성이 높으면 question으로 처리
+            logger.info("classify_intent_nlu_fallback_to_question",
+                        call_id=call_id,
+                        original_intent=intent,
+                        query_preview=query[:50],
+                        note="VALID_INTENTS에 없는 intent → question 폴백")
+            intent = "question"
+            confidence = 0.7
         else:
             confidence = 0.9
 
         elapsed = time.time() - node_start
         logger.info("llm_response_received",
-                    call_site="classify_intent",
+                    call_site="classify_intent_merged",
                     request_sent_ts_iso=request_sent_at,
                     response_received_ts_iso=response_received_at,
                     elapsed_ms=round(elapsed * 1000),
-                    intent=intent)
-        logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="llm")
-        logger.info("⏱️ [TIMING] classify_intent (LLM)",
-                   intent=intent, query=query, elapsed=f"{elapsed:.3f}s")
+                    intent=intent,
+                    search_query_preview=search_query[:50])
+        logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="llm_merged")
         _log_intent_classify_timing(
-            call_id, elapsed_sec=elapsed, path="llm", intent=intent, query_preview=query
+            call_id, elapsed_sec=elapsed, path="llm_merged", intent=intent, query_preview=query
         )
-        return {"intent": intent, "slots": {}, "confidence": confidence}
+        return {
+            "intent": intent,
+            "slots": {},
+            "confidence": confidence,
+            "rewritten_query": search_query,
+        }
     except Exception as e:
         elapsed = time.time() - node_start
         logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="error", error=str(e))

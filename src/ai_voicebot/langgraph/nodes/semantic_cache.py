@@ -19,7 +19,7 @@ from src.common.call_data_record_logger import log_call_data
 logger = structlog.get_logger(__name__)
 
 CACHE_COLLECTION = "qa_cache"
-SIMILARITY_THRESHOLD = 0.92  # 캐시 히트 임계치 (코사인 유사도)
+SIMILARITY_THRESHOLD = 0.85  # 캐시 히트 임계치 완화 (0.92→0.85, 적중률 향상)
 TTL_FAQ_SECONDS = 86400   # question/greeting: 24h (필요 시 43200으로 단축)
 TTL_OTHER_SECONDS = 3600  # 그 외: 1h
 MIN_CONFIDENCE_TO_CACHE = 0.6  # 이 값 미만이면 캐시 저장 스킵 (선택 적용)
@@ -118,6 +118,19 @@ async def check_cache_node(state: ConversationState) -> dict:
                 "query_empty": not (query or "").strip(),
             },
         )
+
+    # 빈 컬렉션 스킵: qa_cache 컬렉션이 없거나 비어있으면 즉시 미스 (콜드 스타트 지연 방지)
+    try:
+        _coll_count = vector_db.count_collection(CACHE_COLLECTION)
+        if _coll_count is not None and _coll_count == 0:
+            elapsed = time.time() - _start
+            logger.info("timing_segment", segment="check_cache", elapsed_sec=round(elapsed, 3), skip="empty_collection")
+            return _log_miss(
+                miss_reason="empty_qa_cache_collection",
+                miss_detail={"collection_count": 0},
+            )
+    except Exception:
+        pass
 
     try:
         # 쿼리 임베딩 (TextEmbedder는 embed_text 사용 — embed 메서드 없음)

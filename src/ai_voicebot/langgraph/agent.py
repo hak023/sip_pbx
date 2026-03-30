@@ -34,6 +34,7 @@ from src.ai_voicebot.langgraph.nodes.step_back_prompt import step_back_node
 from src.ai_voicebot.langgraph.nodes.hitl_alert import hitl_alert_node
 from src.ai_voicebot.langgraph.nodes.update_state import update_state_node
 from src.ai_voicebot.langgraph.nodes.greeting_farewell_cache import check_greeting_farewell_cache_node
+from src.ai_voicebot.langgraph.nodes.greeting_farewell_kb import greeting_farewell_kb_node
 from src.ai_voicebot.langgraph.nodes.response_shortcuts import (
     template_response_node,
     repeat_response_node,
@@ -62,6 +63,7 @@ _LANGGRAPH_NODE_NAMES = frozenset(
         "clarification_response",
         "help_response",
         "check_greeting_farewell_cache",
+        "greeting_farewell_kb",
     }
 )
 
@@ -130,10 +132,8 @@ def _route_after_cache(state: ConversationState) -> str:
 def _route_after_intent(state: ConversationState) -> str:
     """의도에 따라 분기. 설계: AI_RESPONSE_HUMANLIKE_DESIGN.md §3.2, CHROMADB_CATEGORY_DESIGN §4.2"""
     intent = state.get("intent", "")
-    if intent == "farewell":
-        return "check_greeting_farewell_cache"
-    if intent == "greeting":
-        return "check_greeting_farewell_cache"
+    if intent in ("farewell", "greeting"):
+        return "greeting_farewell_kb"
     # B 그룹 반응/피드백 → 템플릿 응답
     if intent in ("affirm", "deny", "gratitude", "doubt", "positive_reaction", "negative_reaction"):
         return "template_response"
@@ -156,15 +156,9 @@ def _route_after_utterance(state: ConversationState) -> str:
 
 
 def _route_after_rag(state: ConversationState) -> str:
-    """RAG confidence·도메인 질의 신호에 따라 step_back 분기 (이중 임계치)."""
-    confidence = state.get("confidence", 0.0)
-    intent = state.get("intent", "")
-    domain = state.get("domain_question_signal", False)
-    if intent == "question" and not domain:
-        threshold = STEP_BACK_THRESHOLD_LIGHT_QUESTION
-    else:
-        threshold = STEP_BACK_THRESHOLD_DOMAIN_QUESTION
-    if confidence < threshold:
+    """RAG 결과가 0건일 때만 step_back 실행 (최적화: 이전 confidence 임계치 제거)."""
+    rag_results = state.get("rag_results") or []
+    if not rag_results:
         return "step_back"
     return "generate_response"
 
@@ -179,7 +173,7 @@ def _route_after_greeting_farewell_cache(state: ConversationState) -> str:
 
 
 # 토폴로지 변경 시 버전 증가 → 기존 프로세스 내 캐시 무효화
-_LANGGRAPH_SCHEMA_VERSION = 2
+_LANGGRAPH_SCHEMA_VERSION = 3
 _compiled_graph_entry = None  # (version, compiled_graph)
 
 
@@ -229,6 +223,7 @@ def build_conversation_graph():
     graph.add_node("clarification_response", clarification_response_node)
     graph.add_node("help_response", help_response_node)
     graph.add_node("check_greeting_farewell_cache", check_greeting_farewell_cache_node)
+    graph.add_node("greeting_farewell_kb", greeting_farewell_kb_node)
 
     # ── 엣지 정의 ──
     graph.set_entry_point("classify_intent")
@@ -242,6 +237,7 @@ def build_conversation_graph():
             "generate_response": "generate_response",
             "check_cache": "check_cache",
             "check_greeting_farewell_cache": "check_greeting_farewell_cache",
+            "greeting_farewell_kb": "greeting_farewell_kb",
             "template_response": "template_response",
             "repeat_response": "repeat_response",
             "clarification_response": "clarification_response",
@@ -260,7 +256,7 @@ def build_conversation_graph():
     )
 
     # 단축 응답 노드 → update_state → END (캐시/RAG/hitl_alert 스킵)
-    for node_name in ("template_response", "repeat_response", "clarification_response", "help_response"):
+    for node_name in ("template_response", "repeat_response", "clarification_response", "help_response", "greeting_farewell_kb"):
         graph.add_edge(node_name, "update_state")
 
     # check_cache → (hit → update_state, miss → rewrite_query)

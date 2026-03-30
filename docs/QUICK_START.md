@@ -1,165 +1,184 @@
-# 🚀 Quick Start Guide
+# Quick Start Guide
 
-AI Voicebot Control Center를 5분 안에 실행해보세요!
+AI SIP PBX 시스템을 설치하고 실행하는 가이드.
 
-## 1단계: Backend 설치 (2분)
+---
+
+## 사전 요구사항
+
+| 항목 | 버전 |
+|---|---|
+| Python | 3.11+ |
+| Node.js | 18+ |
+| npm | 9+ |
+| OS | Windows 10/11 (PowerShell 5.1+) |
+| Google Cloud | STT/TTS/Gemini API 키 |
+
+---
+
+## 1단계: 설치
+
+### Backend
 
 ```powershell
-# 저장소 클론
-git clone https://github.com/your-org/sip-pbx.git
 cd sip-pbx
 
 # 가상환경 생성 및 활성화
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 
-# Backend 의존성 설치
+# 의존성 설치
 pip install -r requirements.txt
+pip install -r requirements-websocket.txt
 ```
 
-## 2단계: Frontend 설치 (1분)
+### Frontend
 
 ```powershell
-# Frontend 의존성 설치
 cd frontend
 npm install
 cd ..
 ```
 
-## 3단계: 설정 (1분)
+---
 
-```powershell
-# 설정 파일 확인 (이미 구성됨)
-# config/config.yaml - Backend 설정
-# frontend/.env.local - Frontend 환경 변수 (선택사항)
+## 2단계: 설정
+
+### Google Cloud API 키 설정
+
+`config/config.yaml`에서 다음 항목을 설정한다:
+
+```yaml
+ai_voicebot:
+  google_cloud:
+    gemini:
+      api_key: "YOUR_GEMINI_API_KEY"       # 또는 환경변수 GEMINI_API_KEY
+    credentials_path: "path/to/service-account.json"  # STT/TTS용
 ```
 
-## 4단계: 전체 시스템 실행 (30초)
+또는 환경변수로 설정:
 
 ```powershell
-# 통합 실행 스크립트
+$env:GEMINI_API_KEY = "YOUR_API_KEY"
+$env:GOOGLE_APPLICATION_CREDENTIALS = "path/to/service-account.json"
+```
+
+### 주요 설정 항목
+
+| 설정 | 파일 | 설명 |
+|---|---|---|
+| SIP 포트 | `config/config.yaml` → `sip.port` | 기본 5060 |
+| AI 전환 타임아웃 | `config/config.yaml` → `sip.no_answer_timeout` | 기본 10초 |
+| Gemini 모델 | `config/config.yaml` → `ai_voicebot.google_cloud.gemini.model` | 기본 `gemini-2.5-flash` |
+| ChromaDB 경로 | `config/config.yaml` → `ai_voicebot.vector_db.chromadb.persist_directory` | 기본 `./data/chromadb` |
+
+---
+
+## 3단계: 실행
+
+### 통합 실행 (권장)
+
+```powershell
 .\start-all.ps1
 ```
 
-이 스크립트는 다음을 동시에 실행합니다:
-1. **Frontend** (Next.js) - http://localhost:3000
-2. **Backend API Gateway** (FastAPI) - http://localhost:8000
-3. **WebSocket Server** (Socket.IO) - ws://localhost:8001
-4. **SIP PBX** (선택사항)
+이 스크립트는 다음을 자동으로 처리한다:
+1. Python venv 확인 및 의존성 자동 설치 (변경 감지)
+2. Frontend node_modules 확인 및 자동 설치
+3. Frontend를 백그라운드 Job으로 시작
+4. Backend를 포그라운드에서 시작 (SIP + API + WebSocket 통합)
+
+### 접속 정보
+
+| 서비스 | URL / 포트 |
+|---|---|
+| **Frontend 대시보드** | http://localhost:3000 |
+| **REST API** | http://localhost:8000 |
+| **WebSocket** | ws://localhost:8001 |
+| **SIP** | UDP 5060 |
+| **RTP** | UDP 10000-10100 |
+
+### 종료
+
+```powershell
+# Ctrl+C로 종료 (Frontend Job도 함께 정리됨)
+
+# 또는 stop-all.ps1 사용
+.\stop-all.ps1
+```
+
+---
 
 ## 4단계: 테스트
 
-### Frontend 접속
-```
-브라우저에서 http://localhost:3000 접속
-```
+### 4.1 Frontend 접속
 
-**Mock 로그인 정보:**
-- Email: `operator@example.com`
-- Password: `password`
+1. 브라우저에서 http://localhost:3000 접속
+2. 로그인 화면에서 테넌트(내선번호) 선택
+3. 대시보드 진입
 
-### Backend API 문서 확인
+### 4.2 SIP 통화 테스트
+
+SIP 클라이언트(MicroSIP, Zoiper 등)를 설정한다:
+
+| 설정 | 값 |
+|---|---|
+| SIP Server | `localhost` |
+| SIP Port | `5060` |
+| Transport | UDP |
+
+**테스트 시나리오**:
+
+1. SIP 클라이언트에서 등록된 내선번호로 전화
+2. 착신자가 `no_answer_timeout`(기본 10초) 내 미응답
+3. AI 봇이 자동으로 전화를 받아 인사
+4. 대시보드에서 실시간 STT/TTS 모니터링
+
+### 4.3 지식베이스 설정
+
+1. 대시보드 → 지식베이스 메뉴
+2. "지식 추가"로 FAQ 등록
+   - 카테고리: weather, disaster, faq 등
+   - 텍스트: 질문과 답변 내용
+3. 페르소나 설정 (AI 봇 성격 정의)
+
+### 4.4 Health Check
 
 ```powershell
-# 브라우저에서 API 문서 열기
-start http://localhost:8000/docs
+# Backend 상태 확인
+Invoke-RestMethod http://localhost:8000/health
+
+# 활성 통화 확인
+Invoke-RestMethod http://localhost:8000/api/calls/active
 ```
 
-**예상 엔드포인트:**
-- `GET /api/calls` - 통화 목록
-- `GET /api/hitl/requests` - HITL 요청 목록
-- `POST /api/knowledge` - 지식 베이스 추가
-- `PUT /api/operator/status` - 운영자 상태 변경
-
-### WebSocket 연결 확인
-
-Frontend에 로그인하면 자동으로 WebSocket이 연결됩니다.
-브라우저 콘솔(F12)에서 다음 메시지 확인:
-
-```
-WebSocket connected: <socket_id>
-```
-
-### Health Check
-
-```powershell
-# Backend API
-curl http://localhost:8000/health
-
-# 예상 응답
-# {
-#   "status": "healthy",
-#   "timestamp": "2026-01-06T10:00:00Z"
-# }
-```
-
-## 다음 단계
-
-✅ **성공!** AI Voicebot Control Center가 실행 중입니다!
-
-### 주요 기능 탐색
-
-1. **실시간 통화 모니터링**
-   - Dashboard에서 라이브 통화 확인
-   - STT/TTS 실시간 트랜스크립트
-   - AI 응답 상태 모니터링
-
-2. **지식 베이스 관리**
-   - Knowledge Base 페이지에서 문서 업로드
-   - FAQ 추가/수정/삭제
-   - Vector DB 검색 테스트
-
-3. **Human-in-the-Loop (HITL)**
-   - AI가 답변하기 어려운 질문 발생 시 알림
-   - 실시간 운영자 응답
-   - 응답 내용 지식 베이스 저장 옵션
-
-4. **운영자 부재중 모드** ✨ NEW
-   - Dashboard 우측 상단 토글로 상태 변경
-   - 부재중 시 HITL 자동 처리
-   - 미처리 요청 Call History에서 확인
-
-### SIP 통화 시뮬레이션
-
-1. **SIP 클라이언트 설정** (예: Zoiper, X-Lite, MicroSIP)
-   - SIP Server: `localhost:5060`
-   - 통화 시작 시 AI Voicebot 자동 응답
-
-2. **AI 응답 테스트**
-   - "안녕하세요" → AI가 인사 응답
-   - "영업시간이 언제인가요?" → RAG 기반 답변
-   - "잘 모르겠어요" (낮은 confidence) → HITL 요청 발생
-
-### 이벤트 확인
-
-Dashboard에서 실시간으로 다음 이벤트 확인:
-- ✅ `call_started` - 통화 시작
-- 💬 `stt_transcript` - 사용자 발화
-- 🤖 `tts_started/ended` - AI 응답
-- 🚨 `hitl_requested` - 운영자 개입 요청
+---
 
 ## 문제 해결
-
-### 의존성 설치 오류
-
-```powershell
-# Backend 의존성 재설치
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# Frontend 의존성 재설치
-cd frontend
-npm install
-```
-
-**자세한 문제 해결**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
 ### 포트 충돌
 
 ```powershell
+# 사용 중인 포트 확인
+Get-NetTCPConnection -LocalPort 3000,8000,8001 -ErrorAction SilentlyContinue |
+    Select-Object LocalPort, OwningProcess
+
 # 프로세스 종료
-Get-NetTCPConnection -LocalPort 3000,8000,8001 | Select-Object OwningProcess
-Stop-Process -Id <PID> -Force
+.\stop-all.ps1
+```
+
+### 의존성 설치 오류
+
+```powershell
+# pip 업그레이드 후 재설치
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install -r requirements-websocket.txt
+
+# Frontend 재설치
+cd frontend
+Remove-Item -Recurse node_modules -Force
+npm install
 ```
 
 ### 디버그 모드
@@ -170,16 +189,17 @@ logging:
   level: DEBUG
 ```
 
-## 더 알아보기
-
-- 📘 [시스템 개요](SYSTEM_OVERVIEW.md)
-- 🏗️ [AI Voicebot 아키텍처](ai-voicebot-architecture.md)
-- 🖥️ [Frontend 아키텍처](frontend-architecture.md)
-- 🔧 [문제 해결 가이드](TROUBLESHOOTING.md)
-- 🐛 [디버깅 가이드](DEBUGGING.md)
-- 📦 [운영자 부재중 모드 설정](OPERATOR_AWAY_MODE_SETUP.md)
+로그 파일: `logs/app.log`
+CDR 파일: `logs/call_data_record_YYYYMMDD.log`
 
 ---
 
-**🎉 축하합니다! AI Voicebot Control Center가 실행되고 있습니다!**
+## 관련 문서
 
+| 문서 | 설명 |
+|---|---|
+| [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) | 시스템 전체 개요 및 기능 상세 |
+| [INDEX.md](INDEX.md) | 전체 문서 인덱스 |
+| [design/AI_VOICEBOT_ARCHITECTURE.md](design/AI_VOICEBOT_ARCHITECTURE.md) | AI 음성봇 아키텍처 |
+| [design/FRONTEND_ARCHITECTURE.md](design/FRONTEND_ARCHITECTURE.md) | Frontend 아키텍처 |
+| [guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md) | 상세 문제 해결 가이드 |

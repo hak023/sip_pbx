@@ -1,232 +1,253 @@
-# Intent별 처리 로직 상세 (예제·도표)
+# Intent별 처리 로직 설계
 
-**참조**: `src/ai_voicebot/langgraph/agent.py` (`_route_after_intent`), `classify_intent.py`, `response_shortcuts.py`  
-**관련**: [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) — 대화 파이프라인 개요
-
----
-
-## 1. Intent → 다음 노드 매핑 (요약표)
-
-| Intent | 다음 노드 | 설명 |
-|--------|-----------|------|
-| `farewell` | **update_state** | 작별 → 상태만 갱신 후 종료 (별도 응답 없음 또는 짧은 인사) |
-| `greeting` | **generate_response** | 인사 → RAG/캐시 없이 LLM이 인사 응답 생성 |
-| `affirm`, `deny`, `gratitude`, `doubt`, `positive_reaction`, `negative_reaction` | **template_response** | 반응/피드백 → 고정 템플릿 문장 1개 랜덤 선택 |
-| `repeat` | **repeat_response** | "다시 말해줘" → 마지막 AI 발화 그대로 반복 |
-| `clarification` | **clarification_response** | "무슨 뜻이에요" → 안내 문장 1개 |
-| `help` | **help_response** | "뭘 할 수 있어요" → 도움말/가능 기능 안내 |
-| `out_of_scope`, `nlu_fallback` | **fallback_response** | 범위 외/분류 실패 → 고정 멘트 + (선택) HITL |
-| `chitchat` | **generate_response** | 잡담 → RAG 없이 LLM 응답 |
-| `question`, `complaint`, `transfer`, `unknown` | **check_cache** | 질문/불만/전환 요청/미분류 → 시맨틱 캐시 → RAG → LLM |
+**참조**: `src/ai_voicebot/langgraph/agent.py`, `classify_intent.py`, `response_shortcuts.py`
+**최종 수정**: 2026-03-30 (병합 LLM 호출, greeting/farewell KB 노드 반영)
 
 ---
 
-## 2. 전체 분기 도표
+## 1. 의도 분류 방식 (classify_intent)
+
+### 1.1 5단계 분류 파이프라인
 
 ```
-                    ┌─────────────────────┐
-                    │   classify_intent   │
-                    │   (키워드 or LLM)   │
-                    └──────────┬──────────┘
-                               │
-         ┌─────────────────────┼─────────────────────┐
-         │                     │                     │
-         ▼                     ▼                     ▼
-   farewell              greeting              B 그룹 반응
-         │                     │                (affirm, deny,
-         ▼                     ▼                gratitude, doubt,
-   update_state        generate_response      positive/negative)
-         │                     │                     │
-         │                     │                     ▼
-         │                     │              template_response
-         │                     │                     │
-         ▼                     ▼                     ▼
-   [대화 상태만 갱신]    [인사 응답 생성]      [템플릿 1문장]
-         │                     │                     │
-         └─────────────────────┴─────────────────────┘
-                               │
-                               ▼
-                         update_state → END
-                               │
-    ┌──────────────────────────┼──────────────────────────┐
-    │                          │                          │
-    ▼                          ▼                          ▼
- repeat                 clarification                 help
-    │                          │                          │
-    ▼                          ▼                          ▼
-repeat_response      clarification_response      help_response
-(마지막 AI 발화 반복)   (조금만 더 말씀해 주세요)   (가능 기능 안내)
-    │                          │                          │
-    └──────────────────────────┴──────────────────────────┘
-                               │
-                               ▼
-                    out_of_scope / nlu_fallback
-                               │
-                               ▼
-                      fallback_response
-                    (확인해보겠습니다… / HITL)
-                               │
-    ┌──────────────────────────┴──────────────────────────┐
-    │                                                      │
-    ▼                                                      ▼
-chitchat                                    question, complaint,
-    │                                        transfer, unknown
-    ▼                                                      │
-generate_response                                          ▼
-(RAG 없이 LLM)                                    check_cache
-                                                          │
-                                            ── cache hit ──► update_state
-                                            ── cache miss ──► rewrite_query
-                                                                  → adaptive_rag
-                                                                  → (confidence<0.4 → step_back)
-                                                                  → generate_response
-                                                                  → hitl_alert(필요 시)
-                                                                  → update_cache → update_state
+사용자 발화
+    │
+    ▼
+[1단계] 키워드 매칭 (INTENT_KEYWORDS)
+    │   "감사합니다"→farewell, "다시 말해줘"→repeat 등
+    │   confidence=1.0
+    │
+    ▼ (매칭 실패)
+[2단계] 특수 규칙
+    │   인사+질문 패턴 → question (인사 안에 질문 포함 시)
+    │   도움 키워드+기관 질문 → question
+    │   방문/교통 관련 → question (transfer 아님)
+    │
+    ▼ (해당 없음)
+[3단계] 페르소나 기반 분류
+    │   persona.check_query_relevance(similarity_threshold=0.6)
+    │   무관 → chitchat + _chitchat_template
+    │   관련 → question
+    │
+    ▼ (LLM 없는 환경 또는 짧은 발화)
+[4단계] 기본 폴백
+    │   짧은 발화 → question (confidence=0.7)
+    │
+    ▼ (LLM 사용 가능)
+[5단계] LLM 병합 호출 (최적화 4.4)
+        단일 LLM 요청으로 intent + search_query 동시 생성
+        max_output_tokens=128, JSON 응답
+```
+
+### 1.2 LLM 병합 호출 (최적화 4.4)
+
+기존에는 `classify_intent`(LLM 1회) + `rewrite_query`(LLM 1회) = 2회 호출이었으나,
+단일 LLM 호출로 의도 분류와 검색 쿼리 변환을 동시 수행한다.
+
+```json
+// LLM 요청 프롬프트
+"의도 분류 + 검색 쿼리 변환기. JSON으로 답하세요: {intent, search_query}"
+
+// LLM 응답 예시
+{"intent": "question", "search_query": "기상감정서 발급 방법"}
+```
+
+- **마크다운 코드블록 자동 제거**: LLM이 ````json ... ```` 으로 감싸도 정규식으로 추출
+- **유효하지 않은 intent 폴백**: `VALID_INTENTS`에 없으면 → `question` (confidence=0.7)
+- `rewrite_query` 노드는 이미 `rewritten_query`가 있으면 LLM 호출 스킵
+
+### 1.3 VALID_INTENTS
+
+```
+greeting, farewell, affirm, deny, gratitude, doubt,
+positive_reaction, negative_reaction, chitchat, repeat,
+clarification, help, question, complaint, transfer,
+out_of_scope, nlu_fallback
 ```
 
 ---
 
-## 3. Intent별 예제 및 처리 내용
+## 2. Intent → 노드 라우팅
 
-### 3.1 farewell (작별)
+### 2.1 전체 분기 도표
 
-- **예시 발화**: "감사합니다", "고마워요", "끊을게요", "그만할게요", "바이바이"
-- **다음 노드**: `update_state` → 곧바로 종료. (별도 TTS 응답은 파이프라인 설계에 따라 생략되거나 짧은 인사만 재생)
-- **예시 동작**:  
-  사용자: "감사합니다. 끊을게요."  
-  → intent=farewell  
-  → update_state만 수행 후 턴 종료 (필요 시 "안녕히 가세요" 등 짧은 인사는 다른 레이어에서 처리 가능)
+```
+                         ┌──────────────────┐
+                         │  classify_intent  │
+                         │ (키워드→LLM 병합) │
+                         └────────┬─────────┘
+                                  │
+                                  ▼
+                         ┌──────────────────┐
+                         │  route_utterance  │
+                         │ (레인 결정)       │
+                         └────────┬─────────┘
+                                  │
+                    ┌─────────────┼──────────────────┐
+                    ▼             ▼                   ▼
+              rag_mode=skip   greeting/farewell     knowledge 레인
+                    │             │                   │
+                    ▼             ▼                   ▼
+           generate_response  greeting_farewell_kb  _route_after_intent
+           (RAG 없이 LLM)    (ChromaDB 직접 조회)       │
+                                  │             ┌──────┴──────┐
+                                  ▼             ▼             ▼
+                            update_state   B그룹 반응     check_cache
+                                           template      (시맨틱 캐시)
+                                                              │
+                                                    ┌─────────┼─────────┐
+                                                    ▼                   ▼
+                                              cache hit          rewrite_query
+                                                    │                   │
+                                                    ▼                   ▼
+                                             update_state        adaptive_rag
+                                                                       │
+                                                              ┌────────┼────────┐
+                                                              ▼                 ▼
+                                                         RAG 0건            RAG N건
+                                                              │                 │
+                                                              ▼                 ▼
+                                                         step_back      generate_response
+                                                              │                 │
+                                                              ▼                 ▼
+                                                      generate_response    hitl_alert
+                                                                               │
+                                                                               ▼
+                                                                         update_cache
+                                                                               │
+                                                                               ▼
+                                                                         update_state
+                                                                               │
+                                                                               ▼
+                                                                              END
+```
 
----
+### 2.2 Intent → 다음 노드 매핑 (요약표)
 
-### 3.2 greeting (인사)
+| Intent | 다음 노드 | 처리 방식 |
+|--------|-----------|-----------|
+| `greeting` | **greeting_farewell_kb** | ChromaDB `greeting` 카테고리에서 직접 조회. LLM 없이 ~0.01초 응답 |
+| `farewell` | **greeting_farewell_kb** | ChromaDB `farewell` 카테고리에서 직접 조회 |
+| `affirm`, `deny`, `gratitude`, `doubt`, `positive_reaction`, `negative_reaction` | **template_response** | 고정 템플릿 1문장 랜덤 선택 |
+| `repeat` | **repeat_response** | 마지막 AI 발화 그대로 재생 |
+| `clarification` | **clarification_response** | "조금만 더 말씀해 주세요" 안내 |
+| `help` | **help_response** | 가능 기능 안내 (capability 기반) |
+| `chitchat` | **generate_response** (RAG 스킵) | LLM으로 짧게 공감 응답, 페르소나 템플릿 우선 |
+| `out_of_scope` | **generate_response** (RAG 스킵) | LLM으로 가볍게 답변 |
+| `question`, `complaint`, `transfer`, `nlu_fallback` | **check_cache** → RAG 경로 | 시맨틱 캐시 → 쿼리 재작성 → ChromaDB RAG → LLM → HITL |
 
-- **예시 발화**: "안녕하세요", "여보세요", "반갑습니다"
-- **주의**: "안녕하세요, 영업시간이 궁금해요"처럼 **질문 패턴이 같이 있으면** `question`으로 분류되어 RAG 경로로 감.
-- **다음 노드**: `generate_response` (RAG/캐시 없이 LLM이 인사 응답)
-- **예시 동작**:  
-  사용자: "안녕하세요."  
-  → intent=greeting  
-  → generate_response  
-  → AI: "안녕하세요. 무엇을 도와드릴까요?" (등 LLM 생성 인사)
+### 2.3 greeting/farewell KB 노드 (최적화 4.2)
 
----
+기존에는 LLM을 통해 인사/작별 응답을 생성했으나, ChromaDB에 저장된 인사말을
+직접 조회하여 LLM 호출 없이 즉시 응답한다.
 
-### 3.3 B 그룹 반응/피드백 (affirm, deny, gratitude, doubt, positive_reaction, negative_reaction)
-
-- **예시 발화**  
-  - affirm: "네", "예", "알겠어요", "좋아요"  
-  - deny: "아니요", "필요 없어요", "취소할게요"  
-  - gratitude: "감사해요", "고마워요"  
-  - doubt: "글쎄요", "잘 모르겠어요"  
-  - positive_reaction: "좋아요", "맘에 들어요"  
-  - negative_reaction: "별로예요", "안 좋아요"
-- **다음 노드**: `template_response` → intent별 **고정 템플릿**에서 랜덤 1문장 선택.
-- **예시 응답 (템플릿)**  
-  - affirm: "네, 알겠습니다. 더 필요하시면 말씀해 주세요."  
-  - deny: "알겠습니다. 다른 건 도와드릴까요?"  
-  - gratitude: "천만에요. 더 필요하시면 말씀해 주세요."  
-  - negative_reaction: "불편을 드려 죄송합니다. 다른 방법으로 안내해 드릴까요?"
-
----
-
-### 3.4 repeat (다시 말해줘)
-
-- **예시 발화**: "다시 말해줘", "뭐라고?", "한번 더", "못 들었어요"
-- **다음 노드**: `repeat_response` → **마지막 AI 발화**를 그대로 다시 재생. 없으면 "방금 말씀드린 내용을 다시 안내드릴게요."
-- **예시 동작**:  
-  이전 턴 AI: "평일 오전 9시부터 오후 6시까지 영업합니다."  
-  사용자: "다시 말해줘"  
-  → intent=repeat  
-  → repeat_response  
-  → 동일 문장 그대로 TTS 재생
-
----
-
-### 3.5 clarification (무슨 뜻이에요)
-
-- **예시 발화**: "무슨 뜻이에요", "뭔 소리야", "이해가 안 가요", "어느 부분이요"
-- **다음 노드**: `clarification_response` → "어떤 점이 궁금하신지 조금만 더 말씀해 주시면 안내해 드릴게요." 등 고정 안내.
-
----
-
-### 3.6 help (도와줘 / 뭘 할 수 있어요)
-
-- **예시 발화**: "도와줘", "어떻게 해요", "뭘 할 수 있어요"
-- **다음 노드**: `help_response` → "어떤 내용이 궁금하신지 말씀해 주시면 안내해 드릴게요." 또는 capability 기반 도움말.
-
----
-
-### 3.7 out_of_scope / nlu_fallback (범위 외·분류 실패)
-
-- **예시**: 의도 분류 실패, 업무 범위 밖 발화, 빈 발화 등.
-- **다음 노드**: `fallback_response`  
-  - 고정 멘트: "확인해보겠습니다. 잠시만 기다려 주세요."  
-  - (설정에 따라) HITL 요청으로 운영자에게 전달.
-- **예시 동작**:  
-  사용자: (노이즈 또는 인식 불가)  
-  → intent=nlu_fallback  
-  → fallback_response  
-  → "확인해보겠습니다. 잠시만 기다려 주세요." + HITL 알림(옵션)
+```
+greeting_farewell_kb 노드:
+  1. ChromaDB 'knowledge' 컬렉션에서 owner별 greeting/farewell 문서 조회
+  2. 문서 있으면 → 즉시 응답 (confidence=1.0, LLM 스킵)
+  3. 문서 없으면 → rewrite_query → adaptive_rag → generate_response 경로로 폴백
+```
 
 ---
 
-### 3.8 chitchat (잡담)
+## 3. 시맨틱 캐시 (check_cache)
 
-- **예시 발화**: "오늘 날씨 좋다", "요즘 바빠?" (질문이 아닌 일상 말)
-- **다음 노드**: `generate_response` (RAG·캐시 없이 LLM이 짧게 응답).
-- **예시 동작**:  
-  사용자: "오늘 날씨 좋네요."  
-  → intent=chitchat  
-  → generate_response  
-  → AI: "네, 좋은 날씨예요. 다른 궁금한 점 있으시면 말씀해 주세요." (등)
+### 3.1 동작 방식
 
----
+| 조건 | 처리 |
+|---|---|
+| `qa_cache` 컬렉션 비어있음 | 즉시 스킵 (벡터 검색 비용 절감, 최적화 4.3) |
+| 유사도 ≥ 0.85 + TTL 미만료 + 비폴백 답변 | cache hit → 즉시 응답 |
+| 그 외 | cache miss → RAG 경로 진행 |
 
-### 3.9 question, complaint, transfer, unknown (RAG 경로)
+### 3.2 파라미터
 
-- **예시 발화**  
-  - question: "영업시간이 언제예요?", "오늘 날씨 알려줘"  
-  - complaint: "불만이에요", "왜 이래요"  
-  - transfer: "담당자 연결해 줘", "사람이랑 통화하고 싶어요"
-- **다음 노드**: `check_cache` → (미스 시) `rewrite_query` → `adaptive_rag` → (confidence<0.4면 `step_back`) → `generate_response` → (필요 시) `hitl_alert` → `update_cache` → `update_state`.
-- **흐름 요약**  
-  1. 시맨틱 캐시 조회 → 히트 시 캐시 응답으로 즉시 응답.  
-  2. 미스 시 쿼리 rewrite → ChromaDB RAG 검색 → 검색 결과 + 대화 기록으로 LLM 응답 생성.  
-  3. RAG 신뢰도가 낮으면 step_back(재검색) 또는 HITL 요청.
-
-**예시 (question)**  
-- 사용자: "오늘 날씨 알려줘"  
-- intent=question  
-- check_cache (미스) → rewrite_query → adaptive_rag (지식 검색) → generate_response  
-- AI: "오늘 날씨 예보는 기상청 홈페이지에서 확인하실 수 있습니다. …"
-
-**예시 (transfer)**  
-- 사용자: "기상청 담당자 연결해 줘"  
-- intent=transfer  
-- 동일 RAG 경로를 타되, transfer 의도에 맞는 응답(연결 안내·전환 시도 등)은 LLM/전환 로직에서 처리.
+| 파라미터 | 값 | 설명 |
+|---|---|---|
+| `SIMILARITY_THRESHOLD` | 0.85 | 캐시 히트 임계값 (최적화 4.8: 0.92→0.85) |
+| TTL (FAQ) | 86,400초 | 24시간 |
+| TTL (기타) | 3,600초 | 1시간 |
+| `top_k` | 1 | 최상위 1건만 비교 |
 
 ---
 
-## 4. 의도 분류 방식 (classify_intent)
+## 4. RAG 경로 상세
 
-- **1차**: **키워드 매칭** (`INTENT_KEYWORDS`) — "감사합니다" → farewell, "다시 말해줘" → repeat 등.  
-  - 단, "안녕하세요" + 질문 패턴(QUESTION_PATTERNS)이 있으면 **question** 우선.
-- **2차**: LLM 없으면 짧은 발화는 **question**으로 간주.
-- **3차**: **LLM 분류** — 키워드로 안 잡히면 LLM에 "가능한 의도: greeting, farewell, …" 프롬프트로 한 단어 분류.
+### 4.1 adaptive_rag 노드
 
-가능한 의도 집합:  
-`greeting`, `farewell`, `affirm`, `deny`, `gratitude`, `doubt`, `positive_reaction`, `negative_reaction`, `chitchat`, `repeat`, `clarification`, `help`, `question`, `complaint`, `transfer`, `out_of_scope`, `nlu_fallback`.
+1. **1단계**: ChromaDB 벡터 검색 (`SENTENCE_TOP_K=10`, owner+category 필터)
+2. **2-pass 검색**: STT 원문과 rewrite 쿼리가 다르면 양쪽 결과 병합
+3. **Small-to-Big Expansion**: 검색된 문장의 상위 문맥 확장
+4. **Contextual Compression**: 키워드 매칭으로 관련 문장만 추출 (`COMPRESSION_MAX_CHARS=1200`)
+5. **Confidence 산출**: top_score 70% + avg_score 30% 가중 평균 × 1.1
+
+### 4.2 step_back 조건
+
+RAG 결과가 **0건**일 때만 실행 (이전: confidence 임계값 기반 → 제거됨, 최적화 4.1)
+
+### 4.3 generate_response 노드
+
+- LLM에 RAG 컨텍스트 최대 **3건** 전달 (`MAX_RAG_CONTEXT_FOR_LLM=3`)
+- 대화 기록 최대 **3턴** (`HISTORY_MAX_TURNS=3`, 최적화 4.6)
+- 스트리밍 LLM 응답 → 문장 단위 수집 (최적화 4.9)
+- LLM이 정상 답변 + `needs_follow_up=False` → confidence 최소 0.5 보장
+
+### 4.4 HITL 트리거
+
+| 조건 | 동작 |
+|---|---|
+| `confidence < 0.3` | HITL 요청 (운영자에게 질문 전달) |
+| `needs_follow_up = True` | HITL 요청 |
+| `intent = greeting/chitchat/out_of_scope` | HITL 면제 |
 
 ---
 
-## 5. 관련 코드 위치
+## 5. Intent별 예제
+
+### 5.1 question (RAG 경로)
+
+```
+사용자: "지진 정보 알려줘"
+→ classify_intent: intent=question, search_query="지진 정보"
+→ check_cache: miss
+→ rewrite_query: (LLM 병합으로 이미 설정됨, 스킵)
+→ adaptive_rag: ChromaDB 검색, 11건 → 압축 → 3건 LLM 전달
+→ generate_response: "기상청에서 공식 통보된 지진 정보를 안내해 드립니다..."
+→ hitl_alert: confidence=0.5+ → HITL 불필요
+→ update_cache → update_state → END
+```
+
+### 5.2 greeting (KB 직접 조회)
+
+```
+사용자: "안녕하세요"
+→ classify_intent: intent=greeting (키워드 매칭, confidence=1.0)
+→ greeting_farewell_kb: ChromaDB greeting 문서 조회
+→ 응답: "안녕하세요. KT 기상청 AI 봇입니다. 무엇을 도와드릴까요?"
+→ update_state → END  (LLM 호출 0회, ~0.01초)
+```
+
+### 5.3 chitchat (페르소나 기반)
+
+```
+사용자: "오늘 날씨 좋다"
+→ classify_intent: persona 분류 → chitchat + _chitchat_template
+→ generate_response: 페르소나 템플릿 응답 (LLM 스킵)
+→ "네, 좋은 날씨예요. 다른 궁금한 점 있으시면 말씀해 주세요."
+→ update_state → END
+```
+
+---
+
+## 6. 관련 코드 위치
 
 | 내용 | 파일 |
-|------|------|
-| Intent → 다음 노드 분기 | `src/ai_voicebot/langgraph/agent.py` — `_route_after_intent` |
-| 의도 분류 (키워드·LLM) | `src/ai_voicebot/langgraph/nodes/classify_intent.py` |
-| B 그룹 템플릿·repeat/clarification/help/fallback | `src/ai_voicebot/langgraph/nodes/response_shortcuts.py` |
-| RAG·캐시·LLM 경로 | `agent.py` (check_cache → rewrite_query → adaptive_rag → generate_response 등) |
-
-이 문서는 **intent별 처리 로직**을 예제와 도표로 정리한 자료이며, 시스템 전체 개요는 [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md)를 참고하면 됩니다.
+|---|---|
+| 의도 분류 (키워드·LLM 병합) | `src/ai_voicebot/langgraph/nodes/classify_intent.py` |
+| Intent → 노드 분기 | `src/ai_voicebot/langgraph/agent.py` — `_route_after_intent`, `_route_after_utterance` |
+| Greeting/Farewell KB | `src/ai_voicebot/langgraph/nodes/greeting_farewell_kb.py` |
+| 시맨틱 캐시 | `src/ai_voicebot/langgraph/nodes/semantic_cache.py` |
+| RAG 검색 | `src/ai_voicebot/langgraph/nodes/adaptive_rag.py` |
+| LLM 응답 생성 | `src/ai_voicebot/langgraph/nodes/generate_response.py` |
+| HITL 판단 | `src/ai_voicebot/langgraph/nodes/hitl_alert.py` |
+| 템플릿/반복/명확화/도움 | `src/ai_voicebot/langgraph/nodes/response_shortcuts.py` |

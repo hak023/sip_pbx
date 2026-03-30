@@ -110,13 +110,21 @@ def _get_active_calls_from_manager() -> List[Dict[str, Any]]:
                             started_at_iso = au.isoformat().replace("+00:00", "Z")
                         except Exception:
                             started_at_iso = None
-                    # Pipecat은 register_active_call로 레지스트리에만 넣고 ai_enabled_calls에 안 넣는 경로가 있음.
-                    # 부재중 전환 등은 metadata.is_ai_handled만 세팅될 수 있음. 대시보드 호전환 버튼용으로 병합.
                     meta = getattr(s, "metadata", None)
                     meta_ai = bool(isinstance(meta, dict) and meta.get("is_ai_handled"))
                     reg = _active_calls_registry.get(cid)
                     registry_ai = bool(reg and reg.get("is_ai_handled"))
                     is_ai_handled = (cid in ai_set) or meta_ai or registry_ai
+                    if not is_ai_handled:
+                        logger.debug("is_ai_handled_check_detail",
+                                     call_id=cid,
+                                     in_ai_set=(cid in ai_set),
+                                     ai_set_contents=list(ai_set)[:5],
+                                     meta_ai=meta_ai,
+                                     meta_type=type(meta).__name__ if meta else "None",
+                                     registry_ai=registry_ai,
+                                     registry_keys=list(_active_calls_registry.keys())[:5],
+                                     note="is_ai_handled=False 판정 디버그")
                     row: Dict[str, Any] = {
                         "call_id": cid,
                         "caller": caller,
@@ -190,8 +198,28 @@ async def get_active_calls(
     """
     if _call_manager is not None:
         raw_list = _get_active_calls_from_manager()
+        # 레지스트리에 있지만 manager 목록에 없는 항목 병합 (파이프라인 경유 등록 누락 보완)
+        manager_ids = {c.get("call_id") or (getattr(c, "call_id", None) if not isinstance(c, dict) else "") for c in raw_list}
+        for reg_item in _get_active_calls_from_registry():
+            rid = reg_item.get("call_id", "")
+            if rid and rid not in manager_ids:
+                raw_list.append(reg_item)
     else:
         raw_list = _get_active_calls_from_registry()
     items = [_normalize_call_item(c) for c in raw_list]
     items = [x for x in items if x.get("call_id")]
+
+    # is_ai_handled 보정: ai_enabled_calls/registry에 AI로 표시되면 강제 True
+    ai_set = getattr(_call_manager, "ai_enabled_calls", None) or set() if _call_manager else set()
+    for item in items:
+        cid = item.get("call_id", "")
+        if not item.get("is_ai_handled"):
+            reg = _active_calls_registry.get(cid)
+            if (cid in ai_set) or (reg and reg.get("is_ai_handled")):
+                item["is_ai_handled"] = True
+                logger.debug("is_ai_handled_force_corrected",
+                            call_id=cid,
+                            in_ai_set=(cid in ai_set),
+                            in_registry=bool(reg and reg.get("is_ai_handled")),
+                            note="manager 경로에서 False였으나 보정")
     return items

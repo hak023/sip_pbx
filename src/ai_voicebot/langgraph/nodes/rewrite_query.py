@@ -76,6 +76,18 @@ async def rewrite_query_node(state: ConversationState) -> dict:
         _log_rewrite_timing(call_id, elapsed_sec=elapsed, path="skip_no_query", query_preview=query)
         return {"rewritten_query": query}
 
+    # classify_intent에서 이미 rewritten_query가 세팅되었으면 LLM 재호출 스킵 (최적화 4.4)
+    existing_rewrite = state.get("rewritten_query", "").strip()
+    if existing_rewrite and existing_rewrite != query:
+        elapsed = time.time() - _start
+        logger.info("timing_segment", segment="rewrite_query", elapsed_sec=round(elapsed, 3), skip="already_rewritten")
+        logger.info("rewrite_query_skip_merged",
+                    original=query, rewritten=existing_rewrite,
+                    note="classify_intent에서 LLM 병합 호출로 이미 변환됨")
+        _log_rewrite_timing(call_id, elapsed_sec=elapsed, path="skip_merged",
+                           query_preview=query, rewritten_preview=existing_rewrite)
+        return {"rewritten_query": existing_rewrite}
+
     words = query.split()
     needs_rewrite = (
         len(words) < 5

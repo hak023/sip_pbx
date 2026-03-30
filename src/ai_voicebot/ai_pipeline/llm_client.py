@@ -352,6 +352,72 @@ class LLMClient:
             logger.error("LLM generation error", error=str(e), exc_info=True)
             return "죄송합니다, 답변을 생성하는 중 오류가 발생했습니다."
 
+    async def generate_response_streaming(
+        self,
+        user_text: str,
+        context_docs: List[str],
+        system_prompt: Optional[str] = None,
+        timeout_seconds: float = 30.0,
+        max_output_tokens: Optional[int] = None,
+    ):
+        """
+        스트리밍 LLM 응답 생성. 문장 단위로 yield.
+
+        Yields:
+            str: 완성된 문장 (마침표/물음표/느낌표로 끝나는 단위)
+        """
+        import re as _re
+
+        prompt = self._build_conversation_prompt(user_text, context_docs, system_prompt)
+        gen_cfg = self._effective_generation_config(max_output_tokens)
+
+        buffer = ""
+        try:
+            loop = asyncio.get_event_loop()
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self.model.generate_content(
+                        prompt,
+                        generation_config=gen_cfg,
+                        stream=True,
+                    )
+                ),
+                timeout=timeout_seconds,
+            )
+
+            for chunk in response:
+                text = getattr(chunk, "text", "") or ""
+                if not text:
+                    continue
+                buffer += text
+                while True:
+                    match = _re.search(r"[.?!。]\s*", buffer)
+                    if not match:
+                        break
+                    end = match.end()
+                    sentence = buffer[:end].strip()
+                    buffer = buffer[end:]
+                    if sentence:
+                        yield sentence
+
+            if buffer.strip():
+                yield buffer.strip()
+
+            self.total_requests += 1
+        except asyncio.TimeoutError:
+            logger.error("llm_streaming_timeout", timeout_seconds=timeout_seconds)
+            if buffer.strip():
+                yield buffer.strip()
+            else:
+                yield "죄송합니다. 일시적으로 처리가 지연되고 있습니다."
+        except Exception as e:
+            logger.error("llm_streaming_error", error=str(e))
+            if buffer.strip():
+                yield buffer.strip()
+            else:
+                yield "죄송합니다, 답변을 생성하는 중 오류가 발생했습니다."
+
     async def format_for_customer(self, raw_text: str) -> str:
         """
         HITL 담당자 답변을 고객에게 전달할 한 문장으로 정리 (설계 TTS_RTP_AND_HITL_DESIGN.md).

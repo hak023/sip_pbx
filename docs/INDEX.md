@@ -1,243 +1,179 @@
-# 📚 Documentation Index
+# AI SIP PBX 문서 인덱스
 
-## 문서 구조 개요
+전체 문서 구조 및 바로가기.
+
+**최종 수정**: 2026-03-30
+
+---
+
+## 핵심 문서
+
+| 문서 | 설명 |
+|---|---|
+| [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) | 시스템 전체 개요, 기능 상세, 유저 스토리, 아키텍처 (소개자료) |
+| [QUICK_START.md](QUICK_START.md) | 설치 및 실행 가이드 |
+
+---
+
+## 설계서 (docs/design/)
+
+### 아키텍처
+
+| 문서 | 설명 |
+|---|---|
+| [AI_VOICEBOT_ARCHITECTURE.md](design/AI_VOICEBOT_ARCHITECTURE.md) | AI 음성봇 전체 아키텍처 (Pipecat, LangGraph, RAG, TTS, STT, HITL) |
+| [FRONTEND_ARCHITECTURE.md](design/FRONTEND_ARCHITECTURE.md) | Next.js 대시보드 아키텍처 (Socket.IO, REST, UI 구조) |
+| [ORCHESTRATOR_VS_PIPECAT_STRUCTURE.md](design/ORCHESTRATOR_VS_PIPECAT_STRUCTURE.md) | Orchestrator vs Pipecat 구조 비교 |
+
+### 대화 처리
+
+| 문서 | 설명 |
+|---|---|
+| [INTENT_HANDLING_DESIGN.md](design/INTENT_HANDLING_DESIGN.md) | Intent별 처리 로직 (17가지 의도, 5단계 분류, LangGraph 분기) |
+| [AI_RESPONSE_HUMANLIKE_DESIGN.md](design/AI_RESPONSE_HUMANLIKE_DESIGN.md) | 자연스러운 AI 응답 설계 |
+| [INTENT_TAXONOMY_RESEARCH.md](design/INTENT_TAXONOMY_RESEARCH.md) | Intent 분류 체계 연구 |
+
+### 미디어 (RTP/TTS/STT)
+
+| 문서 | 설명 |
+|---|---|
+| [TTS_RTP_AND_STT_QUEUE_DESIGN.md](design/TTS_RTP_AND_STT_QUEUE_DESIGN.md) | TTS→RTP 큐 및 STT 입력 큐 설계 (Continuous Silence, Drain) |
+| [TTS_RTP_STRUCTURE_REVIEW.md](design/TTS_RTP_STRUCTURE_REVIEW.md) | TTS→큐→RTP 구조 검토 및 이슈 분석 |
+| [TTS_RTP_LOSS_DEBUG_LOGGING.md](design/TTS_RTP_LOSS_DEBUG_LOGGING.md) | TTS/RTP 손실 디버그 로깅 |
+| [WEBRTC_AEC_DESIGN.md](design/WEBRTC_AEC_DESIGN.md) | WebRTC AEC(음향 에코 제거) 설계 |
+| [BYPASS_REALTIME_STT_AND_WS.md](design/BYPASS_REALTIME_STT_AND_WS.md) | Bypass 모드 실시간 STT 설계 |
+| [USER_TO_USER_STT_REALTIME.md](design/USER_TO_USER_STT_REALTIME.md) | 사용자간 통화 실시간 STT |
+| [STT_ADDITIONAL_CONSIDERATIONS.md](design/STT_ADDITIONAL_CONSIDERATIONS.md) | STT 추가 고려사항 |
+| [TEMPORAL_EXPRESSION_DESIGN.md](design/TEMPORAL_EXPRESSION_DESIGN.md) | 한글 시제 표현 정규화 설계 |
+| [TEMPORAL_EXPRESSION_RESEARCH.md](design/TEMPORAL_EXPRESSION_RESEARCH.md) | 시제 표현 연구 |
+
+### HITL (Human-in-the-Loop)
+
+| 문서 | 설명 |
+|---|---|
+| [HITL_OPERATOR_RESPONSE_FLOW.md](design/HITL_OPERATOR_RESPONSE_FLOW.md) | HITL 운영자 응답 흐름 |
+| [HITL_DEFERRED_RESPONSE_DESIGN.md](design/HITL_DEFERRED_RESPONSE_DESIGN.md) | HITL 지연 응답 설계 |
+| [HITL_CURRENT_LOGIC.md](design/HITL_CURRENT_LOGIC.md) | HITL 현재 로직 |
+| [HITL_AND_FOLLOWUP_VERIFICATION.md](design/HITL_AND_FOLLOWUP_VERIFICATION.md) | HITL 및 후속 처리 검증 |
+| [HITL_CALL_HISTORY_INTEGRATION.md](design/HITL_CALL_HISTORY_INTEGRATION.md) | HITL-통화이력 연동 |
+| [HITL-IMPLEMENTATION-STATUS-AND-RESEARCH.md](design/HITL-IMPLEMENTATION-STATUS-AND-RESEARCH.md) | HITL 구현 상태 및 연구 |
+
+### 지식베이스 / RAG
+
+| 문서 | 설명 |
+|---|---|
+| [CHROMADB_CATEGORY_DESIGN.md](design/CHROMADB_CATEGORY_DESIGN.md) | ChromaDB 카테고리 설계 |
+| [KNOWLEDGE_MANAGEMENT_DESIGN.md](design/KNOWLEDGE_MANAGEMENT_DESIGN.md) | 지식 관리 설계 |
+| [KNOWLEDGE_CLASSIFICATION_AND_INCOMING_DATA.md](design/KNOWLEDGE_CLASSIFICATION_AND_INCOMING_DATA.md) | 지식 분류 및 수신 데이터 |
+| [KNOWLEDGE_DOC_TYPE_DESIGN.md](design/KNOWLEDGE_DOC_TYPE_DESIGN.md) | 지식 문서 유형 설계 |
+| [KNOWLEDGE_STAGE3_AND_LOGGING.md](design/KNOWLEDGE_STAGE3_AND_LOGGING.md) | 지식 추출 3단계 및 로깅 |
+| [knowledge-extraction-upgrade.md](design/knowledge-extraction-upgrade.md) | 지식 추출 업그레이드 |
+| [RAG_DB_LOGGING.md](design/RAG_DB_LOGGING.md) | RAG DB 로깅 |
+| [UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md](design/UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md) | 미응답 및 후속 처리 설계 |
+
+### 호 전환 / 운영자
+
+| 문서 | 설명 |
+|---|---|
+| [AI_DYNAMIC_CALL_TRANSFER_DESIGN.md](design/AI_DYNAMIC_CALL_TRANSFER_DESIGN.md) | AI 동적 호 전환 설계 |
+| [OPERATOR_TAKEOVER_DESIGN.md](design/OPERATOR_TAKEOVER_DESIGN.md) | 운영자 실시간 개입 설계 |
+| [OPERATOR-AWAY-MODE-DESIGN.md](design/OPERATOR-AWAY-MODE-DESIGN.md) | 운영자 부재중 모드 설계 |
+| [ai-call-transfer.md](design/ai-call-transfer.md) | AI 호 전환 |
+
+### 통화이력 / CDR
+
+| 문서 | 설명 |
+|---|---|
+| [CALL_HISTORY_AND_CONTENT_DESIGN.md](design/CALL_HISTORY_AND_CONTENT_DESIGN.md) | 통화이력 및 내용 설계 |
+| [CALL_HISTORY_AND_RECORDINGS.md](design/CALL_HISTORY_AND_RECORDINGS.md) | 통화이력 및 녹음 |
+| [CDR_ENHANCEMENT_DESIGN.md](design/CDR_ENHANCEMENT_DESIGN.md) | CDR 개선 설계 |
+
+### 기타
+
+| 문서 | 설명 |
+|---|---|
+| [multi-tenant-rag-and-dashboard.md](design/multi-tenant-rag-and-dashboard.md) | 멀티테넌트 RAG 및 대시보드 |
+| [ai-outbound-call.md](design/ai-outbound-call.md) | AI 발신 통화 |
+| [ai-greeting-and-capability-guide.md](design/ai-greeting-and-capability-guide.md) | AI 인사말 및 기능 가이드 |
+| [ai-implementation-guide.md](design/ai-implementation-guide.md) | AI 구현 가이드 |
+| [ai-implementation-guide-part2.md](design/ai-implementation-guide-part2.md) | AI 구현 가이드 Part 2 |
+| [CALLER_MEMORY_DESIGN.md](design/CALLER_MEMORY_DESIGN.md) | 발신자 메모리 설계 |
+| [CALLER_MEMORY_VERIFICATION.md](design/CALLER_MEMORY_VERIFICATION.md) | 발신자 메모리 검증 |
+| [RECORDING_FLOW_CHECK.md](design/RECORDING_FLOW_CHECK.md) | 녹음 흐름 검증 |
+| [PIPELINE_REPLACEMENT_VERIFICATION.md](design/PIPELINE_REPLACEMENT_VERIFICATION.md) | 파이프라인 교체 검증 |
+
+---
+
+## 가이드 (docs/guides/)
+
+### 설치 / 설정
+
+| 문서 | 설명 |
+|---|---|
+| [google-api-setup.md](guides/google-api-setup.md) | Google Cloud API 설정 |
+| [HOW_TO_SET_API_KEY.md](guides/HOW_TO_SET_API_KEY.md) | API 키 설정 방법 |
+| [GEMINI_API_KEY_ROTATION.md](guides/GEMINI_API_KEY_ROTATION.md) | Gemini API 키 로테이션 |
+| [AI_QUICKSTART.md](guides/AI_QUICKSTART.md) | AI 기능 빠른 시작 |
+| [QUICK_START_FRONTEND.md](guides/QUICK_START_FRONTEND.md) | Frontend 빠른 시작 |
+| [START_ALL_GUIDE.md](guides/START_ALL_GUIDE.md) | 전체 시스템 실행 가이드 |
+| [AI_DB_LOGGING_SETUP.md](guides/AI_DB_LOGGING_SETUP.md) | AI DB 로깅 설정 |
+
+### 운영 / 사용
+
+| 문서 | 설명 |
+|---|---|
+| [USER_MANUAL.md](guides/USER_MANUAL.md) | 사용자 매뉴얼 |
+| [OPERATOR_AWAY_MODE_SETUP.md](guides/OPERATOR_AWAY_MODE_SETUP.md) | 운영자 부재중 모드 설정 |
+| [OPERATOR_AWAY_MODE_QUICKSTART.md](guides/OPERATOR_AWAY_MODE_QUICKSTART.md) | 운영자 부재중 모드 빠른 시작 |
+| [REALTIME_CONVERSATION.md](guides/REALTIME_CONVERSATION.md) | 실시간 대화 가이드 |
+| [RAG_CHROMADB_LLM_TECHNICAL_MANUAL.md](guides/RAG_CHROMADB_LLM_TECHNICAL_MANUAL.md) | RAG/ChromaDB/LLM 기술 매뉴얼 |
+| [gemini-model-comparison.md](guides/gemini-model-comparison.md) | Gemini 모델 비교 |
+
+### 디버깅 / 문제해결
+
+| 문서 | 설명 |
+|---|---|
+| [TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md) | 문제 해결 가이드 |
+| [DEBUGGING.md](guides/DEBUGGING.md) | 디버깅 가이드 |
+| [DEBUG-CHEATSHEET.md](guides/DEBUG-CHEATSHEET.md) | 디버그 치트시트 |
+| [APP_LOG_STARTUP_ERRORS.md](guides/APP_LOG_STARTUP_ERRORS.md) | 앱 로그 시작 에러 |
+| [APP_LOG_ERRORS_364_425.md](guides/APP_LOG_ERRORS_364_425.md) | 앱 로그 에러 분석 |
+| [TTS_NO_AUDIO_FIX.md](guides/TTS_NO_AUDIO_FIX.md) | TTS 무음 수정 |
+| [TTS_RTP_AFTER_ACK_FIX.md](guides/TTS_RTP_AFTER_ACK_FIX.md) | TTS RTP ACK 후 수정 |
+| [MIGRATION_KNOWLEDGE_METADATA.md](guides/MIGRATION_KNOWLEDGE_METADATA.md) | 지식 메타데이터 마이그레이션 |
+
+---
+
+## 리포트 (docs/reports/)
+
+월별 분석·점검·수정 리포트. 파일명 형식: `YYYY-MM-DD_HHmm_주제.md`
+
+| 폴더 | 내용 |
+|---|---|
+| [reports/2026-03/](reports/2026-03/) | 2026년 3월: RTP 오디오 품질 개선, AI 응답 시간 최적화, 호 전환 버그 수정 등 |
+
+---
+
+## 디렉토리 구조
 
 ```
 docs/
-├── 📌 핵심 문서 (5개) - 메인 레벨 ⭐
-├── 📂 guides/ - 설정 및 사용 가이드 (10개)
-├── 📂 design/ - 상세 설계 문서 (5개)
-├── 📂 analysis/ - 분석 및 성능 (1개)
-└── 📂 reports/ - 완료 보고서 & 분석 (25개)
+├── INDEX.md                    ← 이 파일 (문서 인덱스)
+├── SYSTEM_OVERVIEW.md          ← 시스템 전체 개요 (소개자료)
+├── QUICK_START.md              ← 빠른 시작 가이드
+├── design/                     ← 설계서 (~46개)
+│   ├── AI_VOICEBOT_ARCHITECTURE.md
+│   ├── FRONTEND_ARCHITECTURE.md
+│   ├── INTENT_HANDLING_DESIGN.md
+│   ├── TTS_RTP_AND_STT_QUEUE_DESIGN.md
+│   ├── CHROMADB_CATEGORY_DESIGN.md
+│   ├── HITL_OPERATOR_RESPONSE_FLOW.md
+│   └── ...
+├── guides/                     ← 가이드 (~22개)
+│   ├── TROUBLESHOOTING.md
+│   ├── USER_MANUAL.md
+│   ├── google-api-setup.md
+│   └── ...
+└── reports/                    ← 월별 리포트
+    └── 2026-03/                ← 2026년 3월 (~50+개)
 ```
-
----
-
-## 📌 핵심 문서 (메인) - 최상위 5개만!
-
-**시스템의 핵심 아키텍처 및 개요 문서**
-
-| 문서 | 설명 |
-|------|------|
-| [INDEX.md](INDEX.md) | **📚 문서 인덱스** - 모든 문서의 체계적인 분류 및 링크 ⭐ |
-| [QUICK_START.md](QUICK_START.md) | **🚀 5분 빠른 시작** - 전체 시스템 설치 및 실행 가이드 |
-| [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) | **🌐 시스템 전체 개요** - 아키텍처 맵, 데이터 플로우, 성능 지표 |
-| [ai-voicebot-architecture.md](ai-voicebot-architecture.md) | **🤖 AI Voicebot 아키텍처** - STT/TTS/LLM/RAG/HITL 전체 설계 (2,679 lines) |
-| [frontend-architecture.md](frontend-architecture.md) | **🖥️ Frontend 아키텍처** - Next.js 기반 Control Center 설계 (2,535 lines) |
-
----
-
-## 📂 guides/ - 설정 및 사용 가이드
-
-특정 기능 설정 및 사용을 위한 단계별 가이드
-
-### 🚀 빠른 시작 가이드
-
-| 문서 | 설명 |
-|------|------|
-| [guides/AI_QUICKSTART.md](guides/AI_QUICKSTART.md) | AI Voicebot 기능만 빠르게 시작하기 |
-| [guides/QUICK_START_FRONTEND.md](guides/QUICK_START_FRONTEND.md) | Frontend Control Center 시작 가이드 |
-
-### 📖 사용자 가이드
-
-| 문서 | 설명 |
-|------|------|
-| [guides/USER_MANUAL.md](guides/USER_MANUAL.md) | **사용자 매뉴얼** - 기능별 상세 사용법 |
-| [guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md) | **문제 해결** - 10가지 일반적인 문제 및 해결 방법 |
-| [guides/DEBUGGING.md](guides/DEBUGGING.md) | **디버깅** - 로그 분석, 성능 프로파일링 |
-
-### ⚙️ 설정 가이드
-
-| 문서 | 설명 |
-|------|------|
-| [guides/google-api-setup.md](guides/google-api-setup.md) | Google Cloud API 설정 (STT/TTS/Gemini) |
-| [guides/OPERATOR_AWAY_MODE_SETUP.md](guides/OPERATOR_AWAY_MODE_SETUP.md) | 운영자 부재중 모드 설정 (DB 마이그레이션 포함) |
-| [guides/OPERATOR_AWAY_MODE_QUICKSTART.md](guides/OPERATOR_AWAY_MODE_QUICKSTART.md) | 부재중 모드 빠른 시작 |
-
-### 📊 비교 및 선택
-
-| 문서 | 설명 |
-|------|------|
-| [guides/gemini-model-comparison.md](guides/gemini-model-comparison.md) | Gemini Flash vs Pro 모델 비교 (성능/비용/품질) |
-
----
-
-## 📂 design/ - 상세 설계 문서
-
-개발자를 위한 구현 수준의 상세 설계
-
-| 문서 | 설명 |
-|------|------|
-| [design/ai-implementation-guide.md](design/ai-implementation-guide.md) | AI 컴포넌트 구현 가이드 Part 1 (8개 컴포넌트) |
-| [design/ai-implementation-guide-part2.md](design/ai-implementation-guide-part2.md) | AI 컴포넌트 구현 가이드 Part 2 (추가 7개 컴포넌트) |
-| [design/OPERATOR-AWAY-MODE-DESIGN.md](design/OPERATOR-AWAY-MODE-DESIGN.md) | 운영자 부재중 모드 상세 설계 (워크플로우/API/DB 스키마) |
-| [design/OPERATOR_TAKEOVER_DESIGN.md](design/OPERATOR_TAKEOVER_DESIGN.md) | **상담원 실시간 개입 설계** - AI 통화 중 원클릭 개입 ⭐ |
-| [design/TEMPORAL_EXPRESSION_DESIGN.md](design/TEMPORAL_EXPRESSION_DESIGN.md) | **시제 표현 정규화 설계** - 한글 상대적 시간 처리 ⭐ |
-| [design/AI_DYNAMIC_CALL_TRANSFER_DESIGN.md](design/AI_DYNAMIC_CALL_TRANSFER_DESIGN.md) | **AI 동적 호 전환 설계** - 지식베이스 기반 자동 호 전환 ⭐ NEW |
-
----
-
-## 📂 analysis/ - 분석 및 성능
-
-시스템 성능 분석 및 최적화 관련 문서
-
-| 문서 | 설명 |
-|------|------|
-| [analysis/ai-response-time-analysis.md](analysis/ai-response-time-analysis.md) | AI 응답 시간 상세 분석 (STT→RAG→LLM→TTS 단계별 지연 시간) |
-
----
-
-## 📂 reports/ - 완료 보고서 & 분석 보고서
-
-개발 진행 상황, 완료 내역 및 에러/성능 분석 보고서
-
-### 📋 완료 보고서 & 체크리스트
-
-| 문서 | 설명 |
-|------|------|
-| [reports/B2BUA_STATUS.md](reports/B2BUA_STATUS.md) | **B2BUA 구현 상태** - SIP B2BUA 지원 메서드 및 기능 상태 |
-| [reports/IMPLEMENTATION_STATUS.md](reports/IMPLEMENTATION_STATUS.md) | Frontend & HITL 구현 상태 추적 |
-| [reports/AI-COMPLETION-CHECKLIST.md](reports/AI-COMPLETION-CHECKLIST.md) | AI Voicebot 기능별 완료 체크리스트 |
-| [reports/KNOWLEDGE_BASE_ARCHITECTURE_REVIEW.md](reports/KNOWLEDGE_BASE_ARCHITECTURE_REVIEW.md) | **지식베이스 설계 점검** - RAG 기반 테넌트별 지식 관리 검증 ⭐ NEW |
-| [reports/WEEK2_COMPLETION_REPORT.md](reports/WEEK2_COMPLETION_REPORT.md) | Week 2 완료 보고서 (실시간 모니터링 & HITL UI) |
-| [reports/AI-DEVELOPMENT.md](reports/AI-DEVELOPMENT.md) | AI 개발 관련 메모 및 진행 사항 |
-
-### 🔍 에러 & 성능 분석 보고서
-
-| 문서 | 설명 |
-|------|------|
-| [reports/GET_VECTOR_DB_IMPORT_FIX.md](reports/GET_VECTOR_DB_IMPORT_FIX.md) | **🔧 get_vector_db Import 에러 수정** - ChromaDB Client 및 Embedder 모듈 생성 ⭐ NEW |
-| [reports/RTP_CONNECTION_LOST_ROOT_CAUSE_FINAL.md](reports/RTP_CONNECTION_LOST_ROOT_CAUSE_FINAL.md) | **🔴 RTP Connection Lost 근본 원인** - AI Takeover 시 Callee Transport 문제 완전 해결 ⭐ NEW |
-| [reports/APP_LOG_ERROR_FIX_20260311.md](reports/APP_LOG_ERROR_FIX_20260311.md) | **app.log 에러 수정** - rag_processor.py 인덴트 에러, tenants API 404 분석 ⭐ |
-| [reports/TENANTS_AUTH_API_IMPLEMENTATION.md](reports/TENANTS_AUTH_API_IMPLEMENTATION.md) | **Frontend 로그인용 Tenants & Auth API 구현 완료** ⭐ |
-| [reports/MISSING_API_ENDPOINTS.md](reports/MISSING_API_ENDPOINTS.md) | **누락된 API 엔드포인트 구현** - Metrics, Operator, Follow-ups API ⭐ |
-| [reports/AI_ORCHESTRATOR_NULL_ROOT_CAUSE.md](reports/AI_ORCHESTRATOR_NULL_ROOT_CAUSE.md) | **🔴 AI Orchestrator NULL 근본 원인** - CallManager 생성 시 파라미터 누락 ⭐ |
-| [reports/THREE_ISSUES_COMPREHENSIVE_ANALYSIS.md](reports/THREE_ISSUES_COMPREHENSIVE_ANALYSIS.md) | **🔴 세 가지 재발 문제 완전 분석** - NULL 바이트, Deprecation, AI 타이밍 ⭐ NEW |
-| [reports/GIANT_WHITESPACE_LOG_BUG.md](reports/GIANT_WHITESPACE_LOG_BUG.md) | **700KB NULL 바이트 로그 버그 분석** - 버퍼 초기화 실패 ⭐ |
-| [reports/RTP_RELAY_INVALID_REMOTE_ANALYSIS.md](reports/RTP_RELAY_INVALID_REMOTE_ANALYSIS.md) | **RTP Relay Invalid Remote 경고 분석** - AI Orchestrator 연결 문제 ⭐ |
-| [reports/RECURRING_ISSUES_COMPREHENSIVE_FIX.md](reports/RECURRING_ISSUES_COMPREHENSIVE_FIX.md) | **🔴 재발 문제 종합 분석** - Active API/RTP/NULL 로깅 통합 해결 방안 ⭐ |
-| [reports/ROOT_CAUSE_FINAL_FIX.md](reports/ROOT_CAUSE_FINAL_FIX.md) | **🎯 근본 원인 완전 분석** - AI Orchestrator global 키워드 / loguru 충돌 ⭐ NEW |
-| [reports/ERROR_LOG_ANALYSIS.md](reports/ERROR_LOG_ANALYSIS.md) | **에러 로그 점검** - AI Orchestrator & RTP Relay 이슈 분석 |
-| [reports/LOG_REVIEW_ACTION_ITEMS.md](reports/LOG_REVIEW_ACTION_ITEMS.md) | 로그 검토 액션 아이템 |
-| [reports/AUDIO_SEND_ERROR_FIX.md](reports/AUDIO_SEND_ERROR_FIX.md) | 오디오 전송 에러 수정 보고서 |
-| [reports/APP_LOG_AI_CALL_ANALYSIS.md](reports/APP_LOG_AI_CALL_ANALYSIS.md) | AI 통화 로그 분석 (TTS/STT/RTP 이슈) |
-| [reports/STT_PIPELINE_DEBUG.md](reports/STT_PIPELINE_DEBUG.md) | STT 파이프라인 디버깅 보고서 |
-| [reports/RTP_AUDIO_ISSUES_REPORT.md](reports/RTP_AUDIO_ISSUES_REPORT.md) | RTP 오디오 이슈 분석 |
-
-### 🚀 구현 완료 보고서
-
-| 문서 | 설명 |
-|------|------|
-| [reports/AI_DYNAMIC_CALL_TRANSFER_FINAL_IMPLEMENTATION.md](reports/AI_DYNAMIC_CALL_TRANSFER_FINAL_IMPLEMENTATION.md) | **AI 동적 호 전환 최종 구현** - Phase 1-6 완전 구현 (TransferManager 활용) ⭐ NEW |
-| [reports/AI_DYNAMIC_CALL_TRANSFER_IMPLEMENTATION_PHASE6.md](reports/AI_DYNAMIC_CALL_TRANSFER_IMPLEMENTATION_PHASE6.md) | **AI 동적 호 전환 Phase 6** - Knowledge Base CRUD Frontend/Backend 구현 |
-| [reports/AI_DYNAMIC_CALL_TRANSFER_IMPLEMENTATION_PHASE1-5.md](reports/AI_DYNAMIC_CALL_TRANSFER_IMPLEMENTATION_PHASE1-5.md) | **AI 동적 호 전환 Phase 1-5** - Intent, RAG, Call Manager, WebSocket 구현 |
-
-### 📚 문서 관리
-
-| 문서 | 설명 |
-|------|------|
-| [reports/DOCUMENTATION_MANAGEMENT_RULES.md](reports/DOCUMENTATION_MANAGEMENT_RULES.md) | **문서 관리 규칙** - 문서 위치, 네이밍, 업데이트 규칙 ⭐ |
-
----
-
-## 🗂️ 문서 선택 가이드
-
-### 처음 시작하는 경우
-1. [QUICK_START.md](QUICK_START.md) - 5분 설치 및 실행
-2. [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) - 전체 시스템 이해
-3. [guides/AI_QUICKSTART.md](guides/AI_QUICKSTART.md) - AI 기능 테스트
-
-### 운영자/사용자
-1. [guides/USER_MANUAL.md](guides/USER_MANUAL.md) - 사용법
-2. [guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md) - 문제 해결
-3. [guides/OPERATOR_AWAY_MODE_QUICKSTART.md](guides/OPERATOR_AWAY_MODE_QUICKSTART.md) - 부재중 모드
-
-### 개발자
-1. [ai-voicebot-architecture.md](ai-voicebot-architecture.md) - AI 아키텍처
-2. [frontend-architecture.md](frontend-architecture.md) - Frontend 아키텍처
-3. [design/ai-implementation-guide.md](design/ai-implementation-guide.md) - 구현 가이드
-
-### 시스템 관리자
-1. [guides/google-api-setup.md](guides/google-api-setup.md) - API 설정
-2. [guides/DEBUGGING.md](guides/DEBUGGING.md) - 디버깅
-3. [analysis/ai-response-time-analysis.md](analysis/ai-response-time-analysis.md) - 성능 분석
-
----
-
-## 📝 문서 작성 규칙 (.cursorrules 적용)
-
-### 🚨 중요: 문서 위치 규칙
-
-**✅ 반드시 준수**:
-- 모든 분석, 에러 점검, 완료 보고서는 `docs/reports/`에 생성
-- ❌ **금지**: `logs/` 디렉토리에 `.md` 파일 생성
-- ✅ **허용**: `logs/` 디렉토리는 `.log` 파일만
-
-### 새 문서 저장 위치
-
-| 문서 유형 | 저장 위치 | 예시 |
-|----------|----------|------|
-| **핵심 아키텍처/시스템 개요** | `docs/` | ai-voicebot-architecture.md, SYSTEM_OVERVIEW.md |
-| **사용/설정/문제해결 가이드** | `docs/guides/` | USER_MANUAL, TROUBLESHOOTING, API 설정 |
-| **상세 설계** | `docs/design/` | 구현 가이드, 워크플로우 설계 |
-| **분석/성능** | `docs/analysis/` | 응답 시간, 비용 분석 |
-| **완료 보고서/상태** | `docs/reports/` | 구현 상태, 체크리스트, B2BUA 상태 |
-| **에러 분석/로그 점검** | `docs/reports/` | ERROR_LOG_ANALYSIS.md (NOT in logs/) |
-
-### 필수 업데이트 대상 문서 (새 기능 추가 시)
-
-**Priority: HIGH** - 반드시 함께 업데이트:
-1. `docs/SYSTEM_OVERVIEW.md` - 시스템 전체 개요
-   - 새 기능 → Layer 2/3에 추가
-   - 새 시나리오 추가
-   - 관련 문서 링크 추가
-
-2. `docs/INDEX.md` - 문서 인덱스 (이 파일)
-   - 새 문서 링크 추가
-   - 문서 개수 업데이트
-
-3. `README.md` - 프로젝트 루트
-   - 주요 기능 변경 → Features 섹션 업데이트
-   - 새 가이드 → Quick Links 업데이트
-
-**Priority: MEDIUM** - 해당 시:
-- `docs/ai-voicebot-architecture.md` (AI 관련 기능 변경 시)
-- `docs/frontend-architecture.md` (Frontend 컴포넌트 추가 시)
-- 관련 설계 문서에 상호 참조 추가
-
-### 파일명 규칙
-- 핵심 문서: `UPPERCASE.md` (예: `QUICK_START.md`)
-- 일반 문서: `kebab-case.md` (예: `ai-voicebot-architecture.md`)
-- 가이드: `{기능}-setup.md`, `{기능}-quickstart.md`
-- 보고서: `{주제}_REPORT.md`, `{기능}_COMPLETE.md`
-
-### 필수 메타데이터 (문서 상단)
-```markdown
-# 문서 제목
-
-**작성일**: YYYY-MM-DD
-**버전**: X.Y
-**상태**: 설계 완료 / 구현 중 / 완료
-**관련 문서**: 
-- [링크1](경로1)
-- [링크2](경로2)
-```
-
-### 문서 생성 워크플로우 체크리스트
-```markdown
-## 문서 업데이트 체크리스트
-
-- [ ] `SYSTEM_OVERVIEW.md` - 기능 목록 및 시나리오 추가
-- [ ] `INDEX.md` - 새 문서 링크 추가, 문서 개수 업데이트
-- [ ] `README.md` - Features 또는 Quick Links 업데이트 (필요시)
-- [ ] 관련 아키텍처 문서 업데이트 (해당시)
-- [ ] 관련 설계 문서에 상호 참조 추가 (해당시)
-```
-
-**참고**: 상세 규칙은 [reports/DOCUMENTATION_MANAGEMENT_RULES.md](reports/DOCUMENTATION_MANAGEMENT_RULES.md) 참조
-
----
-
-**최종 업데이트**: 2026-03-11  
-**문서 개수**: 37개 (핵심 5개 + guides 10개 + design 6개 + analysis 1개 + reports 15개)
-

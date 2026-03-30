@@ -326,9 +326,12 @@ class RAGLLMProcessor(FrameProcessor):
                         logger.debug("hitl_ensure_queue_loop_in_consumer_failed", call_id=cid, error=str(e))
                 while True:
                     response_data = await proc._hitl_response_queue.get()
+                    if response_data is None:
+                        # cleanup() 에서 보낸 종료 sentinel
+                        break
                     if not response_data:
                         continue
-                    
+
                     # response_data는 dict: {"type": "hitl_response"|"hitl_timeout", "text": "...", "call_id": "...", "original_question": "..."}
                     if isinstance(response_data, dict):
                         msg_type = response_data.get("type", "hitl_response")
@@ -1355,9 +1358,18 @@ class RAGLLMProcessor(FrameProcessor):
                            text_preview=response[:120] if response else "",
                            note="RAG → 파이프라인 TextFrame 전송 (단일 프레임 확인용)")
                 
-                # ✅ 청크 분할 비활성화: Google TTS는 streaming 미지원 → 한 번에 전송해야 버퍼 고갈 없음
-                # 인사말처럼 전체 텍스트를 단일 TextFrame으로 전송 (청크 간 50ms 지연 제거)
-                await self.push_frame(TextFrame(text=response))
+                # 스트리밍 TTS: response_chunks가 있으면 문장 단위로 TTS 전송 (체감 지연 감소)
+                # 없으면 전체 텍스트를 한 번에 전송 (기존 동작)
+                if chunks and len(chunks) > 1:
+                    logger.info("rag_streaming_tts_chunks",
+                               call_id=self._call_id or "",
+                               chunk_count=len(chunks),
+                               note="스트리밍 LLM → 문장 단위 TTS 전달")
+                    for chunk_text in chunks:
+                        if chunk_text.strip():
+                            await self.push_frame(TextFrame(text=chunk_text.strip()))
+                else:
+                    await self.push_frame(TextFrame(text=response))
                 await self.push_frame(LLMFullResponseEndFrame())
                 
                 # ✅ TTS 완료 대기 (오디오 생성 확인)
@@ -1823,7 +1835,38 @@ class RAGLLMProcessor(FrameProcessor):
         elif hasattr(self, '_messages'):
             self._messages = []
         logger.info("rag_llm_processor_reset")
-    
+
+    async def cleanup(self):
+        """파이프라인 종료 시 실행 — dangling task 방지."""
+        # _user_message_worker 취소
+        task = self._user_message_worker_task
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._user_message_worker_task = None
+
+        # 진행 중인 LLM 에이전트 턴 취소
+        agent_task = self._agent_turn_task
+        if agent_task and not agent_task.done():
+            agent_task.cancel()
+            try:
+                await agent_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._agent_turn_task = None
+
+        # HITL 소비 큐에 종료 sentinel 전송 (Task-203 _consume 종료 유도)
+        if self._hitl_response_queue:
+            try:
+                self._hitl_response_queue.put_nowait(None)
+            except Exception:
+                pass
+
+        logger.info("rag_llm_processor_cleanup", call_id=self._call_id or "")
+
     # =========================================================================
     # Legacy fallback (Phase 1 호환)
     # =========================================================================

@@ -243,14 +243,16 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
         # 3단계: Contextual Compression
         compressed = _contextual_compress(expanded_docs, query)
 
-        # 4단계: Confidence 산출
+        # 4단계: Confidence 산출 — top_score 기반 (평균 방식은 하위 문서가 점수를 끌어내림)
         scores = [
             doc.score if hasattr(doc, "score") else doc.get("score", 0)
             for doc in search_results
         ]
         scores = [s for s in scores if s and s > 0]
+        top_score = max(scores) if scores else 0.0
         avg_score = sum(scores) / len(scores) if scores else 0.0
-        confidence = min(1.0, avg_score * 1.1)
+        # top_score 70% + avg_score 30% 가중 평균: 1순위 관련도 반영, 과도한 상승 방지
+        confidence = min(1.0, (top_score * 0.7 + avg_score * 0.3) * 1.1)
 
         elapsed = time.time() - _start
         logger.info("timing_segment", segment="adaptive_rag", elapsed_sec=round(elapsed, 3), search_elapsed_sec=round(search_elapsed, 3))
