@@ -13,7 +13,8 @@ const nextConfig = {
   env: {
     // 비우면 브라우저에서 getApiUrl() → "" (동일 출처 + 아래 rewrites)
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? '',
-    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001',
+    // Socket.IO는 HTTP(S) URL로 연결 후 업그레이드함. ws:// 기본값은 핸드셰이크 실패로 대시보드가 비어 보일 수 있음.
+    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'http://127.0.0.1:8001',
   },
   async rewrites() {
     return [

@@ -23,3 +23,13 @@ def apply_rag_knowledge_prefix(text: str) -> str:
     if t.startswith(RAG_KNOWLEDGE_TEXT_PREFIX):
         return t
     return f"{RAG_KNOWLEDGE_TEXT_PREFIX}{t}"
+
+
+def strip_rag_knowledge_prefix(text: str) -> str:
+    """저장·검색용 접두 제거. 환각 검증(전사 대비) 등 원문 근거 판단 시 사용."""
+    if text is None:
+        return ""
+    t = str(text).strip()
+    if t.startswith(RAG_KNOWLEDGE_TEXT_PREFIX):
+        return t[len(RAG_KNOWLEDGE_TEXT_PREFIX) :].strip()
+    return t

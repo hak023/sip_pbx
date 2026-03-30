@@ -17,6 +17,33 @@ from src.common.sip_owner import normalize_owner_username
 logger = structlog.get_logger(__name__)
 
 
+def _merge_search_documents(primary: list, secondary: list, *, max_docs: int) -> list:
+    """동일 id(또는 본문 접두) 기준 병합, 더 높은 score 유지."""
+    by_key: dict = {}
+
+    def add_doc(d: object) -> None:
+        text = d.text if hasattr(d, "text") else (d.get("text") or "")
+        did = (d.id if hasattr(d, "id") else d.get("id")) or ""
+        key = did if did else (text[:120] if text else "")
+        if not key:
+            return
+        sc = float(d.score if hasattr(d, "score") else d.get("score", 0) or 0)
+        prev = by_key.get(key)
+        if prev is None or sc > float(prev.score if hasattr(prev, "score") else prev.get("score", 0) or 0):
+            by_key[key] = d
+
+    for d in primary or []:
+        add_doc(d)
+    for d in secondary or []:
+        add_doc(d)
+    merged = list(by_key.values())
+    merged.sort(
+        key=lambda x: float(x.score if hasattr(x, "score") else x.get("score", 0) or 0),
+        reverse=True,
+    )
+    return merged[:max_docs]
+
+
 def _is_assistant_message(msg: Dict) -> bool:
     r = (msg.get("role") or "").strip().lower()
     return r in ("assistant", "ai", "착신자")
@@ -82,9 +109,9 @@ def _merge_dialog_context_for_rag(state: ConversationState, base_query: str) -> 
 
 
 # 검색 파라미터
-SENTENCE_TOP_K = 6      # 문장 레벨 검색 수
+SENTENCE_TOP_K = 10     # 문장 레벨 검색 수 (RAG 엔진 top_k·backfill과 함께 넉넉히)
 PARENT_EXPAND_LINES = 5  # 상위 문맥 확장 줄 수
-COMPRESSION_MAX_CHARS = 800  # 압축 후 최대 문자 수
+COMPRESSION_MAX_CHARS = 1200  # 압축 후 최대 문자 수
 
 
 async def adaptive_rag_node(state: ConversationState) -> dict:
@@ -121,8 +148,56 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
             top_k_override=SENTENCE_TOP_K,
             intent=intent,
         )
-        search_results = search_out.documents
+        search_results = list(search_out.documents or [])
         rag_search_trace = getattr(search_out, "trace", None) or {}
+        # 질문(intent=question): STT 원문과 정규화/rewrite 쿼리가 다르면 2-pass 검색 후 병합
+        # (예: "내일 날씨" → 절대일 문장으로만 임베딩하면 KB의 상대일 표현과 유사도 저하)
+        raw_q = (state.get("user_query_raw") or "").strip()
+        if intent == "question" and raw_q:
+            raw_merged = _merge_dialog_context_for_rag(state, raw_q)
+            if raw_merged.strip() and raw_merged.strip() != (query or "").strip():
+                try:
+                    raw_out = await rag_engine.search(
+                        raw_merged,
+                        owner_filter=owner,
+                        call_id=call_id or None,
+                        top_k_override=SENTENCE_TOP_K,
+                        intent=intent,
+                    )
+                    raw_docs = list(raw_out.documents or [])
+                    if raw_docs:
+                        before = len(search_results)
+                        search_results = _merge_search_documents(
+                            search_results,
+                            raw_docs,
+                            max_docs=max(15, SENTENCE_TOP_K * 2),
+                        )
+                        rag_search_trace = {
+                            **rag_search_trace,
+                            "rag_dual_query": {
+                                "primary_query": query,
+                                "raw_stt_query": raw_merged,
+                                "primary_hits": before,
+                                "raw_hits": len(raw_docs),
+                                "merged_hits": len(search_results),
+                            },
+                        }
+                        logger.info(
+                            "adaptive_rag_dual_query_merged",
+                            call_id=call_id or "",
+                            primary_preview=(query or "")[:80],
+                            raw_preview=raw_merged[:80],
+                            merged_count=len(search_results),
+                            note="원문+정규화 쿼리 병행 검색",
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "adaptive_rag_dual_query_failed",
+                        call_id=call_id or "",
+                        error=str(e),
+                        note="원문 보조 검색 실패 시 1-pass 결과만 사용",
+                    )
+
         search_elapsed = time.time() - search_start
 
         if not search_results:

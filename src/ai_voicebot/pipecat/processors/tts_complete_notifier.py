@@ -53,7 +53,20 @@ class TTSCompleteNotifier(FrameProcessor):
         self._audio_frame_count += 1
         sample_rate = getattr(frame, "sample_rate", None) or 16000
         num_channels = getattr(frame, "num_channels", None) or 1
+        duration_ms = _audio_duration_sec(audio, sample_rate, num_channels) * 1000
         self._current_duration_sec += _audio_duration_sec(audio, sample_rate, num_channels)
+        
+        # 📌 프레임 타입·길이 추적 (Notifier vs Output 불일치 원인 파악)
+        if self._audio_frame_count <= 5 or self._audio_frame_count % 50 == 0:
+            call_id = self._sync_context.get("_call_id", "")
+            logger.debug("notifier_audio_frame_detail",
+                        call_id=call_id,
+                        frame_index=self._audio_frame_count,
+                        frame_type=type(frame).__name__,
+                        audio_len=len(audio),
+                        duration_ms=round(duration_ms, 2),
+                        sample_rate=sample_rate,
+                        note="Notifier 프레임 타입·길이 추적 (Output 불일치 원인 파악)")
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)

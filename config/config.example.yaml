@@ -39,6 +39,17 @@ media:
     - "pcmu"   # G.711 μ-law
     - "pcma"   # G.711 A-law
 
+  # TTS→caller RTP 송신 디버그: sendto 직전 패킷을 TSV로 기록 (seq·간격 등)
+  rtp_tx_debug: false
+  # 선택: 절대 경로 템플릿. {call_id} 치환. 예: "C:/logs/rtp_tx_{call_id}.tsv"
+  # rtp_tx_debug_path: null
+
+  # AI 통화: 장시간 TTS 없을 때 무음 RTP 주기 송신(단말 무수신 끊김 완화). 끄려면 false 또는
+  # 환경변수 SIPPBX_AI_RTP_SILENCE_KEEPALIVE=0
+  ai_rtp_silence_keepalive: true
+  # Keepalive 간격(초). 0.5초 권장 (재생 gap 최소화). 환경변수: SIPPBX_AI_RTP_KEEPALIVE_INTERVAL_SEC
+  ai_rtp_keepalive_interval_sec: 0.5
+
 # =============================================================================
 # 이벤트 및 알림 설정
 # =============================================================================

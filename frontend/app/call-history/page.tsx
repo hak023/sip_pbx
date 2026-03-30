@@ -1,793 +1,581 @@
-'use client';
+"use client";
 
-import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
-import { apiJson } from '@/lib/api';
-import {
-  downloadBlob,
-  fetchRecordingBlob,
-  fetchRecordingInfo,
-  type RecordingFileInfo,
-} from '@/lib/recordings';
-import type { FollowUpItem } from '@/types/api';
-import { RagSearchDoneDetail, stripRagHitsFromRow } from '@/components/RagSearchDoneDetail';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { apiJson, authHeaders, getApiUrl } from "@/lib/api";
+import { getTenantOwner } from "@/lib/tenant";
+import { RagSearchDoneDetail, stripRagHitsFromRow } from "@/components/RagSearchDoneDetail";
+import type {
+  CallDebugTraceRow,
+  CallHistoryDebugTraceResponse,
+  CallHistoryListResponse,
+  CallHistoryRecordItem,
+} from "@/types/api";
 
-interface CallDataRecordRow {
-  ts: string;
-  call_id: string;
-  category: string;
-  event: string;
-  [key: string]: unknown;
+function formatWhen(iso?: string | null): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("ko-KR", {
+      dateStyle: "short",
+      timeStyle: "medium",
+    });
+  } catch {
+    return iso;
+  }
 }
 
-interface CallHistoryItem {
-  call_id: string;
-  caller_id: string;
-  callee_id: string;
-  start_time: string;
-  end_time: string | null;
-  has_recording: boolean;
-  has_transcript: boolean;
-  is_ai_handled?: boolean;
-  transcripts?: Array<{ role: string; content: string }>;
+function formatDuration(sec?: number): string {
+  if (sec == null || Number.isNaN(sec)) return "—";
+  const s = Math.round(sec);
+  if (s < 60) return `${s}초`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m}분 ${r}초` : `${m}분`;
 }
 
-const FOLLOW_STATUS_OPTIONS = [
-  { value: 'pending', label: '대기' },
-  { value: 'noted', label: '메모' },
-  { value: 'contacted', label: '연락함' },
-  { value: 'resolved', label: '해결' },
+function KindBadge({ kind }: { kind?: string }) {
+  const k = kind || "unknown";
+  const color =
+    k === "needs_follow_up"
+      ? "bg-amber-100 text-amber-900"
+      : k === "hitl_escalation"
+        ? "bg-rose-100 text-rose-900"
+        : "bg-gray-100 text-gray-800";
+  return (
+    <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${color}`}>{k}</span>
+  );
+}
+
+const DEBUG_CATEGORIES = [
+  "all",
+  "stt",
+  "tts",
+  "llm",
+  "rag",
+  "knowledge",
+  "call_event",
+  "hitl",
 ] as const;
 
-function formatFollowUpTime(createdAt: number | string | undefined): string {
-  if (createdAt == null) return '-';
-  if (typeof createdAt === 'number') {
-    const ms = createdAt < 1e12 ? createdAt * 1000 : createdAt;
-    return new Date(ms).toLocaleString('ko-KR');
-  }
-  return String(createdAt);
-}
-
-function cdrCategoryClass(cat: string): string {
+function categoryBadgeClass(cat: string): string {
   switch (cat) {
-    case 'stt':
-      return 'bg-sky-100 text-sky-900';
-    case 'tts':
-      return 'bg-violet-100 text-violet-900';
-    case 'llm':
-      return 'bg-amber-100 text-amber-900';
-    case 'rag':
-      return 'bg-orange-100 text-orange-900';
-    case 'knowledge':
-      return 'bg-emerald-100 text-emerald-900';
-    case 'call_event':
-      return 'bg-slate-200 text-slate-800';
-    case 'hitl':
-      return 'bg-rose-100 text-rose-900';
+    case "stt":
+      return "bg-sky-100 text-sky-900";
+    case "tts":
+      return "bg-violet-100 text-violet-900";
+    case "llm":
+      return "bg-amber-100 text-amber-900";
+    case "rag":
+      return "bg-orange-100 text-orange-900";
+    case "knowledge":
+      return "bg-emerald-100 text-emerald-900";
+    case "call_event":
+      return "bg-slate-200 text-slate-800";
+    case "hitl":
+      return "bg-rose-100 text-rose-900";
     default:
-      return 'bg-gray-100 text-gray-800';
+      return "bg-gray-100 text-gray-800";
   }
 }
 
-function statusBadgeClass(status: string | undefined) {
-  switch (status) {
-    case 'resolved':
-      return 'bg-green-100 text-green-800';
-    case 'noted':
-    case 'contacted':
-      return 'bg-blue-100 text-blue-800';
-    case 'pending':
-    default:
-      return 'bg-amber-100 text-amber-800';
-  }
-}
+function MixedAudioPlayer({ callId, enabled }: { callId: string; enabled: boolean }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const createdRef = useRef<string | null>(null);
 
-export default function CallHistoryPage() {
-  const router = useRouter();
-  const [tenant, setTenant] = useState<{ owner: string; name?: string } | null>(null);
-  const [tab, setTab] = useState<'history' | 'followups'>('history');
-
-  const [items, setItems] = useState<CallHistoryItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-
-  const [followUps, setFollowUps] = useState<FollowUpItem[]>([]);
-  const [followLoading, setFollowLoading] = useState(false);
-  const [followError, setFollowError] = useState<string | null>(null);
-
-  const [modalItem, setModalItem] = useState<FollowUpItem | null>(null);
-  const [editStatus, setEditStatus] = useState('pending');
-  const [editNote, setEditNote] = useState('');
-  const [patching, setPatching] = useState(false);
-
-  /** 녹음 재생 모달 */
-  const [recModalCallId, setRecModalCallId] = useState<string | null>(null);
-  const [recFiles, setRecFiles] = useState<RecordingFileInfo[]>([]);
-  const [recSelectedFile, setRecSelectedFile] = useState<string>('');
-  const [recAudioUrl, setRecAudioUrl] = useState<string | null>(null);
-  const [recLoading, setRecLoading] = useState(false);
-  const [recError, setRecError] = useState<string | null>(null);
-  const recAudioUrlRef = useRef<string | null>(null);
-
-  /** 행 확장: 통화 내용 + call data record */
-  const [expandedCallId, setExpandedCallId] = useState<string | null>(null);
-  const [cdrByCall, setCdrByCall] = useState<Record<string, CallDataRecordRow[]>>({});
-  const [cdrLoading, setCdrLoading] = useState<Record<string, boolean>>({});
-  const [cdrError, setCdrError] = useState<Record<string, string | null>>({});
-  const [cdrCategoryFilter, setCdrCategoryFilter] = useState<string>('all');
-  const cdrFetchedRef = useRef<Set<string>>(new Set());
-
-  const revokeRecUrl = useCallback(() => {
-    if (recAudioUrlRef.current) {
-      URL.revokeObjectURL(recAudioUrlRef.current);
-      recAudioUrlRef.current = null;
-    }
-    setRecAudioUrl(null);
-  }, []);
-
-  const closeRecModal = useCallback(() => {
-    revokeRecUrl();
-    setRecModalCallId(null);
-    setRecFiles([]);
-    setRecSelectedFile('');
-    setRecError(null);
-    setRecLoading(false);
-  }, [revokeRecUrl]);
-
-  const loadRecordingAudio = useCallback(
-    async (callId: string, fileName: string) => {
-      revokeRecUrl();
-      setRecLoading(true);
-      setRecError(null);
-      try {
-        const blob = await fetchRecordingBlob(callId, fileName);
-        const url = URL.createObjectURL(blob);
-        recAudioUrlRef.current = url;
-        setRecAudioUrl(url);
-      } catch (e) {
-        setRecError((e as Error).message || '녹음을 불러올 수 없습니다.');
-      } finally {
-        setRecLoading(false);
+  useEffect(() => {
+    if (!enabled) {
+      setUrl(null);
+      setErr(null);
+      setLoading(false);
+      if (createdRef.current) {
+        URL.revokeObjectURL(createdRef.current);
+        createdRef.current = null;
       }
-    },
-    [revokeRecUrl]
-  );
-
-  const openRecModal = useCallback(
-    async (callId: string) => {
-      setRecModalCallId(callId);
-      setRecFiles([]);
-      setRecSelectedFile('');
-      revokeRecUrl();
-      setRecLoading(true);
-      setRecError(null);
-      try {
-        const info = await fetchRecordingInfo(callId);
-        setRecFiles(info.files);
-        if (info.files.length === 0) {
-          setRecError('오디오 파일이 없습니다.');
-          setRecLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    const u = `${getApiUrl()}/api/call-history/${encodeURIComponent(callId)}/media/mixed`;
+    fetch(u, { headers: authHeaders(false) })
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          setErr(res.status === 404 ? "mixed.wav 없음" : `로드 실패 (${res.status})`);
+          setLoading(false);
           return;
         }
-        const first = info.files[0].name;
-        setRecSelectedFile(first);
-        await loadRecordingAudio(callId, first);
-      } catch (e) {
-        setRecError((e as Error).message || '녹음 정보를 불러올 수 없습니다.');
-        setRecLoading(false);
-      }
-    },
-    [loadRecordingAudio, revokeRecUrl]
-  );
-
-  const handleDownloadRecording = async (callId: string) => {
-    try {
-      const info = await fetchRecordingInfo(callId);
-      if (!info.files.length) {
-        alert('다운로드할 오디오 파일이 없습니다.');
-        return;
-      }
-      const file = info.files[0].name;
-      const blob = await fetchRecordingBlob(callId, file);
-      downloadBlob(blob, file);
-    } catch (e) {
-      alert((e as Error).message || '다운로드에 실패했습니다.');
-    }
-  };
+        const blob = await res.blob();
+        if (cancelled) return;
+        if (createdRef.current) URL.revokeObjectURL(createdRef.current);
+        const objectUrl = URL.createObjectURL(blob);
+        createdRef.current = objectUrl;
+        setUrl(objectUrl);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setErr("네트워크 오류");
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [callId, enabled]);
 
   useEffect(() => {
     return () => {
-      if (recAudioUrlRef.current) URL.revokeObjectURL(recAudioUrlRef.current);
+      if (createdRef.current) {
+        URL.revokeObjectURL(createdRef.current);
+        createdRef.current = null;
+      }
     };
   }, []);
 
-  const limit = 20;
+  if (!enabled) return null;
+  if (loading) return <p className="text-sm text-gray-500">녹음 불러오는 중…</p>;
+  if (err) return <p className="text-sm text-amber-800">{err}</p>;
+  if (!url) return null;
+  return (
+    <audio controls className="w-full max-w-xl h-9" src={url} preload="metadata">
+      브라우저가 오디오를 지원하지 않습니다.
+    </audio>
+  );
+}
+
+function CallDetailPanel({
+  row,
+  open,
+}: {
+  row: CallHistoryRecordItem;
+  open: boolean;
+}) {
+  const [traceFilter, setTraceFilter] = useState<(typeof DEBUG_CATEGORIES)[number]>("all");
+  const [traceRows, setTraceRows] = useState<CallDebugTraceRow[] | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceErr, setTraceErr] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptErr, setTranscriptErr] = useState<string | null>(null);
 
   useEffect(() => {
-    const t = localStorage.getItem('tenant');
-    if (!t) {
-      router.push('/login');
+    if (!open) return;
+    let cancelled = false;
+    setTraceLoading(true);
+    setTraceErr(null);
+    setTraceRows(null);
+    void (async () => {
+      const res = await apiJson<CallHistoryDebugTraceResponse>(
+        `/api/call-history/${encodeURIComponent(row.call_id)}/debug-trace?limit=1200`,
+        { method: "GET" },
+      );
+      if (cancelled) return;
+      if (!res.ok) {
+        setTraceErr(res.message);
+        setTraceRows([]);
+      } else {
+        setTraceRows(res.data.items || []);
+      }
+      setTraceLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, row.call_id]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    if (!row.has_transcript) {
+      setTranscript("");
+      setTranscriptErr(null);
+      setTranscriptLoading(false);
       return;
     }
-    try {
-      setTenant(JSON.parse(t));
-    } catch {
-      router.push('/login');
-    }
-  }, [router]);
-
-  useEffect(() => {
-    if (!tenant?.owner || tab !== 'history') return;
-
-    const params = new URLSearchParams({ page: String(page), limit: String(limit), callee: tenant.owner });
-
-    setLoading(true);
+    setTranscriptLoading(true);
+    setTranscriptErr(null);
+    setTranscript(null);
     void (async () => {
-      const res = await apiJson<{ items: CallHistoryItem[]; total: number }>(
-        `/api/call-history?${params.toString()}`,
-        { method: 'GET' }
-      );
-      if (res.ok) {
-        setItems(res.data.items ?? []);
-        setTotal(res.data.total ?? 0);
-      } else {
-        setItems([]);
-        setTotal(0);
+      const u = `${getApiUrl()}/api/call-history/${encodeURIComponent(row.call_id)}/transcript`;
+      try {
+        const r = await fetch(u, { headers: authHeaders(false) });
+        if (cancelled) return;
+        if (!r.ok) {
+          setTranscriptErr(r.status === 404 ? "대본 파일 없음" : `HTTP ${r.status}`);
+          setTranscript("");
+        } else {
+          setTranscript(await r.text());
+        }
+      } catch {
+        if (!cancelled) {
+          setTranscriptErr("네트워크 오류");
+          setTranscript("");
+        }
       }
-      setLoading(false);
+      if (!cancelled) setTranscriptLoading(false);
     })();
-  }, [tenant?.owner, page, tab]);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, row.call_id, row.has_transcript]);
 
-  const loadCallDataRecord = useCallback(async (callId: string) => {
-    if (cdrFetchedRef.current.has(callId)) return;
-    cdrFetchedRef.current.add(callId);
-    setCdrLoading((prev) => ({ ...prev, [callId]: true }));
-    setCdrError((prev) => ({ ...prev, [callId]: null }));
-    const res = await apiJson<{ items: CallDataRecordRow[] }>(
-      `/api/call-history/${encodeURIComponent(callId)}/call-data-record`,
-      { method: 'GET' }
-    );
-    setCdrLoading((prev) => ({ ...prev, [callId]: false }));
-    if (res.ok) {
-      setCdrByCall((prev) => ({ ...prev, [callId]: res.data.items ?? [] }));
-    } else {
-      cdrFetchedRef.current.delete(callId);
-      setCdrError((prev) => ({ ...prev, [callId]: res.message }));
-    }
-  }, []);
-
-  const toggleRowExpand = useCallback(
-    (callId: string) => {
-      if (expandedCallId === callId) {
-        setExpandedCallId(null);
-        return;
-      }
-      setExpandedCallId(callId);
-      void loadCallDataRecord(callId);
-    },
-    [expandedCallId, loadCallDataRecord]
-  );
-
-  const loadFollowUps = useCallback(async () => {
-    if (!tenant?.owner) return;
-    setFollowLoading(true);
-    setFollowError(null);
-    const q = new URLSearchParams({ callee: tenant.owner });
-    const res = await apiJson<{ items: FollowUpItem[]; total?: number }>(
-      `/api/call-history/follow-ups?${q.toString()}`,
-      { method: 'GET' }
-    );
-    setFollowLoading(false);
-    if (res.ok) setFollowUps(res.data.items ?? []);
-    else setFollowError(res.message);
-  }, [tenant?.owner]);
-
-  useEffect(() => {
-    if (tab === 'followups' && tenant?.owner) loadFollowUps();
-  }, [tab, tenant?.owner, loadFollowUps]);
-
-  const openModal = (row: FollowUpItem) => {
-    setModalItem(row);
-    setEditStatus(row.status || 'pending');
-    setEditNote((row.operator_note as string) || '');
-  };
-
-  const closeModal = () => {
-    setModalItem(null);
-    setEditNote('');
-    setPatching(false);
-  };
-
-  const saveFollowUp = async () => {
-    if (!modalItem) return;
-    setPatching(true);
-    const res = await apiJson<{ success?: boolean }>(
-      `/api/call-history/follow-ups/${encodeURIComponent(modalItem.id)}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status: editStatus,
-          operator_note: editNote.trim() || undefined,
-        }),
-      }
-    );
-    setPatching(false);
-    if (res.ok) {
-      closeModal();
-      loadFollowUps();
-    } else {
-      alert(res.message);
-    }
-  };
-
-  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const filteredTrace =
+    traceRows == null
+      ? []
+      : traceFilter === "all"
+        ? traceRows
+        : traceRows.filter((r) => String(r.category || "") === traceFilter);
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-4">통화이력</h1>
-
-      <div className="flex gap-2 mb-6 p-1 bg-gray-100 rounded-lg w-fit">
-        <button
-          type="button"
-          onClick={() => setTab('history')}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            tab === 'history' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          전체 이력
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('followups')}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            tab === 'followups' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          확인 필요
-        </button>
-      </div>
-
-      {tab === 'history' && (
-        <>
-          {loading ? (
-            <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">로딩 중…</div>
-          ) : items.length === 0 ? (
-            <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
-              통화 이력이 없습니다.
-            </div>
+    <div className="border-t border-gray-100 bg-gray-50/80 px-4 py-4 space-y-5 text-sm">
+      {row.call_summary ? (
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">통화 요약</h3>
+          <p className="text-sm text-gray-900 bg-white rounded-md p-3 border border-indigo-100 leading-relaxed whitespace-pre-wrap">
+            {row.call_summary}
+          </p>
+          <p className="text-[11px] text-gray-400 mt-1">
+            통화 종료 후 대본 기반으로 생성됩니다. 목록에 바로 안 보이면 잠시 후 새로고침하세요.
+          </p>
+        </section>
+      ) : null}
+      <section className="grid gap-4 md:grid-cols-2">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">착신자 시점 요약</h3>
+          {row.callee_summary ? (
+            <pre className="whitespace-pre-wrap text-sm text-gray-800 bg-white rounded-md p-3 border border-gray-200 font-sans max-h-48 overflow-y-auto">
+              {row.callee_summary}
+            </pre>
           ) : (
-            <>
-              <div className="bg-white rounded-lg shadow overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-2 py-3 w-10" aria-hidden />
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">통화 ID</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">발신</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">착신</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">시작 시각</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">AI 응대</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">대본</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-40">녹음</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {items.map((row) => {
-                        const open = expandedCallId === row.call_id;
-                        const cdrRows = cdrByCall[row.call_id];
-                        const cdrBusy = cdrLoading[row.call_id];
-                        const cdrErr = cdrError[row.call_id];
-                        const filteredCdr =
-                          cdrRows && cdrCategoryFilter === 'all'
-                            ? cdrRows
-                            : (cdrRows || []).filter((r) => r.category === cdrCategoryFilter);
-                        return (
-                          <Fragment key={row.call_id}>
-                            <tr
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => toggleRowExpand(row.call_id)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  toggleRowExpand(row.call_id);
-                                }
-                              }}
-                              className={`cursor-pointer transition-colors ${
-                                open ? 'bg-indigo-50/80' : 'hover:bg-gray-50'
-                              }`}
-                              aria-expanded={open}
-                            >
-                              <td className="px-2 py-3 text-center text-gray-400 select-none" aria-hidden>
-                                {open ? '▼' : '▶'}
-                              </td>
-                              <td className="px-4 py-3 text-sm font-mono text-gray-900">{row.call_id}</td>
-                              <td className="px-4 py-3 text-sm text-gray-600">{row.caller_id || '-'}</td>
-                              <td className="px-4 py-3 text-sm text-gray-600">{row.callee_id || '-'}</td>
-                              <td className="px-4 py-3 text-sm text-gray-600">{row.start_time || '-'}</td>
-                              <td className="px-4 py-3 text-sm">{row.is_ai_handled ? '✓' : '-'}</td>
-                              <td className="px-4 py-3 text-sm text-gray-600">
-                                {row.has_transcript ? '있음' : '-'}
-                              </td>
-                              <td
-                                className="px-4 py-3 text-sm"
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => e.stopPropagation()}
-                              >
-                                {row.has_recording ? (
-                                  <div className="flex flex-wrap gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => openRecModal(row.call_id)}
-                                      className="text-indigo-600 hover:text-indigo-800 font-medium"
-                                    >
-                                      재생
-                                    </button>
-                                    <span className="text-gray-300">|</span>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDownloadRecording(row.call_id)}
-                                      className="text-indigo-600 hover:text-indigo-800 font-medium"
-                                    >
-                                      저장
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <span className="text-gray-400">-</span>
-                                )}
-                              </td>
-                            </tr>
-                            {open && (
-                              <tr className="bg-slate-50/90">
-                                <td colSpan={8} className="px-4 py-0 border-t border-indigo-100">
-                                  <div className="py-4 space-y-4">
-                                    <div className="grid gap-6 lg:grid-cols-2">
-                                      {/* 통화 내용 (대본) */}
-                                      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-                                        <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                                          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                                          통화 내용
-                                        </h3>
-                                        {(row.transcripts && row.transcripts.length > 0) ||
-                                        (cdrRows &&
-                                          cdrRows.some(
-                                            (r) => r.category === 'stt' || r.category === 'tts'
-                                          )) ? (
-                                          <div className="space-y-3 max-h-[min(60vh,480px)] overflow-y-auto pr-1">
-                                            {row.transcripts && row.transcripts.length > 0 ? (
-                                              row.transcripts.map((m, i) => (
-                                                <div
-                                                  key={i}
-                                                  className={`rounded-lg px-3 py-2 text-sm ${
-                                                    m.role === 'assistant' || m.role === '착신자'
-                                                      ? 'ml-0 mr-4 bg-violet-50 border border-violet-100 text-gray-900'
-                                                      : 'ml-4 mr-0 bg-slate-100 border border-slate-200 text-gray-900'
-                                                  }`}
-                                                >
-                                                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
-                                                    {m.role === 'assistant' || m.role === '착신자'
-                                                      ? 'AI / 착신'
-                                                      : '발신자'}
-                                                  </p>
-                                                  <p className="whitespace-pre-wrap break-words">{m.content}</p>
-                                                </div>
-                                              ))
-                                            ) : (
-                                              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
-                                                녹음 메타에 대본 플래그만 있고 transcript 파일이 없을 수 있습니다.
-                                                아래 Call data record의 STT/TTS 이벤트를 참고하세요.
-                                              </p>
-                                            )}
-                                          </div>
-                                        ) : (
-                                          <p className="text-sm text-gray-500">저장된 대본이 없습니다.</p>
-                                        )}
-                                      </div>
-
-                                      {/* Call data record */}
-                                      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm flex flex-col min-h-[200px]">
-                                        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                                          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                                            <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-                                            Call data record
-                                          </h3>
-                                          <label className="flex items-center gap-1 text-xs text-gray-600">
-                                            <span>카테고리</span>
-                                            <select
-                                              value={cdrCategoryFilter}
-                                              onChange={(e) => setCdrCategoryFilter(e.target.value)}
-                                              onClick={(e) => e.stopPropagation()}
-                                              className="border border-gray-300 rounded px-2 py-1 text-xs bg-white"
-                                            >
-                                              <option value="all">전체</option>
-                                              <option value="stt">stt</option>
-                                              <option value="tts">tts</option>
-                                              <option value="llm">llm</option>
-                                              <option value="rag">rag</option>
-                                              <option value="knowledge">knowledge</option>
-                                              <option value="call_event">call_event</option>
-                                              <option value="hitl">hitl</option>
-                                            </select>
-                                          </label>
-                                        </div>
-                                        {cdrBusy && (
-                                          <p className="text-sm text-gray-500 py-6 text-center">처리 로그 불러오는 중…</p>
-                                        )}
-                                        {!cdrBusy && cdrErr && (
-                                          <p className="text-sm text-red-700 bg-red-50 border border-red-100 rounded px-3 py-2">
-                                            {cdrErr}
-                                          </p>
-                                        )}
-                                        {!cdrBusy && !cdrErr && cdrRows && (
-                                          <div className="flex-1 max-h-[min(60vh,480px)] overflow-y-auto space-y-2 text-xs">
-                                            {filteredCdr.length === 0 ? (
-                                              <p className="text-gray-500">
-                                                {cdrRows.length === 0
-                                                  ? '이 통화에 대한 처리 로그가 로그 파일에 없습니다.'
-                                                  : '선택한 카테고리에 해당하는 항목이 없습니다.'}
-                                              </p>
-                                            ) : (
-                                              filteredCdr.map((rec, idx) => {
-                                                const rest = { ...rec } as Record<string, unknown>;
-                                                delete rest.ts;
-                                                delete rest.call_id;
-                                                delete rest.category;
-                                                delete rest.event;
-                                                const forJson = stripRagHitsFromRow(rest);
-                                                const extra =
-                                                  Object.keys(forJson).length > 0
-                                                    ? JSON.stringify(forJson, null, 2)
-                                                    : '';
-                                                return (
-                                                  <div
-                                                    key={`${rec.ts}-${rec.event}-${idx}`}
-                                                    className="border-b border-gray-100 pb-2 last:border-0"
-                                                  >
-                                                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 items-baseline font-mono">
-                                                      <span className="text-slate-400 shrink-0">{rec.ts}</span>
-                                                      <span
-                                                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${cdrCategoryClass(
-                                                          rec.category || ''
-                                                        )}`}
-                                                      >
-                                                        {rec.category}
-                                                      </span>
-                                                      <span className="text-slate-900 font-semibold">{rec.event}</span>
-                                                    </div>
-                                                    <RagSearchDoneDetail row={rec as Record<string, unknown>} />
-                                                    {extra ? (
-                                                      <pre className="mt-1 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-40 overflow-y-auto bg-slate-50 rounded px-1 py-0.5">
-                                                        {extra}
-                                                      </pre>
-                                                    ) : null}
-                                                  </div>
-                                                );
-                                              })
-                                            )}
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <p className="text-[11px] text-gray-500">
-                                      행을 다시 클릭하면 접습니다. Call data record는 서버{' '}
-                                      <code className="bg-gray-100 px-1 rounded">logs/call_data_record_*.log</code> 에서
-                                      불러옵니다.
-                                    </p>
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {totalPages > 1 && (
-                <div className="mt-4 flex items-center justify-between">
-                  <p className="text-sm text-gray-600">
-                    총 {total}건 (페이지 {page} / {totalPages})
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={page <= 1}
-                      className="px-3 py-1 rounded border border-gray-300 text-sm disabled:opacity-50 hover:bg-gray-50"
-                    >
-                      이전
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={page >= totalPages}
-                      className="px-3 py-1 rounded border border-gray-300 text-sm disabled:opacity-50 hover:bg-gray-50"
-                    >
-                      다음
-                    </button>
-                  </div>
-                </div>
-              )}
-            </>
+            <p className="text-gray-500 text-sm">요약할 대화·대본이 없습니다.</p>
           )}
-        </>
-      )}
-
-      {tab === 'followups' && (
-        <>
-          {followError && (
-            <div className="mb-4 border border-red-200 bg-red-50 text-red-800 text-sm px-4 py-3 rounded-lg">
-              {followError}
-            </div>
+        </div>
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">녹음 재생 (혼합)</h3>
+          <MixedAudioPlayer callId={row.call_id} enabled={!!row.has_recording_mixed} />
+          {!row.has_recording_mixed && (
+            <p className="text-gray-500 text-sm mt-1">혼합 녹음 파일이 없습니다.</p>
           )}
-          {followLoading ? (
-            <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">로딩 중…</div>
-          ) : followUps.length === 0 ? (
-            <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
-              확인 필요한 건이 없습니다.
-            </div>
-          ) : (
-            <div className="bg-white rounded-lg shadow overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">통화 ID</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">질문</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">상태</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">등록 시각</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">처리</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {followUps.map((row) => (
-                      <tr key={row.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-sm font-mono text-gray-900">{row.call_id}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700 max-w-xs truncate" title={row.user_question}>
-                          {row.user_question || '-'}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-xs font-medium ${statusBadgeClass(row.status)}`}
-                          >
-                            {row.status || 'pending'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{formatFollowUpTime(row.created_at)}</td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => openModal(row)}
-                            className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
-                          >
-                            처리
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </>
-      )}
+        </div>
+      </section>
 
-      {modalItem && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">확인 필요 처리</h3>
-            <p className="text-xs text-gray-500 font-mono mb-2">{modalItem.call_id}</p>
-            <p className="text-sm text-gray-700 mb-4 bg-gray-50 p-3 rounded border border-gray-100">
-              {modalItem.user_question || '(질문 없음)'}
-            </p>
-            <label className="block text-sm font-medium text-gray-700 mb-1">상태</label>
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+          통화 대본 (transcript.txt)
+          {row.transcript_source ? (
+            <span className="ml-2 font-normal normal-case text-gray-400">({row.transcript_source})</span>
+          ) : null}
+        </h3>
+        {transcriptLoading ? (
+          <p className="text-gray-500">불러오는 중…</p>
+        ) : transcriptErr ? (
+          <p className="text-amber-800">{transcriptErr}</p>
+        ) : transcript ? (
+          <pre className="whitespace-pre-wrap text-xs text-gray-800 bg-white rounded-md p-3 border border-gray-200 max-h-56 overflow-y-auto font-sans">
+            {transcript}
+          </pre>
+        ) : (
+          <p className="text-gray-500">대본 없음.</p>
+        )}
+      </section>
+
+      <section>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Call data record (logs/call_data_record_*.log)
+          </h3>
+          <label className="flex items-center gap-2 text-xs text-gray-600">
+            <span>카테고리</span>
             <select
-              value={editStatus}
-              onChange={(e) => setEditStatus(e.target.value)}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm mb-4"
+              value={traceFilter}
+              onChange={(e) => setTraceFilter(e.target.value as (typeof DEBUG_CATEGORIES)[number])}
+              className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
             >
-              {FOLLOW_STATUS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
+              {DEBUG_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c === "all" ? "전체" : c}
                 </option>
               ))}
             </select>
-            <label className="block text-sm font-medium text-gray-700 mb-1">운영자 메모</label>
-            <textarea
-              value={editNote}
-              onChange={(e) => setEditNote(e.target.value)}
-              rows={3}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm mb-4"
-              placeholder="메모를 입력하세요"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeModal}
-                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={saveFollowUp}
-                disabled={patching}
-                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md disabled:opacity-50"
-              >
-                {patching ? '저장 중…' : '저장'}
-              </button>
-            </div>
-          </div>
+          </label>
         </div>
+        {traceLoading ? (
+          <p className="text-gray-500">CDR 로그 불러오는 중…</p>
+        ) : traceErr ? (
+          <p className="text-amber-800">{traceErr}</p>
+        ) : filteredTrace.length === 0 ? (
+          <p className="text-gray-500 text-sm">
+            이 통화에 대한 CDR 행이 없습니다. (유저 간 통화는 이벤트가 적을 수 있습니다.)
+          </p>
+        ) : (
+          <div className="max-h-72 overflow-y-auto rounded-md border border-gray-200 bg-white p-2 space-y-2 text-[11px] leading-snug">
+            {filteredTrace.map((tr, idx) => {
+              const rest: Record<string, unknown> = { ...tr };
+              delete rest.ts;
+              delete rest.call_id;
+              delete rest.category;
+              delete rest.event;
+              const forJson = stripRagHitsFromRow(rest);
+              const extraJson =
+                Object.keys(forJson).length > 0 ? JSON.stringify(forJson, null, 2) : "";
+              return (
+                <div
+                  key={`${tr.ts}-${tr.event}-${idx}`}
+                  className="border-b border-slate-100 last:border-0 pb-2 last:pb-0"
+                >
+                  <div className="flex flex-wrap gap-x-2 gap-y-0.5 items-baseline font-mono">
+                    <span className="text-slate-400 shrink-0">{String(tr.ts || "")}</span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${categoryBadgeClass(String(tr.category || ""))}`}
+                    >
+                      {tr.category || "—"}
+                    </span>
+                    <span className="text-slate-900 font-semibold">{String(tr.event || "")}</span>
+                  </div>
+                  <RagSearchDoneDetail row={tr as Record<string, unknown>} />
+                  {extraJson ? (
+                    <pre className="mt-1 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-32 overflow-y-auto bg-slate-50 rounded px-1 py-0.5">
+                      {extraJson}
+                    </pre>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+          AI가 응대하지 못한 내용
+          {typeof row.ai_unhandled_resolved_by_hitl_count === "number" &&
+            row.ai_unhandled_resolved_by_hitl_count > 0 && (
+              <span className="ml-2 font-normal normal-case text-gray-400">
+                (HITL 해결 {row.ai_unhandled_resolved_by_hitl_count}건은 제외)
+              </span>
+            )}
+        </h3>
+        {!row.ai_unhandled_items?.length ? (
+          <p className="text-gray-500">해당 없음 또는 기록 없음.</p>
+        ) : (
+          <ul className="space-y-2">
+            {row.ai_unhandled_items.map((it) => (
+              <li key={it.id} className="rounded-md border border-gray-200 bg-white p-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <KindBadge kind={it.kind} />
+                  {it.reason ? (
+                    <span className="text-xs text-gray-500 truncate max-w-md">{it.reason}</span>
+                  ) : null}
+                </div>
+                <p className="font-medium text-gray-900">{it.user_question}</p>
+                {it.ai_response_preview ? (
+                  <p className="mt-1 text-gray-600 text-xs leading-relaxed">
+                    AI 응답 일부: {it.ai_response_preview}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+export default function CallHistoryPage() {
+  const [rows, setRows] = useState<CallHistoryRecordItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const owner = getTenantOwner();
+    const q = new URLSearchParams();
+    if (owner) q.set("owner", owner);
+    q.set("limit", "200");
+    q.set("offset", "0");
+    const res = await apiJson<CallHistoryListResponse>(`/api/call-history?${q.toString()}`, {
+      method: "GET",
+    });
+    if (!res.ok) {
+      setError(res.message);
+      setRows([]);
+      setTotal(0);
+    } else {
+      setRows(res.data.items || []);
+      setTotal(res.data.total ?? 0);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const toggle = (id: string) => {
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">통화 이력</h1>
+          <p className="mt-1 text-sm text-gray-600">
+            테이블에서 통화를 선택한 뒤 펼치기로 요약·대본·녹음·CDR 로그를 확인합니다. AI 미해결 건은 HITL로 해결된
+            항목이 건수에서 제외됩니다.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="shrink-0 px-4 py-2 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+        >
+          새로고침
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       )}
 
-      {recModalCallId && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="recording-modal-title"
-        >
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
-            <h3 id="recording-modal-title" className="text-lg font-semibold text-gray-900 mb-1">
-              녹음 재생
-            </h3>
-            <p className="text-xs text-gray-500 font-mono mb-4">{recModalCallId}</p>
-
-            {recFiles.length > 1 && (
-              <label className="block text-sm font-medium text-gray-700 mb-1">파일 선택</label>
-            )}
-            {recFiles.length > 1 && (
-              <select
-                value={recSelectedFile}
-                onChange={(e) => {
-                  const name = e.target.value;
-                  setRecSelectedFile(name);
-                  loadRecordingAudio(recModalCallId, name);
-                }}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm mb-4"
-              >
-                {recFiles.map((f) => (
-                  <option key={f.name} value={f.name}>
-                    {f.name} ({Math.round(f.size_bytes / 1024)} KB)
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {recError && (
-              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2 mb-4">
-                {recError}
-              </div>
-            )}
-
-            {recLoading && <p className="text-sm text-gray-500 mb-4">불러오는 중…</p>}
-
-            {recAudioUrl && !recLoading && (
-              <audio controls className="w-full mt-2" src={recAudioUrl} key={recAudioUrl} />
-            )}
-
-            <div className="flex justify-end mt-6">
-              <button
-                type="button"
-                onClick={closeRecModal}
-                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md"
-              >
-                닫기
-              </button>
-            </div>
+      {loading && !rows.length ? (
+        <p className="text-sm text-gray-500">불러오는 중…</p>
+      ) : !rows.length ? (
+        <p className="text-sm text-gray-500">표시할 통화 이력이 없습니다.</p>
+      ) : (
+        <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
+          <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 text-xs text-gray-600 flex flex-wrap justify-between gap-2">
+            <span>
+              총 {total}건
+              {getTenantOwner() ? " (로그인 테넌트 착신 기준 필터)" : " (전체 착신)"}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-200 bg-gray-50/90">
+                  <th className="px-3 py-2.5 w-10" aria-label="펼침" />
+                  <th className="px-3 py-2.5">시작</th>
+                  <th className="px-3 py-2.5">발신</th>
+                  <th className="px-3 py-2.5">착신</th>
+                  <th className="px-3 py-2.5 min-w-[12rem] max-w-xs">통화 요약</th>
+                  <th className="px-3 py-2.5">유형</th>
+                  <th className="px-3 py-2.5">길이</th>
+                  <th className="px-3 py-2.5">통화 ID</th>
+                  <th className="px-3 py-2.5">표시</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {rows.map((row) => {
+                  const open = !!expanded[row.call_id];
+                  const nUnhandled = row.ai_unhandled_count ?? (row.ai_unhandled_items?.length || 0);
+                  return (
+                    <FragmentRow key={row.call_id} row={row} open={open} nUnhandled={nUnhandled} onToggle={toggle} />
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function FragmentRow({
+  row,
+  open,
+  nUnhandled,
+  onToggle,
+}: {
+  row: CallHistoryRecordItem;
+  open: boolean;
+  nUnhandled: number;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <>
+      <tr className="hover:bg-indigo-50/40 align-top">
+        <td className="px-3 py-2.5">
+          <button
+            type="button"
+            onClick={() => onToggle(row.call_id)}
+            className="text-indigo-600 hover:text-indigo-800 font-medium text-xs whitespace-nowrap"
+            aria-expanded={open}
+          >
+            {open ? "접기" : "펼치기"}
+          </button>
+        </td>
+        <td className="px-3 py-2.5 text-gray-800 whitespace-nowrap">{formatWhen(row.start_time)}</td>
+        <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.caller_id || ""}>
+          {row.caller_id || "—"}
+        </td>
+        <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.callee_id || ""}>
+          {row.callee_id || "—"}
+        </td>
+        <td className="px-3 py-2.5 text-gray-700 max-w-xs align-top">
+          {row.call_summary ? (
+            <div className="group relative z-0 max-w-full">
+              <p className="line-clamp-2 text-xs leading-snug text-gray-900 cursor-default">
+                {row.call_summary}
+              </p>
+              {/* 줄임 표시와 툴팁 사이 갭에서 hover가 끊기지 않도록 투명 브리지 */}
+              <div className="absolute left-0 top-full z-[199] h-2 w-full max-w-[min(22rem,calc(100vw-2rem))]" aria-hidden />
+              <div
+                role="tooltip"
+                className="pointer-events-none invisible absolute left-0 top-[calc(100%+0.5rem)] z-[200] max-h-72 min-w-[10rem] max-w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs leading-snug text-gray-900 shadow-xl whitespace-pre-wrap break-words transition-opacity duration-100 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100"
+                style={{ opacity: 0 }}
+              >
+                {row.call_summary}
+              </div>
+            </div>
+          ) : (
+            <span className="text-gray-400 text-xs">—</span>
+          )}
+        </td>
+        <td className="px-3 py-2.5">
+          {row.is_ai_handled_call ? (
+            <span className="inline-flex text-xs px-2 py-0.5 rounded bg-violet-100 text-violet-800">AI</span>
+          ) : (
+            <span className="inline-flex text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">일반</span>
+          )}
+        </td>
+        <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{formatDuration(row.duration)}</td>
+        <td className="px-3 py-2.5 font-mono text-xs text-gray-700 max-w-[14rem] truncate" title={row.call_id}>
+          {row.call_id}
+        </td>
+        <td className="px-3 py-2.5">
+          <div className="flex flex-wrap gap-1">
+            {row.has_recording_mixed && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-100 text-teal-900">녹음</span>
+            )}
+            {row.has_transcript && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-900">대본</span>
+            )}
+            {nUnhandled > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-900">
+                미해결 {nUnhandled}
+              </span>
+            )}
+          </div>
+        </td>
+      </tr>
+      {open && (
+        <tr className="bg-gray-50/50">
+          <td colSpan={9} className="p-0">
+            <CallDetailPanel row={row} open={open} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

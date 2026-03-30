@@ -167,12 +167,12 @@ HELP_RAG_QUERY_FALLBACK = (
 HELP_LLM_SYSTEM_HINT = """역할: 콜센터 AI가 전화로 고객에게 말할 "할 수 있는 일" 목록을 고릅니다.
 입력: 아래 지식 조각은 해당 테넌트(기관) 지식베이스에서 검색된 내용입니다.
 출력 규칙(반드시 준수):
-- 출력은 오직 한 줄짜리 JSON 배열 하나뿐입니다. 앞뒤 설명·인사·마크다운·코드펜스(```) 금지.
-- 배열 길이는 1~5개. 가능하면 정확히 5개.
-- 각 원소는 짧은 한국어 구(명사구 또는 짧은 동사구). 음성 안내용이므로 각 30자 이내.
+- 출력은 JSON 객체 한 덩어리만입니다. 키 이름은 반드시 "items" 입니다. 앞뒤 설명·인사·마크다운·코드펜스 금지.
+- "items" 값은 문자열 배열, 길이 1~5. 가능하면 정확히 5개.
+- 각 원소는 짧은 한국어 구(명사구 또는 짧은 동사구). 음성 안내용이므로 각 30자 이내. 따옴표·대괄호·JSON 기호를 항목 문자열 안에 넣지 마세요.
 - 지식 조각에 근거가 없는 항목은 넣지 마세요. 추측 금지.
 - 올바른 출력 예시 한 가지:
-["내일 날씨 안내","태풍 정보","기상 감정서 발급","찾아오는 길","상담원 연결"]
+{"items":["내일 날씨 안내","태풍 정보","기상 감정서 발급","찾아오는 길","상담원 연결"]}
 """
 
 
@@ -202,12 +202,36 @@ def _normalize_help_item_strings(arr: list) -> List[str]:
     return out
 
 
+def _help_item_tts_safe(s: str) -> bool:
+    """TTS에 넣을 수 있는 짧은 한국어 구인지(깨진 JSON·메타 문자열 배제)."""
+    t = (s or "").strip()
+    if len(t) < 2:
+        return False
+    if any(ch in t for ch in "[]{}\""):
+        return False
+    if t.startswith("저는") or "`" in t or "```" in t:
+        return False
+    if t.count('"') > 0 or t.count("'") > 1:
+        return False
+    return True
+
+
+def _filter_tts_safe_help_items(items: List[str]) -> List[str]:
+    out = [x for x in items if _help_item_tts_safe(x)]
+    return out[:5]
+
+
 def _parse_help_items_line_fallback(raw: str) -> List[str]:
     """JSON이 아닐 때 불릿/번호 목록에서 항목 추출."""
     out: List[str] = []
     for line in raw.replace("•", "-").splitlines():
         line = line.strip()
         if len(line) < 2:
+            continue
+        # 자연어+깨진 JSON 한 줄(예: 저는 ["a","b"…)은 TTS 오염 원인 → 스킵
+        if '["' in line or "[ '" in line or line.count('"') > 3:
+            continue
+        if "[" in line and "]" in line:
             continue
         line = re.sub(r"^[`\s]+|[`\s]+$", "", line)
         line = re.sub(r"^[-*•]\s*", "", line)
@@ -231,12 +255,26 @@ def _parse_help_items_from_llm(raw: str) -> List[str]:
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", t, re.IGNORECASE)
     if fence:
         t = fence.group(1).strip()
-    # 전체가 배열 JSON인 경우
+    # 권장: {"items":[...]}
+    if "{" in t and "}" in t:
+        try:
+            s0, e0 = t.index("{"), t.rindex("}") + 1
+            obj = json.loads(t[s0:e0])
+            if isinstance(obj, dict) and isinstance(obj.get("items"), list):
+                got = _normalize_help_item_strings(obj["items"])
+                got = _filter_tts_safe_help_items(got)
+                if got:
+                    return got
+        except (json.JSONDecodeError, ValueError):
+            pass
+    # 전체가 배열 JSON인 경우 (레거시)
     if t.startswith("[") and t.endswith("]"):
         try:
             arr = json.loads(t)
             if isinstance(arr, list):
-                return _normalize_help_item_strings(arr)
+                got = _normalize_help_item_strings(arr)
+                got = _filter_tts_safe_help_items(got)
+                return got
         except json.JSONDecodeError:
             pass
     start, end = t.find("["), t.rfind("]")
@@ -245,11 +283,12 @@ def _parse_help_items_from_llm(raw: str) -> List[str]:
             arr = json.loads(t[start : end + 1])
             if isinstance(arr, list):
                 got = _normalize_help_item_strings(arr)
+                got = _filter_tts_safe_help_items(got)
                 if got:
                     return got
         except json.JSONDecodeError:
             pass
-    return _parse_help_items_line_fallback(t)
+    return _filter_tts_safe_help_items(_parse_help_items_line_fallback(t))
 
 
 def _help_items_from_documents(docs: list) -> List[str]:
@@ -370,17 +409,24 @@ async def help_response_node(state: ConversationState) -> dict:
         f"{HELP_LLM_SYSTEM_HINT}\n\n"
         f"사용자 발화(참고): {user_q or '(없음)'}\n\n"
         f"지식 조각:\n{knowledge_block}\n\n"
-        "위만 보고 JSON 배열을 출력하세요."
+        '위만 보고 JSON 객체 한 줄(키 "items")을 출력하세요.'
     )
 
     items: List[str] = []
     llm_raw = ""
     llm_parse_ok = False
+    json_mode_applied = False
     if llm:
         try:
-            llm_raw = await llm.generate_simple(
-                prompt, max_tokens=HELP_LLM_MAX_TOKENS, timeout_seconds=22.0
-            )
+            gen_fn = getattr(llm, "generate_help_items_json", None)
+            if callable(gen_fn):
+                llm_raw, json_mode_applied = await gen_fn(
+                    prompt, max_tokens=HELP_LLM_MAX_TOKENS, timeout_seconds=22.0
+                )
+            else:
+                llm_raw = await llm.generate_simple(
+                    prompt, max_tokens=HELP_LLM_MAX_TOKENS, timeout_seconds=22.0
+                )
             items = _parse_help_items_from_llm(llm_raw or "")
             llm_parse_ok = bool(items)
             if not items and (llm_raw or "").strip():
@@ -390,7 +436,8 @@ async def help_response_node(state: ConversationState) -> dict:
                     owner=owner,
                     llm_raw_len=len(llm_raw),
                     llm_raw_preview=(llm_raw or "")[:800],
-                    note="JSON/목록 파싱 실패 — RAG 메타 휴리스틱 시도",
+                    json_mode_applied=json_mode_applied,
+                    note="JSON/목록 파싱 실패 — RAG 메타 휴리스틱 시도 (근본: MIME/프롬프트 위반·절단 가능)",
                 )
             logger.info(
                 "help_response_llm_items",
@@ -398,6 +445,7 @@ async def help_response_node(state: ConversationState) -> dict:
                 owner=owner,
                 item_count=len(items),
                 parse_ok=llm_parse_ok,
+                json_mode_applied=json_mode_applied,
                 note="RAG 후 LLM 5항목 선정",
             )
         except Exception as e:
@@ -421,6 +469,8 @@ async def help_response_node(state: ConversationState) -> dict:
                 items_preview=items,
                 note="LLM 미사용/파싱 실패 후 문서 메타·본문으로 항목 구성",
             )
+
+    items = _filter_tts_safe_help_items(items)
 
     if not items:
         logger.info(

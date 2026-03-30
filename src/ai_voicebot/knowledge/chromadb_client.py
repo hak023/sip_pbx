@@ -428,3 +428,19 @@ def get_vector_db() -> Optional[Any]:
         else:
             logger.warning("ChromaDB sync init failed: %s", e, exc_info=False)
         return None
+
+
+def get_raw_chroma_client() -> Optional[Any]:
+    """
+    실제 ChromaDB 클라이언트 반환 (PersonaService 등에서 사용).
+    _client가 초기화되지 않았으면 get_vector_db()를 먼저 호출하여 초기화 시도.
+    
+    Returns:
+        chromadb.PersistentClient 또는 None
+    """
+    global _client
+    if _client is not None:
+        return _client
+    # vector_db 초기화 시도 (부수효과로 _client도 초기화됨)
+    get_vector_db()
+    return _client

@@ -5,13 +5,11 @@ ConversationState를 공유하는 StateGraph 워크플로우.
 설계서 Phase 2의 핵심: 모든 RAG/LLM 흐름을 LangGraph로 오케스트레이션.
 
 워크플로우:
-  classify_intent → check_cache ─(hit)─→ update_state → END
-                                  │
-                              (miss)
-                                  ↓
-                           rewrite_query → adaptive_rag → step_back →
-                           generate_response → hitl_alert → update_cache →
-                           update_state → END
+  classify_intent → route_utterance
+       → (rag_mode=skip: chitchat/out_of_scope) generate_response → hitl_alert → update_cache → update_state → END
+       → (knowledge) check_cache ─(hit)─→ update_state → END
+                     (miss) → rewrite_query → adaptive_rag → (임계 분기) step_back → generate_response
+                     → hitl_alert → update_cache → update_state → END
 """
 
 import asyncio
@@ -23,6 +21,11 @@ import structlog
 
 from src.ai_voicebot.langgraph.state import ConversationState
 from src.ai_voicebot.langgraph.nodes.classify_intent import classify_intent_node
+from src.ai_voicebot.langgraph.nodes.route_utterance import (
+    route_utterance_node,
+    STEP_BACK_THRESHOLD_DOMAIN_QUESTION,
+    STEP_BACK_THRESHOLD_LIGHT_QUESTION,
+)
 from src.ai_voicebot.langgraph.nodes.semantic_cache import check_cache_node, update_cache_node
 from src.ai_voicebot.langgraph.nodes.rewrite_query import rewrite_query_node
 from src.ai_voicebot.langgraph.nodes.adaptive_rag import adaptive_rag_node
@@ -45,6 +48,7 @@ logger = structlog.get_logger(__name__)
 _LANGGRAPH_NODE_NAMES = frozenset(
     {
         "classify_intent",
+        "route_utterance",
         "check_cache",
         "rewrite_query",
         "adaptive_rag",
@@ -139,15 +143,28 @@ def _route_after_intent(state: ConversationState) -> str:
         return "clarification_response"
     if intent == "help":
         return "help_response"
-    # question / complaint / transfer / chitchat / unknown 계열 / nlu_fallback / out_of_scope:
-    # 캐시·RAG 후 LLM (chitchat·범위밖도 동일 경로 — generate_response의 chitchat_rule·일반 규칙 적용)
+    # question / complaint / transfer / nlu_fallback 등 — 캐시·RAG 경로
+    # chitchat·out_of_scope 는 route_utterance 에서 rag_mode=skip 으로 generate 직행
     return "check_cache"
 
 
+def _route_after_utterance(state: ConversationState) -> str:
+    """검색 전 레인: 일상 직행 vs 지식 경로."""
+    if state.get("rag_mode") == "skip":
+        return "generate_response"
+    return _route_after_intent(state)
+
+
 def _route_after_rag(state: ConversationState) -> str:
-    """RAG confidence에 따라 분기"""
+    """RAG confidence·도메인 질의 신호에 따라 step_back 분기 (이중 임계치)."""
     confidence = state.get("confidence", 0.0)
-    if confidence < 0.4:
+    intent = state.get("intent", "")
+    domain = state.get("domain_question_signal", False)
+    if intent == "question" and not domain:
+        threshold = STEP_BACK_THRESHOLD_LIGHT_QUESTION
+    else:
+        threshold = STEP_BACK_THRESHOLD_DOMAIN_QUESTION
+    if confidence < threshold:
         return "step_back"
     return "generate_response"
 
@@ -161,7 +178,9 @@ def _route_after_greeting_farewell_cache(state: ConversationState) -> str:
     return "update_state"
 
 
-_compiled_graph_cache = None  # 전역 캐시: 서버 라이프사이클 동안 재사용
+# 토폴로지 변경 시 버전 증가 → 기존 프로세스 내 캐시 무효화
+_LANGGRAPH_SCHEMA_VERSION = 2
+_compiled_graph_entry = None  # (version, compiled_graph)
 
 
 def build_conversation_graph():
@@ -174,10 +193,12 @@ def build_conversation_graph():
     Returns:
         compiled StateGraph (invoke/ainvoke 가능)
     """
-    global _compiled_graph_cache
-    if _compiled_graph_cache is not None:
-        logger.info("langgraph_graph_cache_hit", message="기존 컴파일된 그래프 재사용")
-        return _compiled_graph_cache
+    global _compiled_graph_entry
+    if _compiled_graph_entry is not None:
+        ver, cached = _compiled_graph_entry
+        if ver == _LANGGRAPH_SCHEMA_VERSION and cached is not None:
+            logger.info("langgraph_graph_cache_hit", message="기존 컴파일된 그래프 재사용")
+            return cached
 
     import time
     compile_start = time.time()
@@ -193,6 +214,7 @@ def build_conversation_graph():
 
     # ── 노드 등록 ──
     graph.add_node("classify_intent", classify_intent_node)
+    graph.add_node("route_utterance", route_utterance_node)
     graph.add_node("check_cache", check_cache_node)
     graph.add_node("rewrite_query", rewrite_query_node)
     graph.add_node("adaptive_rag", adaptive_rag_node)
@@ -210,12 +232,14 @@ def build_conversation_graph():
 
     # ── 엣지 정의 ──
     graph.set_entry_point("classify_intent")
+    graph.add_edge("classify_intent", "route_utterance")
 
-    # classify_intent → 의도별 분기 (greeting/farewell은 캐시 선검색)
+    # route_utterance → 일상 직행(generate) 또는 기존 의도별 분기
     graph.add_conditional_edges(
-        "classify_intent",
-        _route_after_intent,
+        "route_utterance",
+        _route_after_utterance,
         {
+            "generate_response": "generate_response",
             "check_cache": "check_cache",
             "check_greeting_farewell_cache": "check_greeting_farewell_cache",
             "template_response": "template_response",
@@ -280,10 +304,10 @@ def build_conversation_graph():
     compiled = graph.compile()
     compile_elapsed = time.time() - compile_start
     logger.info("langgraph_conversation_graph_compiled",
-               nodes=9, edges="conditional+linear",
+               nodes=10, edges="conditional+linear",
                compile_time=f"{compile_elapsed:.3f}s")
 
-    _compiled_graph_cache = compiled
+    _compiled_graph_entry = (_LANGGRAPH_SCHEMA_VERSION, compiled)
     return compiled
 
 
@@ -358,10 +382,14 @@ class ConversationAgent:
             org_context = self.org_manager.get_organization_context()
             system_prompt = self.org_manager.get_system_prompt()
 
+        # STT 원문(시간 정규화 전) — RAG 이중 검색용. 미전달 시 user_text와 동일로 간주.
+        user_query_raw = (kwargs.get("user_query_raw") or user_text or "").strip()
+
         # 현재 상태 + 새 입력 병합
         invoke_state = {
             **self._state,
             "user_query": user_text,
+            "user_query_raw": user_query_raw,
             "org_context": org_context,
             "system_prompt": system_prompt,
             # 내부 참조 주입

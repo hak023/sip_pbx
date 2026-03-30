@@ -1,116 +1,129 @@
 """
-FastAPI 메인 앱 - REST API Gateway.
+FastAPI 앱 진입점.
 
-- recordings: 녹음 파일 조회/스트리밍/다운로드
-- call_history: 통화 이력 목록·상세·메모·처리완료
-- calls: 통화 상세 조회 및 transcript
+  uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
-실행: uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+녹음 경로: 환경변수 `SIP_RECORDINGS_DIR` 또는 `RECORDINGS_DIR` (기본 `./recordings`).
 """
 
-import structlog
-from fastapi import FastAPI, Request, status
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 
-logger = structlog.get_logger(__name__)
-
-# 존재하는 라우터만 import (일부만 있어도 기동)
-def _load_routers():
-    loaded = {}
-    # ⚠️ knowledge는 제외: 구버전(src/api/routers/knowledge.py) 대신
-    #    신버전(src/api/knowledge_router.py)을 직접 로드
-    #    이유: Pydantic v2 호환 및 tenant_id 중복 제거
-    #    참고: docs/KNOWLEDGE_ROUTER_MIGRATION.md
-    for name in (
-        "auth",
-        "tenants",
-        "call_history",
-        "calls",
-        "metrics",
-        "operator",
-        "outbound",
-        "recordings",
-    ):
-        try:
-            mod = __import__(f"src.api.routers.{name}", fromlist=["router"])
-            loaded[name] = getattr(mod, "router", None)
-        except ImportError:
-            pass
-    return loaded
-
-_ROUTERS = _load_routers()
-
-# 🔥 신버전 knowledge_router 직접 로드 (v2_no_tenant_id)
-# 구버전과 달리 owner 필수, tenant_id 없음
-try:
-    from src.api import knowledge_router
-    _ROUTERS["knowledge"] = knowledge_router.router
-    logger.info("🔥 NEW knowledge_router loaded (v2_no_tenant_id)")
-except ImportError as e:
-    logger.warning("Failed to load new knowledge_router", error=str(e))
-
-ROUTERS_AVAILABLE = len(_ROUTERS) > 0
-if not ROUTERS_AVAILABLE:
-    print("Warning: No API routers found under src.api.routers")
-
-app = FastAPI(
-    title="AI Voicebot API",
-    version="2.0.0",
-    description="SmartPBX AI API - 통화 이력, 녹음, HITL 등",
+from src.api.routers import (
+    auth_compat,
+    call_history,
+    knowledge_api,
+    metrics,
+    operator_status_api,
+    outbound,
+    persona,
 )
 
-# 422 Validation Error Handler - 상세 로깅
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Pydantic validation 에러 시 상세 로그"""
-    errors = exc.errors()
-    logger.error("api_validation_error_422",
-                 method=request.method,
-                 url=str(request.url),
-                 path=request.url.path,
-                 query_params=dict(request.query_params),
-                 errors=errors,
-                 body=await request.body() if request.method in ["POST", "PUT", "PATCH"] else None)
-    
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": errors},
-    )
+app = FastAPI(title="SIP PBX API", version="1.0.0")
 
-# CORS (Frontend 연동)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 라우터 등록 (있는 것만)
-if ROUTERS_AVAILABLE:
-    for name, router_obj in _ROUTERS.items():
-        if router_obj is not None:
-            # knowledge router는 /api prefix 추가 필요
-            if name == "knowledge":
-                app.include_router(router_obj, prefix="/api")
-                logger.info("Router registered with prefix", name=name, prefix="/api")
-            else:
-                app.include_router(router_obj)
-                logger.info("Router registered", name=name)
-    print("✅ Routers registered:", ", ".join(_ROUTERS.keys()))
+app.include_router(auth_compat.router, prefix="/api")
+app.include_router(knowledge_api.router, prefix="/api")
+app.include_router(call_history.router, prefix="/api")
+app.include_router(metrics.router)  # /api/metrics prefix already in router
+app.include_router(operator_status_api.router, prefix="/api")
+app.include_router(outbound.router)  # /api/outbound prefix already included
+app.include_router(persona.router)  # /api/persona prefix already included
 
 
-@app.get("/")
-async def root():
-    return {
-        "status": "ok",
-        "message": "AI Voicebot API",
-        "version": "2.0.0"
-    }
+def _serialize_active_sessions(cm: Any) -> List[Dict[str, Any]]:
+    """CallManager.get_active_sessions() → 대시보드 REST `ActiveCallRestRaw` 형태."""
+    try:
+        sessions = cm.get_active_sessions()
+    except Exception:
+        return []
+    if not sessions:
+        return []
+    out: List[Dict[str, Any]] = []
+    for s in sessions:
+        try:
+            cid = getattr(s, "call_id", None)
+            if not cid:
+                continue
+            caller = ""
+            callee = ""
+            gf = getattr(s, "get_caller_uri", None)
+            if callable(gf):
+                try:
+                    caller = gf() or ""
+                except Exception:
+                    caller = ""
+            if not isinstance(caller, str):
+                caller = str(caller)
+            gt = getattr(s, "get_callee_uri", None)
+            if callable(gt):
+                try:
+                    callee = gt() or ""
+                except Exception:
+                    callee = ""
+            if not isinstance(callee, str):
+                callee = str(callee)
+            state = getattr(s, "state", None)
+            state_str = getattr(state, "name", None) or (
+                str(state) if state is not None else "진행 중"
+            )
+            started_at = None
+            for attr in ("established_at", "created_at", "started_at"):
+                dt = getattr(s, attr, None)
+                if dt is not None:
+                    started_at = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+                    break
+            is_ai = getattr(s, "is_ai_handled", None)
+            if is_ai is None:
+                is_ai = getattr(s, "is_ai_call", None)
+            out.append(
+                {
+                    "call_id": str(cid),
+                    "caller": caller,
+                    "callee": callee,
+                    "state": state_str,
+                    "started_at": started_at,
+                    "is_ai_handled": bool(is_ai),
+                }
+            )
+        except Exception:
+            continue
+    return out
+
+
+@app.get("/api/calls/active")
+def calls_active() -> list:
+    """
+    WebSocket과 동일 프로세스일 때 `set_call_manager`로 주입된 CallManager에서 활성 통화 조회.
+    미주입(단독 API)이면 빈 목록 — 실시간은 Socket.IO `call_started` 이벤트에 의존.
+    """
+    try:
+        from src.websocket.server import get_injected_call_manager
+
+        cm = get_injected_call_manager()
+        if cm is not None:
+            rows = _serialize_active_sessions(cm)
+            if rows:
+                return rows
+    except Exception:
+        pass
+    return []
+
+
+# metrics 라우터로 이동됨 (routers/metrics.py)
 
 
 @app.get("/health")
-async def health():
+def health() -> dict:
     return {"status": "ok"}

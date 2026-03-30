@@ -27,38 +27,68 @@ logger = structlog.get_logger(__name__)
 _global_google_stt_service = None
 _global_google_tts_service = None
 
+# 🔥 LLM Client Singleton (API 엔드포인트에서 재사용)
+_global_llm_client = None
+
+
+def _build_google_stt_service(config: Dict[str, Any] = None):
+    """GoogleSTTService 인스턴스 생성 (Singleton·파이프라인 전용 공통)."""
+    from pipecat.services.google.stt import GoogleSTTService
+    from pipecat.transcriptions.language import Language
+
+    # Pipecat 공식: ko-KR은 params.InputParams(languages=[Language.KO_KR])로 설정.
+    _cfg = config or {}
+    _params = GoogleSTTService.InputParams(
+        languages=[Language.KO_KR],
+        model=_cfg.get("model", "telephony"),
+        enable_automatic_punctuation=_cfg.get("enable_automatic_punctuation", True),
+        enable_interim_results=_cfg.get("enable_interim_results", True),
+    )
+    _kwargs: Dict[str, Any] = {
+        "sample_rate": _cfg.get("sample_rate", 16000),
+        "params": _params,
+    }
+    if _cfg.get("credentials_path"):
+        _kwargs["credentials_path"] = _cfg["credentials_path"]
+    if _cfg.get("credentials") is not None:
+        _kwargs["credentials"] = _cfg["credentials"]
+    if _cfg.get("location"):
+        _kwargs["location"] = _cfg["location"]
+    return GoogleSTTService(**_kwargs)
+
+
+async def create_google_stt_service_per_pipeline(config: Dict[str, Any] = None):
+    """
+    Pipecat 파이프라인(통화)마다 전용 Google STT.
+
+    Singleton STT를 두 파이프라인이 동시에 쓰면 각각 start(StartFrame)에서
+    _connect()가 내부 _streaming_task / _request_queue를 덮어써 스트림이 꼬이고,
+    파이프라인 순서상 STT 앞단에서 막히면 RAG에 StartFrame이 늦게 가거나
+    인사·TTS가 전혀 나가지 않을 수 있음 (ai_enabled_calls > 1 재현).
+    """
+    try:
+        svc = _build_google_stt_service(config)
+        logger.info(
+            "google_stt_service_per_pipeline_created",
+            languages="ko-KR (Language.KO_KR)",
+            note="통화별 STT — 동시 Pipecat 호 Singleton 공유 방지",
+        )
+        return svc
+    except Exception as e:
+        logger.error("google_stt_per_pipeline_creation_failed", error=str(e), exc_info=True)
+        raise
+
 
 async def get_or_create_google_stt_service(config: Dict[str, Any] = None):
     """
-    Google STT Service Singleton.
-    서버 시작 시 한 번만 생성하여 통화마다 19초 지연 방지.
+    Google STT Service Singleton (워밍/레거시·테스트용).
+
+    Pipecat 다중 동시 통화는 create_google_stt_service_per_pipeline 사용.
     """
     global _global_google_stt_service
     if _global_google_stt_service is None:
         try:
-            from pipecat.services.google.stt import GoogleSTTService
-            from pipecat.transcriptions.language import Language
-
-            # Pipecat 공식: ko-KR은 params.InputParams(languages=[Language.KO_KR])로 설정.
-            # 기본값이 Language.EN_US 이므로 한글 사용 시 반드시 명시 필요 (오인식 방지).
-            _cfg = config or {}
-            _params = GoogleSTTService.InputParams(
-                languages=[Language.KO_KR],
-                model=_cfg.get("model", "telephony"),
-                enable_automatic_punctuation=_cfg.get("enable_automatic_punctuation", True),
-                enable_interim_results=_cfg.get("enable_interim_results", True),
-            )
-            _kwargs: Dict[str, Any] = {
-                "sample_rate": _cfg.get("sample_rate", 16000),
-                "params": _params,
-            }
-            if _cfg.get("credentials_path"):
-                _kwargs["credentials_path"] = _cfg["credentials_path"]
-            if _cfg.get("credentials") is not None:
-                _kwargs["credentials"] = _cfg["credentials"]
-            if _cfg.get("location"):
-                _kwargs["location"] = _cfg["location"]
-            _global_google_stt_service = GoogleSTTService(**_kwargs)
+            _global_google_stt_service = _build_google_stt_service(config)
             logger.info("✅ [Singleton] Global Google STT Service created",
                        languages="ko-KR (Language.KO_KR)")
         except Exception as e:
@@ -67,21 +97,79 @@ async def get_or_create_google_stt_service(config: Dict[str, Any] = None):
     return _global_google_stt_service
 
 
+def _build_google_tts_service(config: Dict[str, Any] = None, call_id: str = ""):
+    """GoogleTTSService 인스턴스 생성 (Singleton·파이프라인 전용 공통).
+    
+    Args:
+        config: TTS 설정 (sample_rate, voice_name 등)
+        call_id: 로깅용 call_id (선택)
+    """
+    from src.ai_voicebot.pipecat.services.debug_google_tts import DebugGoogleTTSService
+
+    _tts_config = config or {
+        "sample_rate": 16000,
+        "voice_name": "ko-KR-Standard-A",
+        "language_code": "ko-KR",
+    }
+    # ✅ aggregate_sentences=False: 문장 자동 분할 비활성화
+    # Google TTS API는 streaming 미지원 → 분할 시 각 문장마다 별도 API 호출로 레이턴시 누적
+    # RAG 응답 전체를 한 번에 전송해야 최적의 재생 품질 (인사말과 동일 방식)
+    _tts_config["aggregate_sentences"] = False
+    
+    # 📌 TTS 서비스 생성 시 aggregate_sentences 설정 확인 로깅
+    logger.info("google_tts_service_created",
+               aggregate_sentences=_tts_config.get("aggregate_sentences"),
+               sample_rate=_tts_config.get("sample_rate"),
+               voice_name=_tts_config.get("voice_name"),
+               call_id=call_id or "",
+               note="GoogleTTSService 생성 — aggregate_sentences=False 확인 (문장 분할 비활성화)")
+    
+    return DebugGoogleTTSService(call_id=call_id, **_tts_config)
+
+
+async def create_google_tts_service_per_pipeline(config: Dict[str, Any] = None, call_id: str = ""):
+    """
+    Pipecat 파이프라인(통화)마다 전용 Google TTS.
+
+    Singleton TTS를 여러 파이프라인이 공유하거나, 이전 파이프라인 취소 직후 동일 인스턴스를
+    재사용할 때 내부 태스크/큐가 꼬여 합성·PCM이 멈출 수 있음 (RTP_NO_TTS_CALL 분석).
+    STT와 동일하게 통화별 인스턴스로 분리한다.
+    
+    Args:
+        config: TTS 설정
+        call_id: 로깅/디버깅용 call_id
+    """
+    try:
+        svc = _build_google_tts_service(config, call_id=call_id)
+        _cfg = config or {}
+        logger.info(
+            "google_tts_service_per_pipeline_created",
+            call_id=call_id,
+            voice_model=_cfg.get("voice_name", "ko-KR-Standard-A"),
+            note="통화별 TTS — 동시 Pipecat 호·파이프라인 취소 후 Singleton 잔류 방지",
+        )
+        return svc
+    except Exception as e:
+        logger.error("google_tts_per_pipeline_creation_failed", error=str(e), exc_info=True)
+        raise
+
+
 async def get_or_create_google_tts_service(config: Dict[str, Any] = None):
     """
     Google TTS Service Singleton.
     서버 시작 시 한 번만 생성하여 통화마다 19초 지연 방지.
+
+    Pipecat 다중·연속 통화는 create_google_tts_service_per_pipeline 사용.
     """
     global _global_google_tts_service
     if _global_google_tts_service is None:
         try:
-            from pipecat.services.google.tts import GoogleTTSService
+            _global_google_tts_service = _build_google_tts_service(config)
             _tts_config = config or {
                 "sample_rate": 16000,
                 "voice_name": "ko-KR-Standard-A",
                 "language_code": "ko-KR",
             }
-            _global_google_tts_service = GoogleTTSService(**_tts_config)
             logger.info("✅ [Singleton] Global Google TTS Service created",
                        voice_model=_tts_config.get("voice_name"))
         except Exception as e:
@@ -214,6 +302,10 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         llm_elapsed = time.time() - llm_start
         logger.info(f"LLM Client initialized ({llm_elapsed:.3f}s)")
         
+        # ✅ LLM Singleton 저장 (API 엔드포인트에서 재사용)
+        global _global_llm_client
+        _global_llm_client = llm
+        
         # 7. Text Embedder
         embedding_config = config.get("embedding", {})
         embedder = TextEmbedder(
@@ -256,12 +348,28 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         rag = RAGEngine(
             vector_db=vector_db,
             embedder=embedder,
-            top_k=rag_config.get("top_k", 3),
-            similarity_threshold=rag_config.get("similarity_threshold", 0.55),
+            top_k=rag_config.get("top_k", 8),
+            similarity_threshold=rag_config.get("similarity_threshold", 0.38),
             reranking_enabled=rag_config.get("reranking_enabled", False),
             doc_type_allowlist=_dt_allow,
         )
         logger.info("RAG Engine initialized")
+        
+        # 9-1. Persona Service (Chitchat vs Question 분류용)
+        try:
+            from .knowledge.persona_service import initialize_persona_service
+            from .knowledge.chromadb_client import get_raw_chroma_client
+            # PersonaService는 실제 ChromaDB 클라이언트가 필요함
+            chroma_raw_client = get_raw_chroma_client()
+            if chroma_raw_client is None:
+                logger.warning("persona_service_init_skipped",
+                              note="ChromaDB 클라이언트가 초기화되지 않음 — Persona 없이 계속")
+            else:
+                persona_service = await initialize_persona_service(chroma_raw_client, embedder)
+                logger.info("✅ [FACTORY] PersonaService initialized (Chitchat classification)")
+        except Exception as e:
+            logger.warning("persona_service_init_failed", error=str(e),
+                          note="Persona 없이 계속 — 기본 intent 분류 사용")
         
         # 10. Call Recorder
         recording_config = config.get("recording", {})
@@ -288,14 +396,13 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         )
         logger.info("Knowledge Extractor initialized")
         
-        # 11.5. Knowledge Service (HITL용 + §7 검토 대기열)
-        from ..services.knowledge_service import KnowledgeService, set_knowledge_service
-        knowledge_service = KnowledgeService(
+        # 11.5. Knowledge Service (API 엔드포인트용)
+        from ..services.knowledge_service import initialize_knowledge_service
+        knowledge_service = await initialize_knowledge_service(
             vector_db=vector_db,
             embedder=embedder,
             extraction_pending_file=knowledge_config.get("extraction_pending_file") or "data/extraction_pending_review.jsonl",
         )
-        set_knowledge_service(knowledge_service)
         logger.info("Knowledge Service initialized and set globally")
         
         # 12. AI Orchestrator
@@ -336,6 +443,55 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         return None
 
 
+async def ensure_knowledge_service_singleton_for_hitl(config: Dict[str, Any]) -> bool:
+    """
+    Pipecat-only 기동 시에도 HITL→Chroma가 RAG와 동일 Chroma·임베더를 쓰도록 싱글톤을 설정한다.
+    create_ai_orchestrator를 거치지 않으면 get_knowledge_service()가 기본 생성자만 타 임베딩 불일치가 날 수 있음.
+    """
+    if not config.get("enabled", False):
+        return False
+    try:
+        from ..services.knowledge_service import KnowledgeService, set_knowledge_service
+        from .knowledge.embedder import TextEmbedder
+        from .knowledge.chromadb_client import get_chromadb_client, get_vector_db
+
+        embedding_config = config.get("embedding", {})
+        embedder = TextEmbedder(
+            model_name=embedding_config.get("model", "paraphrase-multilingual-mpnet-base-v2"),
+            dimension=embedding_config.get("dimension", 768),
+            batch_size=embedding_config.get("batch_size", 32),
+        )
+        vector_db_config = config.get("vector_db", {})
+        if vector_db_config.get("provider", "chromadb") != "chromadb":
+            logger.error(
+                "ensure_knowledge_service_singleton_unsupported_provider",
+                provider=vector_db_config.get("provider"),
+            )
+            return False
+        vector_db_client = get_chromadb_client()
+        await vector_db_client.initialize()
+        vector_db = get_vector_db()
+        if not vector_db:
+            logger.error("ensure_knowledge_service_singleton_no_vector_db")
+            return False
+        knowledge_config = config.get("knowledge_extractor", {})
+        ks = KnowledgeService(
+            vector_db=vector_db,
+            embedder=embedder,
+            extraction_pending_file=knowledge_config.get("extraction_pending_file")
+            or "data/extraction_pending_review.jsonl",
+        )
+        set_knowledge_service(ks)
+        logger.info(
+            "knowledge_service_singleton_ready_for_hitl",
+            note="Pipecat_경로_RAG와_동일_chroma_embedder",
+        )
+        return True
+    except Exception as e:
+        logger.warning("ensure_knowledge_service_singleton_failed", error=str(e), exc_info=True)
+        return False
+
+
 async def create_pipecat_pipeline_builder(config: Dict[str, Any]) -> Optional[Any]:
     """
     Pipecat Pipeline Builder 생성 (Phase 1).
@@ -345,7 +501,7 @@ async def create_pipecat_pipeline_builder(config: Dict[str, Any]) -> Optional[An
     
     Args:
         config: AI 보이스봇 설정
-    
+        
     Returns:
         VoiceAIPipelineBuilder 인스턴스 또는 None
     """
@@ -360,6 +516,7 @@ async def create_pipecat_pipeline_builder(config: Dict[str, Any]) -> Optional[An
         return None
     
     try:
+        await ensure_knowledge_service_singleton_for_hitl(config)
         from src.ai_voicebot.pipecat.pipeline_builder import VoiceAIPipelineBuilder
         from src.websocket import manager as ws_manager
         
@@ -417,4 +574,15 @@ def get_ai_status(orchestrator: Optional[AIOrchestrator]) -> Dict[str, Any]:
         "status": "ready",
         "stats": orchestrator.get_stats()
     }
+
+
+def get_llm_client():
+    """
+    전역 LLM Client 반환 (API 엔드포인트용)
+    
+    Returns:
+        LLMClient 인스턴스 또는 None
+    """
+    global _global_llm_client
+    return _global_llm_client
 

@@ -110,7 +110,10 @@ async def rewrite_query_node(state: ConversationState) -> dict:
                     prompt_preview=prompt.replace("\n", " "))
         try:
             rewritten = await llm.generate_response(
-                prompt, context_docs=[], system_prompt="쿼리 변환기"
+                prompt,
+                context_docs=[],
+                system_prompt="쿼리 변환기",
+                max_output_tokens=256,
             )
         except Exception as llm_err:
             elapsed_err = time.time() - _start

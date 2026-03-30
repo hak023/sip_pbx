@@ -11,8 +11,9 @@ Socket.IO 서버 - 대시보드 WebSocket 연결 (포트 8001)
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,16 @@ _ws_loop: Optional[asyncio.AbstractEventLoop] = None
 
 WS_PORT = 8001
 CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+def _socketio_cors_allowed_origins() -> Union[str, List[str]]:
+    """환경변수 `WS_CORS_ORIGINS`: 쉼표 구분 출처, `*` 는 전체 허용 (LAN에서 Next 접속 시 필요)."""
+    raw = (os.environ.get("WS_CORS_ORIGINS") or "").strip()
+    if raw == "*":
+        return "*"
+    if raw:
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    return CORS_ORIGINS
 
 # schedule_socket_emit 이 WS 미기동 시 조용히 드롭될 때 1회만 경고 (유저간 STT 등)
 _stt_emit_skip_logged = False
@@ -67,50 +78,27 @@ def install_bypass_realtime_stt_callback() -> bool:
         return False
 
 
-def _llm_client_for_hitl_refine():
-    """대시보드 HITL 답변 다듬기용 LLM (config.yaml gemini + 환경변수). 실패 시 None."""
-    import os
-
-    from src.ai_voicebot.ai_pipeline.llm_client import LLMClient
-    from src.config.config_loader import load_config
-
-    try:
-        cfg = load_config(None)
-    except Exception:
-        return None
-    av = getattr(cfg, "ai_voicebot", None)
-    if not av or not getattr(av, "google_cloud", None):
-        return None
-    gc = av.google_cloud
-    gemini = (gc.gemini or {}) if gc else {}
-    if not isinstance(gemini, dict):
-        try:
-            gemini = dict(gemini)
-        except Exception:
-            gemini = {}
-    api_key = (
-        gemini.get("api_key")
-        or os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("GOOGLE_API_KEY")
-    )
-    if not api_key:
-        return None
-    return LLMClient(gemini, api_key)
-
-
 def set_call_manager(cm: Any) -> None:
     """대시보드 활성 통화 목록 등 연동용 CallManager 주입."""
     global _call_manager
     _call_manager = cm
 
 
+def get_injected_call_manager() -> Any:
+    """HTTP API `GET /api/calls/active` 등에서 동일 프로세스의 CallManager 조회 (미주입 시 None)."""
+    return _call_manager
+
+
 def _resolve_hitl_kb_owner(call_id: str, data: dict) -> tuple[str, str]:
     """
     HITL → 지식 저장 시 Chroma/RAG용 owner 정규화.
-    우선순위: 요청 body owner/tenant_id → CallSession 착신 URI(get_callee_uri).
+    우선순위: 요청 body owner/tenant_id → context.owner(hitl_requested 페이로드)
+    → CallSession(call_id) → CallSession(get_session_by_sip_call_id).
+
+    owner가 비면 Chroma에는 들어가도 RAG 검색(where owner)에서 영구히 제외될 수 있음.
 
     Returns:
-        (normalized_owner, resolution_source) — source는 client | call_session | empty
+        (normalized_owner, resolution_source) — source는 client | context | call_session | sip_call_id | empty
     """
     from src.common.sip_owner import normalize_owner_username
 
@@ -120,9 +108,19 @@ def _resolve_hitl_kb_owner(call_id: str, data: dict) -> tuple[str, str]:
         if n:
             return n, "client"
 
+    ctx = data.get("context")
+    if isinstance(ctx, dict):
+        raw_ctx = (ctx.get("owner") or "").strip()
+        if raw_ctx:
+            n = normalize_owner_username(raw_ctx)
+            if n:
+                return n, "context"
+
     if _call_manager and call_id:
         try:
             sess = _call_manager.get_session(call_id)
+            if sess is None:
+                sess = _call_manager.get_session_by_sip_call_id(call_id)
             if sess is not None:
                 uri = sess.get_callee_uri() or ""
                 n = normalize_owner_username(uri)
@@ -310,6 +308,14 @@ async def emit_ai_greeting(
     payload.update(kwargs)
     payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
     payload.setdefault("role", "assistant")
+    _txt = payload.get("text")
+    _txt_len = len(str(_txt)) if _txt is not None else 0
+    logger.info(
+        "emit_ai_greeting_dispatch call_id=%s phase=%s text_len=%s",
+        call_id,
+        payload.get("phase"),
+        _txt_len,
+    )
     await _emit_on_ws_loop("ai_greeting", {"call_id": call_id, **payload})
 
 
@@ -479,7 +485,7 @@ async def start_server() -> None:
 
     sio = socketio.AsyncServer(
         async_mode="aiohttp",
-        cors_allowed_origins=CORS_ORIGINS,
+        cors_allowed_origins=_socketio_cors_allowed_origins(),
     )
     app = web.Application()
     sio.attach(app)
@@ -525,68 +531,103 @@ async def start_server() -> None:
                 "call_id": str,
                 "response_text": str,
                 "original_question": str (추가),  # HITL 요청 시의 원래 질문
-                "save_to_kb": bool (optional),
-                "category": str (optional),  # 미지정 시 question (RAG complaint/transfer $in 정합)
+                "save_to_kb": bool (optional),  # True면 즉시 Chroma 저장. False면 통화 종료 시 저장.
+                "category": str (optional),  # VALID_CATEGORIES 중 하나 권장; 미지정·무효 시 intent→complaint/transfer/question
                 "owner" | "tenant_id": str (optional),  # Chroma owner; 없으면 CallSession 착신 URI 시도
                 "question": str (optional)
             }
         
         Returns:
-            {"success": bool, "message": str, "refined_response": str (optional)}
+            {"success": bool, "message": str, "refined_response": str}
+            refined_response: 운영자가 제출한 원문(response_text). 고객 TTS용 문장은
+            파이프라인에서 format_hitl_reply_for_customer(질문+답변)로 생성됨.
         """
         call_id = data.get("call_id")
         response_text = data.get("response_text")
         original_question = data.get("original_question", "")  # HITL 지연 응답 설계
-        save_to_kb = data.get("save_to_kb", False)
-        # "faq"는 doc_type 용어와 혼동되고 RAG complaint/transfer category $in에 없음 → 기본 question
-        category = data.get("category") or "question"
-        question = data.get("question", original_question)  # question이 없으면 original_question 사용
-        
+        # 기본 True: 운영자가 명시적으로 끄지 않으면 지식 반영(즉시 또는 통화 종료 시 flush)
+        _st = str(os.environ.get("HITL_SAVE_TO_KB_DEFAULT", "true")).strip().lower()
+        _default_save = _st in ("1", "true", "yes", "on")
+        save_to_kb = data.get("save_to_kb", _default_save)
+        if "save_to_kb" not in (data or {}):
+            logger.info(
+                "submit_hitl_save_to_kb_default call_id=%s save_to_kb=%s env_HITL_SAVE_TO_KB_DEFAULT=%s",
+                call_id,
+                save_to_kb,
+                os.environ.get("HITL_SAVE_TO_KB_DEFAULT", "true"),
+            )
+        # 클라이언트가 question/original_question을 빠뜨려도, needs_human 시점 FIFO 질문으로 보강
+        q_from_client = (data.get("question") or "").strip()
+        oq = (original_question or "").strip()
+
         if not call_id or not response_text:
             return {"success": False, "message": "call_id 및 response_text 필수"}
-        
+
+        from src.services.hitl import get_hitl_service
+        from src.services.hitl_kb_category import resolve_hitl_kb_category
+
+        hitl_service = get_hitl_service()
+        req_ctx = None
         try:
-            # 1. LLM으로 응답 다듬기
-            refined_response = response_text  # 기본값
-            try:
-                llm = _llm_client_for_hitl_refine()
-                if llm is None:
-                    logger.warning(
-                        "hitl_llm_refine_skipped_no_client call_id=%s note=config_or_api_key_missing",
-                        call_id,
-                    )
-                    refined_response = f"확인해 드렸습니다. {response_text}"
-                else:
-                    refine_prompt = (
-                        f"운영자가 작성한 답변을 발신자에게 자연스럽고 친절하게 전달하는 문장으로 변환하세요.\n\n"
-                        f"운영자 답변: {response_text}\n\n"
-                        f"변환된 답변 (한 문장, '확인해 드렸습니다'로 시작):"
-                    )
+            req_ctx = hitl_service.pop_hitl_request_context(call_id)
+            intent_for_category = (req_ctx.intent if req_ctx else "") or ""
+            category = resolve_hitl_kb_category(data.get("category"), intent_for_category)
+            logger.info(
+                "submit_hitl_response_category_resolved call_id=%s category=%s "
+                "intent_from_fifo=%s explicit_category=%s",
+                call_id,
+                category,
+                intent_for_category,
+                (data.get("category") or ""),
+            )
+        except Exception as e:
+            logger.warning("submit_hitl_hitl_category_resolve_failed call_id=%s error=%s", call_id, e)
+            category = resolve_hitl_kb_category(data.get("category"), "")
 
-                    refined_response = await llm.generate_simple(refine_prompt)
-                    if not refined_response or len(refined_response.strip()) < 5:
-                        refined_response = f"확인해 드렸습니다. {response_text}"
+        q_from_fifo = (req_ctx.question if req_ctx else "").strip()
+        question = q_from_client or oq or q_from_fifo
+        if question and not q_from_client and q_from_fifo:
+            logger.info(
+                "hitl_kb_question_from_fifo call_id=%s note=클라이언트_질문_누락_FIFO로_보강",
+                call_id,
+            )
+        if not question:
+            logger.warning(
+                "hitl_kb_question_empty call_id=%s save_to_kb=%s note=지식반영_및_콜인사이트_스킵_가능",
+                call_id,
+                save_to_kb,
+            )
 
-                    logger.info(
-                        "hitl_response_refined call_id=%s original_len=%s refined_len=%s",
-                        call_id,
-                        len(response_text),
-                        len(refined_response),
-                    )
-            except Exception as e:
-                logger.warning("hitl_llm_refine_failed call_id=%s error=%s", call_id, e)
-                refined_response = f"확인해 드렸습니다. {response_text}"
-            
+        kb_owner, kb_owner_src = _resolve_hitl_kb_owner(call_id, data if isinstance(data, dict) else {})
+        if question and not kb_owner:
+            logger.warning(
+                "hitl_kb_owner_unresolved call_id=%s save_to_kb=%s source=%s "
+                "note=owner없이_저장되면_RAG_tenant_필터에_안_잡힘_요청에_tenant_id_owner_또는_context.owner_권장",
+                call_id,
+                save_to_kb,
+                kb_owner_src,
+            )
+
+        try:
+            # 1. 큐에는 운영자 원문만 넣음. 질문+답변 형태 TTS는 RAGLLMProcessor에서
+            #    LLMClient.format_hitl_reply_for_customer(original_question, text) 한 번만 수행.
+            refined_response = response_text
+            oq_for_tts = (question or oq or original_question or "").strip()
+            logger.info(
+                "hitl_response_queued_raw_operator_text call_id=%s has_resolved_question=%s "
+                "note=tts_format_in_pipeline",
+                call_id,
+                bool(oq_for_tts),
+            )
+
             # 2. 응답을 큐에 전달 (RAGLLMProcessor가 소비)
             # HITL 지연 응답 설계: original_question 추가
             try:
-                from src.services.hitl import get_hitl_service
-                hitl_service = get_hitl_service()
                 payload = {
                     "type": "hitl_response",
-                    "text": refined_response,
+                    "text": response_text,
                     "original_text": response_text,
-                    "original_question": original_question,
+                    "original_question": oq_for_tts or original_question,
                     "call_id": call_id,
                 }
                 queued_ok = await hitl_service.enqueue_response(call_id, payload)
@@ -594,9 +635,9 @@ async def start_server() -> None:
                     rq = hitl_service.get_response_queue(call_id)
                     qsz = rq.qsize() if rq else -1
                     logger.info(
-                        "hitl_response_queued call_id=%s has_original_question=%s queue_size=%s",
+                        "hitl_response_queued call_id=%s has_resolved_question=%s queue_size=%s",
                         call_id,
-                        bool(original_question),
+                        bool(oq_for_tts),
                         qsz,
                     )
                 else:
@@ -606,22 +647,36 @@ async def start_server() -> None:
                     )
             except Exception as e:
                 logger.error("hitl_response_queue_failed call_id=%s error=%s", call_id, e)
+
+            # 통화 이력: HITL로 처리된 질문은 AI 미응대 count·목록에서 제외
+            try:
+                from src.common.call_insights_buffer import mark_hitl_resolved_for_questions
+
+                _marked = mark_hitl_resolved_for_questions(
+                    call_id,
+                    question or "",
+                    original_question or "",
+                )
+                if _marked:
+                    logger.info(
+                        "hitl_call_insights_marked_resolved call_id=%s matched_rows=%s",
+                        call_id,
+                        _marked,
+                    )
+            except Exception as e:
+                logger.debug(
+                    "hitl_call_insights_mark_failed call_id=%s error=%s",
+                    call_id,
+                    e,
+                )
             
-            # 3. VectorDB에 저장 (save_to_kb=True 시)
+            # 3. VectorDB에 저장 (save_to_kb=True 시 즉시; False 시 통화 종료 flush)
             if save_to_kb and question:
                 try:
                     from src.services.knowledge_service import get_knowledge_service
                     knowledge_service = get_knowledge_service()
 
-                    kb_owner, kb_owner_src = _resolve_hitl_kb_owner(call_id, data if isinstance(data, dict) else {})
-                    if not kb_owner:
-                        logger.warning(
-                            "hitl_kb_owner_unresolved call_id=%s save_to_kb=True "
-                            "category=%s note=owner없으면_RAG_where_owner에_안_걸림_요청에_tenant_id_권장",
-                            call_id,
-                            category,
-                        )
-                    else:
+                    if kb_owner:
                         logger.info(
                             "hitl_kb_owner_resolved call_id=%s owner=%s source=%s",
                             call_id,
@@ -636,25 +691,49 @@ async def start_server() -> None:
                         operator_id=sid,  # Socket.IO 세션 ID를 운영자 ID로 사용
                         category=category,
                         owner=kb_owner or None,
+                        extra_metadata={"kb_timing": "immediate"},
                     )
-                    
-                    logger.info(
-                        "hitl_knowledge_saved call_id=%s doc_id=%s category=%s owner_set=%s",
-                        call_id,
-                        result.get("doc_id"),
-                        category,
-                        bool(kb_owner),
-                    )
-                    
-                    # Frontend에 지식 업데이트 알림
-                    await emit_knowledge_updated(call_id, {
-                        "message": "HITL 응답이 지식 베이스에 저장되었습니다",
-                        "doc_id": result.get("doc_id"),
-                        "category": category
-                    })
+                    if not result.get("success"):
+                        logger.error(
+                            "hitl_knowledge_save_failed call_id=%s error=%s category=%s",
+                            call_id,
+                            result.get("error"),
+                            category,
+                        )
+                    else:
+                        logger.info(
+                            "hitl_knowledge_saved call_id=%s doc_id=%s category=%s owner_set=%s",
+                            call_id,
+                            result.get("doc_id"),
+                            category,
+                            bool(kb_owner),
+                        )
+                        await emit_knowledge_updated(
+                            call_id,
+                            {
+                                "message": "HITL 응답이 지식 베이스에 저장되었습니다",
+                                "doc_id": result.get("doc_id"),
+                                "category": category,
+                            },
+                        )
                 except Exception as e:
                     logger.error("hitl_knowledge_save_failed call_id=%s error=%s", call_id, e)
-            
+            elif (question or "").strip():
+                # 통화 종료(BYE) 시 일괄 Chroma 적재 — 제출 시점 owner를 함께 저장(flush 시 SIP 정리 owner보다 우선)
+                hitl_service.queue_hitl_kb_for_call_end(
+                    call_id,
+                    question.strip(),
+                    response_text.strip(),
+                    category,
+                    sid,
+                    owner=(kb_owner or None),
+                )
+                logger.info(
+                    "hitl_kb_queued_for_call_end_hint call_id=%s owner_resolved=%s note=BYE_시_flush_또는_save_to_kb_true로_즉시저장",
+                    call_id,
+                    bool(kb_owner),
+                )
+
             # 4. hitl_resolved 이벤트 전송
             try:
                 await _sio.emit("hitl_resolved", {

@@ -121,9 +121,18 @@ class RecordingOutputProcessor(FrameProcessor):
         super().__init__(**kwargs)
         self._call_id = call_id
         self._collector = collector
+        self._audio_frame_count = 0  # 프레임 카운트 추적
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+
+        # 📌 응답별 리셋 (Notifier/Output과 동일)
+        try:
+            from pipecat.frames.frames import LLMFullResponseStartFrame
+            if isinstance(frame, LLMFullResponseStartFrame):
+                self._audio_frame_count = 0
+        except ImportError:
+            pass
 
         # 오디오 수집
         is_audio = (
@@ -134,9 +143,26 @@ class RecordingOutputProcessor(FrameProcessor):
             data = _get_audio_bytes(frame)
             if data:
                 self._collector.add_ai_audio(data)
+                self._audio_frame_count += 1
+                
+                # 📌 프레임 카운트 추적 (처음 5개와 10개마다)
+                if self._audio_frame_count <= 5 or self._audio_frame_count % 10 == 0:
+                    logger.debug("rec_output_audio_frame",
+                                call_id=self._call_id,
+                                frame_index=self._audio_frame_count,
+                                frame_type=type(frame).__name__,
+                                audio_len=len(data),
+                                note="RecordingOutput 프레임 추적 (Google TTS/Notifier/Output 비교)")
 
         # EndFrame 시 저장
         if isinstance(frame, EndFrame) and not self._collector.is_saved:
+            # 📌 EndFrame 시 총 프레임 수 로깅
+            logger.info("rec_output_endframe",
+                       call_id=self._call_id,
+                       frames_collected=self._audio_frame_count,
+                       note="RecordingOutput EndFrame — 이 응답에서 수집한 오디오 프레임 수")
+            self._audio_frame_count = 0  # 다음 응답을 위해 리셋
+            
             try:
                 from src.recording.wav_writer import save_mixed_wav
                 save_mixed_wav(

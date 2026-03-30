@@ -48,6 +48,13 @@ class IntentClassifier:
         "transfer",
     )
 
+    # 질문 패턴 (transfer 키워드가 있어도 질문이면 제외)
+    _QUESTION_PATTERNS: ClassVar[tuple[re.Pattern[str], ...]] = (
+        re.compile(r"(몇|얼마나|어떤|무엇|누구|언제|어디|왜|어떻게)\s*(명|개|분|시|곳)?.*\?"),  # 의문사 + 물음표
+        re.compile(r"(몇|얼마나|어떤|무엇|누구|언제|어디|왜|어떻게)\s*(명|개|분|시|곳)?.*\s*(있나요|인가요|일까요|가요|나요)"),  # 의문사 + 종결어미
+        re.compile(r".*\s*(있나요|인가요|일까요|하나요|되나요)\??\s*$"),  # 질문 종결어미
+    )
+
     _TRANSFER_REGEX: ClassVar[tuple[re.Pattern[str], ...]] = (
         # '마케팅팀에 연결' / '영업으로 바꿔'
         re.compile(r"(?:으로|로|에게|에)\s*(?:연결|바꿔|전환)"),
@@ -61,6 +68,12 @@ class IntentClassifier:
 
         t = str(user_text).strip().lower()
 
+        # 1. 질문 패턴 먼저 확인 (질문이면 transfer 아님)
+        for qp in cls._QUESTION_PATTERNS:
+            if qp.search(t):
+                return Intent.GENERAL
+
+        # 2. Transfer 키워드 확인
         for sub in cls._TRANSFER_SUBSTRINGS:
             if sub.lower() in t:
                 return Intent.TRANSFER_REQUEST
@@ -70,6 +83,34 @@ class IntentClassifier:
                 return Intent.TRANSFER_REQUEST
 
         return Intent.GENERAL
+
+
+def default_transfer_announcement(department: str) -> str:
+    """
+    LLM 실패·불충분 응답 시 사용하는 고정 안내 (부서명 없어도 자연스러운 한 문장 이상).
+    """
+    d = (department or "").strip()
+    if d:
+        return f"{d} 담당자에게 연결해 드리겠습니다. 잠시만 기다려 주세요."
+    return "지금 바로 연결해 드리겠습니다. 잠시만 기다려 주세요."
+
+
+def choose_transfer_announcement(llm_text: str | None, department: str) -> str:
+    """
+    LLM 출력이 인사만·과도하게 짧으면 `default_transfer_announcement`로 대체.
+
+    - 최소 글자 수 + '연결/전환/대기' 의미가 있어야 채택 (예: '네, 고객님.' 제외).
+    """
+    fb = default_transfer_announcement(department)
+    if not llm_text:
+        return fb
+    t = str(llm_text).strip()
+    if len(t) < 12:
+        return fb
+    # 연결·전환·대기 안내가 없으면 인사/잡담으로 보고 폴백
+    if not any(k in t for k in ("연결", "전환", "잠시", "기다려", "바로")):
+        return fb
+    return t
 
 
 def build_transfer_announcement_prompt(department: str, phone_number: str) -> str:
@@ -96,12 +137,14 @@ def build_transfer_announcement_prompt(department: str, phone_number: str) -> st
 
 **요구사항**:
 1. 친절하고 자연스러운 한국어 톤
-2. 1-2문장으로 간결하게 작성
-3. "연결해 드리겠습니다" 또는 "전환해 드리겠습니다" 표현 사용
-4. "잠시만 기다려 주세요" 등 대기 안내 포함
-5. 전화번호는 언급하지 말 것 (보안)
+2. 반드시 **한 문장 이상**의 안내 멘트 (인사만으로 끝내지 말 것)
+3. **금지**: "네, 고객님." / "네." / "알겠습니다" 처럼 연결 안내 없이 끝내기
+4. "연결해 드리겠습니다" 또는 "전환해 드리겠습니다" 등 **연결 의도**를 포함
+5. "잠시만 기다려 주세요" 등 **대기 안내** 포함
+6. 부서명을 문장에 넣어도 되고, 생략해도 되나 위 2~5는 반드시 지킬 것
+7. 전화번호는 언급하지 말 것 (보안)
 
-**안내 멘트**:"""
+**안내 멘트** (멘트만 출력, 다른 설명 없이):"""
 
 
 def build_transfer_fallback_prompt(user_query: str) -> str:
@@ -140,7 +183,10 @@ def build_hitl_request_message() -> str:
         이 함수는 고정 문자열을 반환합니다.
         HITL_DEFERRED_RESPONSE_DESIGN.md 참고
     """
-    return "해당 내용은 제가 모르는 내용이라서 별도 확인 해보고 알려드리겠습니다."
+    return (
+        "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. "
+        "다른 도움이 필요하시면 말씀해 주세요."
+    )
 
 
 def build_context_transition_message(original_question: str, operator_response: str) -> str:

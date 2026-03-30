@@ -26,8 +26,11 @@ class HITLManager:
     Pipecat 파이프라인 외부에서 동작하며, RAGLLMProcessor가 호출한다.
     """
     
-    # HITL 지연 응답 설계: 모든 케이스에 통일된 응답 메시지
-    HITL_REQUEST_MESSAGE = "해당 내용은 제가 모르는 내용이라서 별도 확인 해보고 알려드리겠습니다."
+    # HITL 시 고객 TTS용 (generate_response.HITL_CUSTOMER_TTS_MESSAGE 와 동일하게 유지)
+    HITL_REQUEST_MESSAGE = (
+        "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. "
+        "다른 도움이 필요하시면 말씀해 주세요."
+    )
     
     def __init__(
         self,

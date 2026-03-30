@@ -10,18 +10,26 @@ export default function KnowledgePage() {
   const router = useRouter();
   const [tenant, setTenant] = useState<{ owner: string; name?: string } | null>(null);
   const [text, setText] = useState('');
-  const [category, setCategory] = useState('question');
-  const [docType, setDocType] = useState<string>('knowledge'); // 추가
+  const [category, setCategory] = useState('persona');
+  const [docType, setDocType] = useState<string>('knowledge');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [filterOwner, setFilterOwner] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
-  const [filterDocType, setFilterDocType] = useState(''); // 추가
-  const [filterSource, setFilterSource] = useState(''); // 추가
+  const [filterDocType, setFilterDocType] = useState('');
+  const [filterSource, setFilterSource] = useState('');
   const [loadingList, setLoadingList] = useState(false);
   const [groupByCategory, setGroupByCategory] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  
+  // Persona 입력 필드 (category === 'persona' 일 때만 표시)
+  const [personaName, setPersonaName] = useState('');
+  const [personaDescription, setPersonaDescription] = useState('');
+  const [personaScopeKeywords, setPersonaScopeKeywords] = useState<string[]>([]);
+  const [personaChitchatTemplate, setPersonaChitchatTemplate] = useState('');
+  const [personaEnabled, setPersonaEnabled] = useState(true);
+  const [keywordInput, setKeywordInput] = useState('');
 
   useEffect(() => {
     const t = localStorage.getItem('tenant');
@@ -70,11 +78,95 @@ export default function KnowledgePage() {
   }, [filterOwner, filterCategory, filterDocType, filterSource]);
 
   useEffect(() => {
-    if (tenant) fetchList();
+    if (tenant) {
+      fetchList();
+      loadPersonaIfExists(tenant.owner);
+    }
   }, [tenant, fetchList]);
+
+  // category가 'persona'로 변경되면 기존 데이터 로드
+  useEffect(() => {
+    if (category === 'persona' && tenant?.owner) {
+      loadPersonaIfExists(tenant.owner);
+    }
+  }, [category, tenant]);
+
+  const loadPersonaIfExists = async (owner: string) => {
+    if (!owner) return;
+    try {
+      const res = await fetch(`${API_URL}/api/persona/${encodeURIComponent(owner)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setPersonaName(data.name || '');
+        setPersonaDescription(data.description || '');
+        setPersonaScopeKeywords(data.scope_keywords || []);
+        setPersonaChitchatTemplate(data.chitchat_response_template || '');
+        setPersonaEnabled(data.enabled ?? true);
+      }
+    } catch (e) {
+      console.warn('[knowledge] loadPersona error', e);
+    }
+  };
+
+  const handleAddKeyword = () => {
+    if (!keywordInput.trim()) return;
+    const newKeywords = keywordInput.split(',').map(k => k.trim()).filter(Boolean);
+    setPersonaScopeKeywords([...personaScopeKeywords, ...newKeywords]);
+    setKeywordInput('');
+  };
+
+  const handleRemoveKeyword = (index: number) => {
+    setPersonaScopeKeywords(personaScopeKeywords.filter((_, i) => i !== index));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Persona 저장
+    if (category === 'persona') {
+      if (!tenant?.owner || !personaName.trim() || !personaDescription.trim()) {
+        setMessage({ type: 'error', text: '조직명과 조직 설명은 필수입니다.' });
+        return;
+      }
+      
+      setSubmitting(true);
+      setMessage(null);
+      
+      try {
+        const res = await fetch(`${API_URL}/api/persona/${encodeURIComponent(tenant.owner)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: personaName.trim(),
+            description: personaDescription.trim(),
+            scope_keywords: personaScopeKeywords,
+            chitchat_response_template: personaChitchatTemplate.trim() || undefined,
+            enabled: personaEnabled,
+          }),
+        });
+        
+        if (res.ok) {
+          setMessage({ type: 'ok', text: '조직 페르소나가 저장되었습니다.' });
+          setPersonaName('');
+          setPersonaDescription('');
+          setPersonaScopeKeywords([]);
+          setPersonaChitchatTemplate('');
+          setPersonaEnabled(true);
+          setKeywordInput('');
+          await loadPersonaIfExists(tenant.owner);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setMessage({ type: 'error', text: err.detail || `저장 실패 (HTTP ${res.status})` });
+        }
+      } catch (err) {
+        setMessage({ type: 'error', text: (err as Error).message || '저장 실패' });
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+    
+    // 일반 지식 저장
     if (!tenant?.owner || !text.trim() || !category) {
       setMessage({ type: 'error', text: '착신(owner), 내용(text), 카테고리(category)를 입력하세요.' });
       return;
@@ -153,7 +245,16 @@ export default function KnowledgePage() {
   return (
     <div>
       <div className="max-w-4xl mx-auto px-0 py-4">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">지식 베이스</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-2xl font-bold text-gray-900">지식 베이스</h1>
+          <button
+            type="button"
+            onClick={() => router.push('/knowledge/upload')}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+          >
+            📄 지식 추가 (TXT 업로드)
+          </button>
+        </div>
         <p className="text-gray-600 text-sm mb-6">
           <strong>내용</strong> 필드 하나로 저장됩니다. 일반 카테고리는 RAG 검색에 쓰이고,
           <strong className="font-medium"> 인사 (시작)·인사 (첫 응답)</strong>은 통화 시작 시 해당 문구를 <strong>LLM 없이 TTS</strong>로 재생합니다
@@ -178,32 +279,123 @@ export default function KnowledgePage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                질의·FAQ·잡담·불만·전환·연락처는 RAG 후보입니다. 인사(시작)/(첫 응답)은 오프닝 TTS, help는 &quot;뭘 할 수 있어요&quot; 류 질문 시 멘트 구성용입니다.
+                {category === 'persona' 
+                  ? 'AI가 응대하는 조직의 정체성을 정의합니다. 업무 관련 질문과 잡담을 정확히 분류하는 데 사용됩니다.'
+                  : '질의·FAQ·잡담·불만·전환·연락처는 RAG 후보입니다. 인사(시작)/(첫 응답)은 오프닝 TTS, help는 "뭘 할 수 있어요" 류 질문 시 멘트 구성용입니다.'
+                }
               </p>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">문서 유형 (doc_type)</label>
-              <select
-                value={docType}
-                onChange={(e) => setDocType(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-              >
-                {DOC_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">대시보드 입력은 기본적으로 knowledge 사용</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">내용 (질문/문구) *</label>
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                rows={3}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                placeholder="예: 안녕하세요, OO입니다 / 영업시간이 궁금해요"
-              />
-            </div>
+
+            {category === 'persona' ? (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">조직명 *</label>
+                  <input
+                    type="text"
+                    value={personaName}
+                    onChange={(e) => setPersonaName(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    placeholder="예: 기상청"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">조직 설명 및 업무 범위 *</label>
+                  <textarea
+                    value={personaDescription}
+                    onChange={(e) => setPersonaDescription(e.target.value)}
+                    rows={3}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    placeholder="예: 기상청은 날씨정보와 기상특보를 안내하는 국가 공공기관입니다. 날씨 정보에 대한 응대를 돕습니다."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">업무 범위 키워드 (선택)</label>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      value={keywordInput}
+                      onChange={(e) => setKeywordInput(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddKeyword())}
+                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="날씨, 예보, 기상, 특보"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddKeyword}
+                      className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm hover:bg-gray-700"
+                    >
+                      추가
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {personaScopeKeywords.map((kw, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm"
+                      >
+                        {kw}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveKeyword(idx)}
+                          className="text-blue-600 hover:text-blue-900 font-bold"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">업무 관련 키워드 (쉼표로 구분)</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Chitchat 응답 템플릿 (선택)</label>
+                  <textarea
+                    value={personaChitchatTemplate}
+                    onChange={(e) => setPersonaChitchatTemplate(e.target.value)}
+                    rows={2}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    placeholder="죄송합니다. 저는 날씨 관련 업무만 도와드릴 수 있어요."
+                  />
+                  <p className="text-xs text-gray-500 mt-1">비어있으면 기본 chitchat 응답 사용</p>
+                </div>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={personaEnabled}
+                      onChange={(e) => setPersonaEnabled(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                    <span className="text-sm font-medium text-gray-700">활성화</span>
+                  </label>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">문서 유형 (doc_type)</label>
+                  <select
+                    value={docType}
+                    onChange={(e) => setDocType(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                  >
+                    {DOC_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">대시보드 입력은 기본적으로 knowledge 사용</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">내용 (질문/문구) *</label>
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    rows={3}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    placeholder="예: 안녕하세요, OO입니다 / 영업시간이 궁금해요"
+                  />
+                </div>
+              </>
+            )}
           </div>
           {message && (
             <p className={`mt-3 text-sm ${message.type === 'ok' ? 'text-green-600' : 'text-red-600'}`}>

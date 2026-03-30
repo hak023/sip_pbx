@@ -12,12 +12,16 @@ import asyncio
 import wave
 import struct
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from datetime import datetime
 import json
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+# RTP 녹음: 패킷당 create_task 대신 단일 워커 + 배치 drain (이벤트 루프 부하 완화)
+_RTP_INGEST_QUEUE_MAX = 32000
+_RTP_INGEST_BATCH_MAX = 64
 
 
 class SIPCallRecorder:
@@ -76,6 +80,262 @@ class SIPCallRecorder:
                    sample_rate=sample_rate,
                    enable_post_stt=enable_post_stt,
                    enable_diarization=enable_diarization)
+
+        self._rtp_ingest_queue: Optional[asyncio.Queue] = None
+        self._rtp_ingest_worker_task: Optional[asyncio.Task] = None
+        self._rtp_ingest_queue_full_logged = False
+        self._rtp_ingest_backlog_warned = False
+        self._rtp_ingest_shutting_down = False
+        self._rtp_ingest_drop_count = 0
+
+    def _drain_rtp_ingest_queue_sync(self) -> None:
+        """큐에 남은 RTP 항목을 동기 인입(센티넬 None은 건너뜀)."""
+        q = self._rtp_ingest_queue
+        if q is None:
+            return
+        while True:
+            try:
+                stale = q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if stale is None:
+                continue
+            try:
+                self._ingest_rtp_packet_sync(*stale)
+            except Exception as drain_err:
+                logger.error(
+                    "rtp_ingest_queue_drain_sync_error",
+                    error=str(drain_err),
+                    error_type=type(drain_err).__name__,
+                )
+
+    async def shutdown_rtp_ingest_worker(self, *, timeout: float = 10.0) -> None:
+        """센티넬로 워커를 끝내고 큐를 비운 뒤 리소스 해제. 프로세스/이벤트 루프 종료 전 호출 권장.
+
+        `enqueue_rtp_packet`은 종료 중 동기 경로만 사용해 None 뒤에 패킷이 밀려 드는 레이스를 막는다.
+        """
+        self._rtp_ingest_shutting_down = True
+        q = self._rtp_ingest_queue
+        task = self._rtp_ingest_worker_task
+        try:
+            if q is None or task is None or task.done():
+                self._drain_rtp_ingest_queue_sync()
+                return
+            await q.put(None)
+            try:
+                await asyncio.wait_for(task, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "rtp_ingest_worker_shutdown_timeout",
+                    timeout=timeout,
+                    note="녹음 인입 워커 종료 타임아웃 — cancel 후 큐 drain",
+                )
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                self._drain_rtp_ingest_queue_sync()
+        finally:
+            self._rtp_ingest_shutting_down = False
+            self._rtp_ingest_queue = None
+            self._rtp_ingest_worker_task = None
+            logger.info(
+                "rtp_recording_ingest_worker_shutdown_complete",
+                note="다음 녹음 시작 시 큐·워커 재생성",
+            )
+
+    async def _ensure_rtp_ingest_worker(self) -> None:
+        """단일 비동기 워커로 RTP 녹음 큐를 소비 (패킷당 Task 생성 방지)."""
+        if self._rtp_ingest_shutting_down:
+            return
+        if self._rtp_ingest_worker_task is not None and not self._rtp_ingest_worker_task.done():
+            return
+        if self._rtp_ingest_queue is None:
+            self._rtp_ingest_queue = asyncio.Queue(maxsize=_RTP_INGEST_QUEUE_MAX)
+        loop = asyncio.get_running_loop()
+        self._rtp_ingest_worker_task = loop.create_task(self._rtp_ingest_worker_loop())
+        logger.info(
+            "rtp_recording_ingest_worker_started",
+            queue_max=_RTP_INGEST_QUEUE_MAX,
+            batch_max=_RTP_INGEST_BATCH_MAX,
+            note="RTP 녹음 단일 워커 시작 — enqueue_rtp_packet 사용",
+        )
+
+    async def _rtp_ingest_worker_loop(self) -> None:
+        """큐에서 배치로 꺼내 동기 인입(디코딩·버퍼 추가)만 수행."""
+        q = self._rtp_ingest_queue
+        if q is None:
+            return
+        try:
+            while True:
+                item = await q.get()
+                if item is None:
+                    break
+                batch: List[Tuple[str, bytes, str, str]] = [item]
+                while len(batch) < _RTP_INGEST_BATCH_MAX:
+                    try:
+                        batch.append(q.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+                for call_id, audio_data, direction, codec in batch:
+                    self._ingest_rtp_packet_sync(call_id, audio_data, direction, codec)
+                if not self._rtp_ingest_backlog_warned and q.qsize() > _RTP_INGEST_QUEUE_MAX * 8 // 10:
+                    self._rtp_ingest_backlog_warned = True
+                    logger.warning(
+                        "rtp_recording_ingest_queue_backlog_high",
+                        qsize=q.qsize(),
+                        maxsize=_RTP_INGEST_QUEUE_MAX,
+                        note="녹음 인입 큐 적체 — RTP 경로·워커 처리량 점검",
+                    )
+                elif self._rtp_ingest_backlog_warned and q.qsize() < _RTP_INGEST_QUEUE_MAX // 4:
+                    self._rtp_ingest_backlog_warned = False
+                if len(batch) >= _RTP_INGEST_BATCH_MAX:
+                    await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(
+                "rtp_ingest_worker_fatal",
+                error=str(e),
+                error_type=type(e).__name__,
+                note="녹음 인입 워커 예외 종료 — 큐 drain 후 동기 경로로 폴백",
+            )
+            self._drain_rtp_ingest_queue_sync()
+        finally:
+            self._rtp_ingest_worker_task = None
+
+    def enqueue_rtp_packet(
+        self,
+        call_id: str,
+        audio_data: bytes,
+        direction: str,
+        codec: str = "PCMU",
+    ) -> bool:
+        """
+        RTP 녹음 패킷을 인입 큐에 넣음 (이벤트 루프 스레드에서 호출).
+
+        워커가 없거나 종료된 경우: 큐에 남은 항목을 동기로 비운 뒤 현재 패킷도 동기 인입.
+        Returns:
+            큐 투입 성공 여부 (False = Queue Full 드롭).
+        """
+        if not audio_data:
+            return True
+        if self._rtp_ingest_shutting_down:
+            self._ingest_rtp_packet_sync(call_id, audio_data, direction, codec)
+            return True
+        q = self._rtp_ingest_queue
+        task = self._rtp_ingest_worker_task
+
+        if q is None:
+            self._ingest_rtp_packet_sync(call_id, audio_data, direction, codec)
+            return True
+
+        if task is None or task.done():
+            self._drain_rtp_ingest_queue_sync()
+            self._ingest_rtp_packet_sync(call_id, audio_data, direction, codec)
+            return True
+
+        try:
+            q.put_nowait((call_id, audio_data, direction, codec))
+            return True
+        except asyncio.QueueFull:
+            self._rtp_ingest_drop_count += 1
+            dc = self._rtp_ingest_drop_count
+            if not self._rtp_ingest_queue_full_logged:
+                self._rtp_ingest_queue_full_logged = True
+                logger.warning(
+                    "rtp_recording_ingest_queue_full",
+                    call_id=call_id,
+                    direction=direction,
+                    maxsize=q.maxsize,
+                    drop_count=dc,
+                    hypothesis="rtp_relay_hot_path_vs_recording_worker_slow",
+                    note="녹음 인입 큐 가득 — 패킷 드롭(이벤트 루프·워커 병목 추적)",
+                )
+            elif dc % 200 == 0:
+                logger.warning(
+                    "rtp_recording_ingest_drop_accumulated",
+                    call_id=call_id,
+                    direction=direction,
+                    drop_count=dc,
+                    queue_maxsize=q.maxsize,
+                    hypothesis="sustained_recording_backlog_may_distort_audio_or_starve_loop",
+                    note="녹음 큐 풀 드롭 누적 — RTP 경로와 동일 루프 병목 가능",
+                )
+            return False
+
+    def _ingest_rtp_packet_sync(
+        self,
+        call_id: str,
+        audio_data: bytes,
+        direction: str,
+        codec: str = "PCMU",
+    ) -> None:
+        """add_rtp_packet과 동일 로직(동기). 워커·직접 호출 공용."""
+        recording = self.active_recordings.get(call_id)
+        if not recording:
+            if not hasattr(self, "_no_recording_warned"):
+                self._no_recording_warned = set()
+            if call_id not in self._no_recording_warned:
+                self._no_recording_warned.add(call_id)
+                logger.debug(
+                    "RTP packet after recording stopped (expected after BYE)",
+                    call_id=call_id,
+                    direction=direction,
+                )
+            return
+
+        if not audio_data or len(audio_data) == 0:
+            logger.warning(
+                "Empty RTP payload received",
+                call_id=call_id,
+                direction=direction,
+            )
+            return
+
+        if codec == "PCMU":
+            pcm_data = self._decode_g711_ulaw(audio_data)
+        elif codec == "PCMA":
+            pcm_data = self._decode_g711_alaw(audio_data)
+        else:
+            logger.warning(
+                "Unsupported codec, using raw data",
+                codec=codec,
+                call_id=call_id,
+            )
+            pcm_data = audio_data
+
+        if not pcm_data or len(pcm_data) == 0:
+            logger.warning(
+                "Decoding resulted in empty PCM data",
+                call_id=call_id,
+                direction=direction,
+                codec=codec,
+                input_size=len(audio_data),
+            )
+            return
+
+        if direction == "caller":
+            recording["caller_buffer"].append(pcm_data)
+            recording["caller_frames"] += 1
+            if recording["caller_frames"] <= 10:
+                logger.debug(
+                    "Caller RTP packet added",
+                    call_id=call_id,
+                    frame=recording["caller_frames"],
+                    pcm_size=len(pcm_data),
+                )
+        elif direction == "callee":
+            recording["callee_buffer"].append(pcm_data)
+            recording["callee_frames"] += 1
+            if recording["callee_frames"] <= 10:
+                logger.debug(
+                    "Callee RTP packet added",
+                    call_id=call_id,
+                    frame=recording["callee_frames"],
+                    pcm_size=len(pcm_data),
+                )
     
     async def start_recording(
         self, 
@@ -122,6 +382,8 @@ class SIPCallRecorder:
             "call_dir": call_dir,
             "dir_name": dir_name  # 디렉토리 이름 저장 (metadata용)
         }
+
+        await self._ensure_rtp_ingest_worker()
     
     async def add_rtp_packet(
         self,
@@ -131,76 +393,12 @@ class SIPCallRecorder:
         codec: str = "PCMU"
     ):
         """
-        RTP 패킷 추가 (RTP Relay에서 호출)
-        
-        Args:
-            call_id: 통화 ID
-            audio_data: RTP 페이로드 (오디오 데이터)
-            direction: "caller" | "callee"
-            codec: "PCMU" | "PCMA" | "opus"
+        RTP 패킷 추가 (비동기 API 유지).
+
+        권장: RTP Relay에서는 `enqueue_rtp_packet` 사용(단일 워커·배치 처리).
         """
-        recording = self.active_recordings.get(call_id)
-        if not recording:
-            # 통화 종료 후 잔여 RTP 패킷은 정상적으로 무시 (debug 레벨)
-            # BYE 처리 후 Pipecat TTS가 잔여 패킷을 보낼 수 있음
-            if not hasattr(self, '_no_recording_warned'):
-                self._no_recording_warned = set()
-            if call_id not in self._no_recording_warned:
-                self._no_recording_warned.add(call_id)
-                logger.debug("RTP packet after recording stopped (expected after BYE)",
-                            call_id=call_id,
-                            direction=direction)
-            return
-        
-        # ✅ 빈 데이터 체크
-        if not audio_data or len(audio_data) == 0:
-            logger.warning("Empty RTP payload received",
-                          call_id=call_id,
-                          direction=direction)
-            return
-        
-        # 코덱 디코딩 (G.711 → PCM)
-        if codec == "PCMU":
-            pcm_data = self._decode_g711_ulaw(audio_data)
-        elif codec == "PCMA":
-            pcm_data = self._decode_g711_alaw(audio_data)
-        else:
-            # Opus 등 다른 코덱은 추후 구현
-            logger.warning("Unsupported codec, using raw data",
-                          codec=codec,
-                          call_id=call_id)
-            pcm_data = audio_data
-        
-        # ✅ 디코딩 결과 체크
-        if not pcm_data or len(pcm_data) == 0:
-            logger.warning("Decoding resulted in empty PCM data",
-                          call_id=call_id,
-                          direction=direction,
-                          codec=codec,
-                          input_size=len(audio_data))
-            return
-        
-        # 버퍼에 추가
-        if direction == "caller":
-            recording["caller_buffer"].append(pcm_data)
-            recording["caller_frames"] += 1
-            
-            # 첫 10개 패킷만 디버그 로그
-            if recording["caller_frames"] <= 10:
-                logger.debug("Caller RTP packet added",
-                            call_id=call_id,
-                            frame=recording["caller_frames"],
-                            pcm_size=len(pcm_data))
-        elif direction == "callee":
-            recording["callee_buffer"].append(pcm_data)
-            recording["callee_frames"] += 1
-            
-            # 첫 10개 패킷만 디버그 로그
-            if recording["callee_frames"] <= 10:
-                logger.debug("Callee RTP packet added",
-                            call_id=call_id,
-                            frame=recording["callee_frames"],
-                            pcm_size=len(pcm_data))
+        await self._ensure_rtp_ingest_worker()
+        self._ingest_rtp_packet_sync(call_id, audio_data, direction, codec)
     
     def _decode_g711_ulaw(self, ulaw_data: bytes) -> bytes:
         """
@@ -355,7 +553,52 @@ class SIPCallRecorder:
                             call_id=call_id,
                             error=str(e),
                             exc_info=True)
-        
+
+        try:
+            from src.common.call_insights_buffer import flush_call_insights_to_dir
+
+            _uh = flush_call_insights_to_dir(
+                call_id,
+                call_dir,
+                duration_sec=duration,
+                caller_id=recording["caller_id"],
+                callee_id=recording["callee_id"],
+            )
+            logger.info(
+                "call_insights_flushed",
+                call_id=call_id,
+                ai_unhandled_count=_uh,
+            )
+        except Exception as _ci_err:
+            logger.warning(
+                "call_insights_flush_failed",
+                call_id=call_id,
+                error=str(_ci_err),
+            )
+        else:
+            try:
+                from src.common.call_summary_generator import run_call_summary_after_recording
+
+                _ai_handled = (call_dir / "conversation.json").is_file()
+                asyncio.create_task(
+                    run_call_summary_after_recording(
+                        call_id,
+                        call_dir,
+                        is_ai_handled_call=_ai_handled,
+                    )
+                )
+                logger.debug(
+                    "call_summary_background_task_scheduled",
+                    call_id=call_id,
+                    is_ai_handled_call=_ai_handled,
+                )
+            except Exception as _sum_sched:
+                logger.warning(
+                    "call_summary_task_schedule_failed",
+                    call_id=call_id,
+                    error=str(_sum_sched),
+                )
+
         # 메타데이터 생성
         metadata = {
             "call_id": call_id,
@@ -379,6 +622,9 @@ class SIPCallRecorder:
                 "transcript": str(transcript_path.relative_to(self.output_dir)) if transcript_path.exists() else None,
                 "conversation": str((call_dir / "conversation.json").relative_to(self.output_dir))
                 if (call_dir / "conversation.json").exists()
+                else None,
+                "call_insights": str((call_dir / "call_insights.json").relative_to(self.output_dir))
+                if (call_dir / "call_insights.json").exists()
                 else None,
             },
         }

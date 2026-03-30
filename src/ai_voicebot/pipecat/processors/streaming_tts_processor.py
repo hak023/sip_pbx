@@ -112,8 +112,20 @@ class StreamingTTSGateway(FrameProcessor):
 
         if isinstance(frame, TextFrame) and self._streaming:
             # 텍스트 누적
-            self._buffer += frame.text
+            incoming_text = frame.text
+            self._buffer += incoming_text
             self._text_frame_count += 1
+            
+            # 📌 TextFrame 수신 상세 로깅 (TTS 엔진 입력 추적)
+            logger.debug("streaming_tts_text_frame_received",
+                        progress="tts",
+                        category="tts",
+                        frame_num=self._text_frame_count,
+                        incoming_len=len(incoming_text),
+                        incoming_preview=incoming_text[:100] if incoming_text else "",
+                        buffer_len=len(self._buffer),
+                        buffer_preview=self._buffer[:150] if self._buffer else "",
+                        note="RAG→Gateway TextFrame 수신 (버퍼 누적 중)")
 
             if self._first_chunk_time == 0:
                 self._first_chunk_time = time.time()
@@ -169,15 +181,21 @@ class StreamingTTSGateway(FrameProcessor):
             logger.info("tts_first_chunk_sent_to_engine",
                         call=True,
                         progress="tts",
+                        category="tts",
+                        chunk_text=text,
+                        chunk_len=len(text),
                         ts_iso=datetime.now().isoformat(timespec="milliseconds"),
                         note="TTS 엔진에 첫 텍스트 전달 시점")
 
-        logger.debug("streaming_tts_chunk",
+        logger.info("streaming_tts_chunk_to_engine",
+                    call=True,
                     progress="tts",
+                    category="tts",
                     chunk_num=self._chunks_sent,
                     chars=len(text),
                     elapsed=f"{elapsed:.2f}s",
-                    preview=text)
+                    preview=text,
+                    note="Gateway→TTS 엔진 청크 전달 (합성 시작)")
 
         await self.push_frame(TextFrame(text=text))
 

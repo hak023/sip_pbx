@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { apiJson } from "@/lib/api";
 import { getTenantOwner } from "@/lib/tenant";
-import type { ActiveCallRestRaw, DashboardMetrics } from "@/types/api";
+import type { ActiveCallRestRaw, DashboardMetrics, CallHistoryRecordItem } from "@/types/api";
 import {
   normalizeRestActiveCall,
   startTimeIsoFromCallStartedPayload,
@@ -16,7 +16,7 @@ import { RagSearchDoneDetail, stripRagHitsFromRow } from "@/components/RagSearch
 interface LiveFeedLine {
   id: string;
   ts: string;
-  kind: "stt" | "tts" | "greeting";
+  kind: "stt" | "tts" | "greeting" | "hitl_request" | "hitl_response";
   /** 발신자 음성 STT | 착신자 음성 STT | AI TTS */
   speakerLabel: string;
   text: string;
@@ -34,8 +34,45 @@ interface HITLRequest {
   owner?: string;
 }
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:8001";
 const POLL_MS = 20000;
+
+function formatWhen(iso?: string | null): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("ko-KR", {
+      dateStyle: "short",
+      timeStyle: "medium",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatDuration(sec?: number): string {
+  if (sec == null || Number.isNaN(sec)) return "—";
+  const s = Math.round(sec);
+  if (s < 60) return `${s}초`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m}분 ${r}초` : `${m}분`;
+}
+
+/** Socket.IO는 HTTP(S)로 polling 핸드셰이크 후 업그레이드. `ws://` 전용 URL은 실패할 수 있음. */
+function getDashboardSocketUrl(): string {
+  const raw = (process.env.NEXT_PUBLIC_WS_URL ?? "").trim();
+  let u = raw;
+  if (u.startsWith("ws://")) u = `http://${u.slice(5)}`;
+  else if (u.startsWith("wss://")) u = `https://${u.slice(6)}`;
+  if (u) return u;
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    const p = protocol === "https:" ? "https:" : "http:";
+    return `${p}//${hostname}:8001`;
+  }
+  return "http://127.0.0.1:8001";
+}
 
 /** `call_data_record_*.log` 한 줄과 동일 구조 (WebSocket `call_debug_trace`) */
 interface CallDebugTraceRow {
@@ -58,19 +95,31 @@ const DEBUG_CATEGORIES = [
 ] as const;
 
 /**
- * 스트리밍 STT 중간 결과: API가 누적 전체를 주거나 짧은 조각만 줄 수 있음.
- * 가능하면 한 발화 안에서 텍스트가 앞에서부터 이어지도록 병합한다.
+ * 스트리밍 STT 중간 결과: API가 "현재. 현재 발. 발효…" 처럼 **구분자로 이어 붙인 누적 가설**을
+ * 한 문자열로 보낼 때, UI에는 **마지막 조각**(현재 가설)만 보이게 한다.
+ *
+ * 주의: Google/Pipecat 경로에서 마침표가 **U+FF0E(．) 전각 점** 등으로 올 수 있어,
+ * ASCII `.` / `。` 만 쓰면 split 이 1덩어리로 남아 화면에 전체 누적이 그대로 붙어 보였음.
+ * 확정(is_final) 텍스트에는 적용하지 않는다.
  */
-function mergeInterimTranscript(previous: string, incoming: string): string {
-  const p = previous.trim();
-  const n = incoming.trim();
-  if (!p) return n;
-  if (!n) return p;
-  if (n.startsWith(p)) return n;
-  if (p.startsWith(n)) return p;
-  if (p.includes(n)) return p;
-  if (n.includes(p)) return n;
-  return `${p} ${n}`.replace(/\s+/g, " ").trim();
+const INTERIM_STT_SEGMENT_SEP =
+  /[\u002E\u3002\uFF0E\uFF61\uFE52]\s*|[,，]\s+|[·•]\s*/u;
+
+function pickInterimSttDisplay(raw: string): string {
+  const t = raw.trim().replace(/\s+/g, " ");
+  if (!t) return t;
+  const parts = t
+    .split(INTERIM_STT_SEGMENT_SEP)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return t;
+  const last = parts[parts.length - 1]!;
+  if (last.length >= 2) return last;
+  if (parts.length >= 2) {
+    const prev = parts[parts.length - 2]!;
+    return `${prev}${last}`.trim();
+  }
+  return t;
 }
 
 function categoryBadgeClass(cat: string): string {
@@ -108,7 +157,13 @@ export default function Dashboard() {
     "connecting" | "connected" | "disconnected"
   >("connecting");
   const [currentTenantId, setCurrentTenantId] = useState<string>("");
-  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>({
+    hitl_queue_size: 0,
+    avg_ai_confidence: 0,
+    today_calls_count: 0,
+    avg_response_time: 0,
+    knowledge_base_size: 0,
+  });
   const [metricsLoading, setMetricsLoading] = useState(false);
   /** call_id → 실시간 전사·TTS 로그 */
   const [liveFeedByCall, setLiveFeedByCall] = useState<Record<string, LiveFeedLine[]>>({});
@@ -119,6 +174,10 @@ export default function Dashboard() {
   const [selectedFeedCallId, setSelectedFeedCallId] = useState<string>("");
   /** 활성 통화가 있을 때 1초마다 증가 → 통화 경과 시간 표시 갱신 */
   const [callDurationTick, setCallDurationTick] = useState(0);
+  /** 통화이력 (최근 20건) */
+  const [callHistory, setCallHistory] = useState<CallHistoryRecordItem[]>([]);
+  const [callHistoryLoading, setCallHistoryLoading] = useState(false);
+  const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({});
   const liveFeedScrollRef = useRef<HTMLDivElement | null>(null);
   const debugLogScrollRef = useRef<HTMLDivElement | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -127,26 +186,27 @@ export default function Dashboard() {
     (callId: string, line: Omit<LiveFeedLine, "id" | "ts"> & { id?: string; ts?: string }) => {
       const id = line.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const ts = line.ts ?? new Date().toISOString();
+      const isFinalBool = line.isFinal === true;
       const full: LiveFeedLine = {
         id,
         ts,
         kind: line.kind,
         speakerLabel: line.speakerLabel,
         text: line.text,
-        isFinal: line.isFinal,
+        isFinal: isFinalBool,
         source: line.source,
       };
       setLiveFeedByCall((prev) => {
         const cur = prev[callId] ? [...prev[callId]] : [];
 
         // STT 확정: 같은 화자의 '인식 중' 줄이 있으면 그 줄을 확정 텍스트로 교체(중복 카드 제거)
-        if (line.kind === "stt" && line.isFinal === true) {
+        if (line.kind === "stt" && isFinalBool) {
           for (let i = cur.length - 1; i >= 0; i--) {
             const row = cur[i];
             if (
               row.kind === "stt" &&
               row.speakerLabel === line.speakerLabel &&
-              row.isFinal === false
+              row.isFinal !== true
             ) {
               cur[i] = {
                 ...row,
@@ -162,12 +222,21 @@ export default function Dashboard() {
           }
         }
 
-        // STT 중간 결과: 리스트 **맨 끝**에 있는 같은 화자의 임시 줄만 갱신(중간에 TTS 끼면 새 임시 줄)
-        if (line.kind === "stt" && line.isFinal === false && cur.length > 0) {
+        // STT 중간 결과: 맨 끝의 같은 화자·미확정 줄만 갱신 (isFinal 미설정(undefined)도 임시로 간주).
+        // 수신 text는 그대로 두되, 핸들러에서 pickInterimSttDisplay로 마침표 누적 가설을 정리한다.
+        if (line.kind === "stt" && !isFinalBool && cur.length > 0) {
           const last = cur[cur.length - 1];
-          if (last.kind === "stt" && last.speakerLabel === line.speakerLabel && last.isFinal === false) {
-            const merged = mergeInterimTranscript(last.text, line.text);
-            cur[cur.length - 1] = { ...last, text: merged, ts };
+          if (
+            last.kind === "stt" &&
+            last.speakerLabel === line.speakerLabel &&
+            last.isFinal !== true
+          ) {
+            cur[cur.length - 1] = {
+              ...last,
+              text: line.text,
+              ts,
+              isFinal: false,
+            };
             const max = 200;
             if (cur.length > max) cur.splice(0, cur.length - max);
             return { ...prev, [callId]: cur };
@@ -205,6 +274,29 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchCallHistory = useCallback(async (owner: string) => {
+    if (!owner) return;
+    setCallHistoryLoading(true);
+    try {
+      const q = new URLSearchParams({ owner, limit: "20", offset: "0" });
+      const res = await apiJson<{ items: CallHistoryRecordItem[]; total: number }>(
+        `/api/call-history?${q.toString()}`,
+        { method: "GET" }
+      );
+      if (res.ok) {
+        setCallHistory(res.data.items || []);
+      } else {
+        console.warn("[dashboard] fetchCallHistory failed", res.status, res.message);
+        setCallHistory([]);
+      }
+    } catch (e) {
+      console.warn("[dashboard] fetchCallHistory error", e);
+      setCallHistory([]);
+    } finally {
+      setCallHistoryLoading(false);
+    }
+  }, []);
+
   const fetchMetrics = useCallback(async (owner: string) => {
     if (!owner) return;
     setMetricsLoading(true);
@@ -213,9 +305,29 @@ export default function Dashboard() {
       const res = await apiJson<DashboardMetrics>(`/api/metrics/dashboard?${q.toString()}`, {
         method: "GET",
       });
-      if (res.ok) setMetrics(res.data);
+      if (res.ok) {
+        setMetrics(res.data);
+      } else {
+        console.warn("[dashboard] fetchMetrics failed", res.status, res.message);
+        // API 실패 시 0으로 폴백 (대시보드 "—" 대신 "0" 표시)
+        setMetrics({
+          hitl_queue_size: 0,
+          avg_ai_confidence: 0,
+          today_calls_count: 0,
+          avg_response_time: 0,
+          knowledge_base_size: 0,
+        });
+      }
     } catch (e) {
-      console.warn("[dashboard] fetchMetrics", e);
+      console.warn("[dashboard] fetchMetrics error", e);
+      // 네트워크 에러 시에도 0으로 폴백
+      setMetrics({
+        hitl_queue_size: 0,
+        avg_ai_confidence: 0,
+        today_calls_count: 0,
+        avg_response_time: 0,
+        knowledge_base_size: 0,
+      });
     } finally {
       setMetricsLoading(false);
     }
@@ -224,20 +336,32 @@ export default function Dashboard() {
   useEffect(() => {
     let tenantId = localStorage.getItem("tenant_id") || "";
     if (!tenantId) tenantId = getTenantOwner();
+    if (!tenantId) tenantId = "1004"; // 폴백 기본 테넌트
     setCurrentTenantId(tenantId);
-    if (tenantId) fetchMetrics(tenantId);
+    fetchMetrics(tenantId);
+    fetchCallHistory(tenantId);
 
     (async () => {
       const rest = await fetchActiveFromRest();
       if (rest.length) setActiveCalls(rest);
     })();
 
-    const newSocket = io(WS_URL);
+    const newSocket = io(getDashboardSocketUrl(), {
+      transports: ["websocket", "polling"],
+      reconnectionAttempts: 12,
+      reconnectionDelay: 1500,
+    });
     setSocket(newSocket);
+
+    newSocket.on("connect_error", (err: Error) => {
+      console.warn("[dashboard] Socket.IO connect_error", err?.message || err);
+      setConnectionStatus("disconnected");
+    });
 
     newSocket.on("connect", () => {
       setConnectionStatus("connected");
-      if (tenantId) fetchMetrics(tenantId);
+      const tid = tenantId || "1004"; // 폴백 기본 테넌트
+      fetchMetrics(tid);
       fetchActiveFromRest().then((rest) => {
         if (rest.length) setActiveCalls((prev) => mergeByCallId(prev, rest));
       });
@@ -252,6 +376,8 @@ export default function Dashboard() {
     newSocket.on("call_started", (data: Record<string, unknown>) => {
       const id = String(data.call_id || "");
       if (!id) return;
+      // 선택 통화가 비어 있으면 같은 틱에서 피드만 채워지고 패널은 빈 상태로 남는 문제 방지
+      setSelectedFeedCallId((prev) => prev || id);
       // 백엔드는 SIP URI를 caller / callee 로 보냄 (caller_number 아님)
       const callerRaw = data.caller_number ?? data.caller;
       const calleeRaw = data.callee_number ?? data.callee;
@@ -259,21 +385,64 @@ export default function Dashboard() {
         typeof callerRaw === "string" ? callerRaw : callerRaw != null ? String(callerRaw) : "알 수 없음";
       const calleeStr =
         typeof calleeRaw === "string" ? calleeRaw : calleeRaw != null ? String(calleeRaw) : "알 수 없음";
-      const isAi = Boolean(data.is_ai_handled);
+      const aiPayload = data.is_ai_handled;
+      const isAiDefined = aiPayload !== undefined && aiPayload !== null;
+      const isAi = isAiDefined ? Boolean(aiPayload) : undefined;
+      const sipPhase = data.sip_phase != null ? String(data.sip_phase) : "";
+      const statusFromServer =
+        data.status != null && String(data.status).trim() !== "" ? String(data.status) : undefined;
+
       setActiveCalls((prev) => {
-        if (prev.find((c) => c.call_id === id)) return prev;
-        return [
-          ...prev,
-          {
-            call_id: id,
-            caller_number: callerStr,
-            callee_number: calleeStr,
-            status: String(data.status || "진행 중"),
-            start_time: startTimeIsoFromCallStartedPayload(data),
-            is_ai_handled: isAi,
-          },
-        ];
+        const idx = prev.findIndex((c) => c.call_id === id);
+        const newStart = startTimeIsoFromCallStartedPayload(data);
+        if (idx < 0) {
+          return [
+            ...prev,
+            {
+              call_id: id,
+              caller_number: callerStr,
+              callee_number: calleeStr,
+              status: statusFromServer ?? "진행 중",
+              start_time: newStart,
+              is_ai_handled: isAi ?? false,
+            },
+          ];
+        }
+        const cur = prev[idx]!;
+        const nextCaller = callerStr !== "알 수 없음" ? callerStr : cur.caller_number;
+        const nextCallee = calleeStr !== "알 수 없음" ? calleeStr : cur.callee_number;
+        const nextStatus = statusFromServer ?? cur.status;
+        const nextAi =
+          isAi === undefined ? Boolean(cur.is_ai_handled) : Boolean(isAi || cur.is_ai_handled);
+        const updated: DashboardActiveCall = {
+          ...cur,
+          caller_number: nextCaller,
+          callee_number: nextCallee,
+          status: nextStatus,
+          is_ai_handled: nextAi,
+        };
+        return [...prev.slice(0, idx), updated, ...prev.slice(idx + 1)];
       });
+
+      // INVITE 직후(sip_phase=inviting): 실시간 대화 패널에 시그널링 단계 안내
+      if (sipPhase === "inviting") {
+        appendLiveFeed(id, {
+          kind: "greeting",
+          speakerLabel: "시그널링",
+          text: "INVITE 수신 — 착신 연결을 시도 중입니다. (STT/TTS는 미디어 연결 후 표시)",
+          isFinal: true,
+          source: "sip_invite",
+        });
+      }
+      if (sipPhase === "answered") {
+        appendLiveFeed(id, {
+          kind: "greeting",
+          speakerLabel: "시그널링",
+          text: statusFromServer ?? "착신이 응답했습니다. 통화가 연결되었습니다.",
+          isFinal: true,
+          source: "sip_answered",
+        });
+      }
     });
 
     newSocket.on("call_ended", (data: { call_id?: string }) => {
@@ -307,12 +476,21 @@ export default function Dashboard() {
 
     newSocket.on("stt_transcript", (data: Record<string, unknown>) => {
       const id = String(data.call_id || "");
-      const text = String(data.text || "").trim();
+      let text = String(data.text || "").trim();
       if (!id || !text) return;
+      setSelectedFeedCallId((prev) => prev || id);
       const sp = String(data.speaker || data.channel || "caller");
       const label =
         sp === "callee" ? "착신 STT" : sp === "caller" ? "발신 STT" : `STT(${sp})`;
-      const isFinal = data.is_final === true || data.is_final === "true";
+      const isFinal =
+        data.is_final === true ||
+        data.is_final === "true" ||
+        data.isFinal === true ||
+        data.isFinal === "true";
+      if (!isFinal) {
+        text = pickInterimSttDisplay(text);
+        if (!text) return;
+      }
       appendLiveFeed(id, {
         kind: "stt",
         speakerLabel: label,
@@ -326,6 +504,7 @@ export default function Dashboard() {
       const id = String(data.call_id || "");
       const text = String(data.text || "").trim();
       if (!id || !text) return;
+      setSelectedFeedCallId((prev) => prev || id);
       appendLiveFeed(id, {
         kind: "tts",
         speakerLabel: "AI TTS",
@@ -339,6 +518,7 @@ export default function Dashboard() {
       const id = String(data.call_id || "");
       const text = String(data.text || "").trim();
       if (!id || !text) return;
+      setSelectedFeedCallId((prev) => prev || id);
       const phase = data.phase != null ? String(data.phase) : "";
       appendLiveFeed(id, {
         kind: "greeting",
@@ -352,6 +532,17 @@ export default function Dashboard() {
     newSocket.on("hitl_requested", (data: Record<string, unknown>) => {
       const id = String(data.call_id || "");
       if (!id) return;
+      setSelectedFeedCallId((prev) => prev || id);
+      const q = String(data.question || "").trim();
+      if (q) {
+        appendLiveFeed(id, {
+          kind: "hitl_request",
+          speakerLabel: "HITL 요청",
+          text: q,
+          isFinal: true,
+          source: "hitl_requested",
+        });
+      }
       const ctx = (data.context as Record<string, unknown>) || {};
       const ownerFromCtx =
         typeof ctx.owner === "string" && ctx.owner.trim() ? ctx.owner.trim() : undefined;
@@ -371,9 +562,19 @@ export default function Dashboard() {
       });
     });
 
-    newSocket.on("hitl_resolved", (data: { call_id?: string }) => {
-      const id = data?.call_id;
+    newSocket.on("hitl_resolved", (data: Record<string, unknown>) => {
+      const id = String(data?.call_id || "");
       if (!id) return;
+      const resp = String(data.response ?? "").trim();
+      if (resp) {
+        appendLiveFeed(id, {
+          kind: "hitl_response",
+          speakerLabel: "HITL 운영자 답변",
+          text: resp,
+          isFinal: true,
+          source: "hitl_resolved",
+        });
+      }
       setHitlRequests((prev) => prev.filter((h) => h.call_id !== id));
     });
 
@@ -529,7 +730,9 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-100 p-6">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold text-gray-900">운영자 대시보드</h1>
-        {connectionBadge()}
+        <div className="flex items-center gap-4">
+          {connectionBadge()}
+        </div>
       </div>
 
       {/* 메트릭 */}
@@ -537,11 +740,11 @@ export default function Dashboard() {
         {[
           {
             label: "오늘 통화",
-            value: metricsLoading ? "…" : metrics?.today_calls_count ?? "—",
+            value: metricsLoading ? "…" : (metrics?.today_calls_count !== undefined ? metrics.today_calls_count : "—"),
           },
           {
             label: "HITL 대기",
-            value: metricsLoading ? "…" : metrics?.hitl_queue_size ?? "—",
+            value: metricsLoading ? "…" : (metrics?.hitl_queue_size !== undefined ? metrics.hitl_queue_size : "—"),
           },
           {
             label: "평균 AI 신뢰도",
@@ -549,7 +752,7 @@ export default function Dashboard() {
           },
           {
             label: "지식베이스 크기",
-            value: metricsLoading ? "…" : metrics?.knowledge_base_size ?? "—",
+            value: metricsLoading ? "…" : (metrics?.knowledge_base_size !== undefined ? metrics.knowledge_base_size : "—"),
           },
         ].map((c) => (
           <div key={c.label} className="bg-white rounded-lg shadow p-4">
@@ -628,13 +831,8 @@ export default function Dashboard() {
                         </p>
                       </div>
                     </div>
-                    {activeCalls.length > 1 ? (
-                      <p className="mt-3 text-[11px] text-indigo-600">
-                        {isFeedSelected ? "✓ STT/TTS 패널에 표시 중" : "클릭하면 우측 대화창에 이 통화 표시"}
-                      </p>
-                    ) : null}
                     {/* AI 응대 통화만 호 전환(내선 연결). 유저 간 통화는 Pipecat 미사용이므로 버튼 숨김 */}
-                    {call.is_ai_handled ? (
+                    {call.is_ai_handled && (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -642,7 +840,7 @@ export default function Dashboard() {
                           handleTransfer(call);
                         }}
                         disabled={!currentTenantId}
-                        className={`mt-4 w-full px-4 py-2.5 rounded-md text-sm font-semibold transition-colors ${
+                        className={`mt-3 w-full px-3 py-2 rounded-md text-sm font-semibold transition-colors ${
                           currentTenantId
                             ? "bg-indigo-600 text-white hover:bg-indigo-700"
                             : "bg-gray-300 text-gray-500 cursor-not-allowed"
@@ -652,6 +850,11 @@ export default function Dashboard() {
                           ? `내선(${currentTenantId})으로 호 전환`
                           : "로그인 필요"}
                       </button>
+                    )}
+                    {activeCalls.length > 1 ? (
+                      <p className="mt-3 text-[11px] text-indigo-600">
+                        {isFeedSelected ? "✓ STT/TTS 패널에 표시 중" : "클릭하면 우측 대화창에 이 통화 표시"}
+                      </p>
                     ) : null}
                   </div>
                 );
@@ -708,11 +911,13 @@ export default function Dashboard() {
                         <div
                           key={line.id}
                           className={`rounded-lg px-3 py-3 border-l-4 shadow-sm ${
-                            line.kind === "tts" || line.kind === "greeting"
-                              ? "border-violet-400 bg-violet-50/90"
-                              : line.isFinal === false
-                                ? "border-amber-400 bg-amber-50/80"
-                                : "border-sky-300 bg-white"
+                            line.kind === "hitl_request" || line.kind === "hitl_response"
+                              ? "border-rose-400 bg-rose-50/90"
+                              : line.kind === "tts" || line.kind === "greeting"
+                                ? "border-violet-400 bg-violet-50/90"
+                                : line.isFinal === false
+                                  ? "border-amber-400 bg-amber-50/80"
+                                  : "border-sky-300 bg-white"
                           }`}
                         >
                           <div className="flex flex-wrap items-baseline justify-between gap-2 text-[11px] text-gray-500">
@@ -895,6 +1100,114 @@ export default function Dashboard() {
                 </div>
               );
             })}
+          </div>
+        )}
+      </section>
+
+      {/* 통화 이력 (최근 20건) */}
+      <section className="bg-white p-6 rounded-lg shadow-md">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold text-gray-800">통화 이력 (최근 20건)</h2>
+          <button
+            type="button"
+            onClick={() => fetchCallHistory(currentTenantId)}
+            disabled={callHistoryLoading}
+            className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50"
+          >
+            새로고침
+          </button>
+        </div>
+        {callHistoryLoading ? (
+          <p className="text-sm text-gray-500">불러오는 중…</p>
+        ) : callHistory.length === 0 ? (
+          <p className="text-sm text-gray-500">통화 이력이 없습니다.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-200 bg-gray-50">
+                  <th className="px-3 py-2.5 w-10" aria-label="펼침" />
+                  <th className="px-3 py-2.5">시작</th>
+                  <th className="px-3 py-2.5">발신</th>
+                  <th className="px-3 py-2.5">착신</th>
+                  <th className="px-3 py-2.5 min-w-[12rem] max-w-xs">통화 요약</th>
+                  <th className="px-3 py-2.5">유형</th>
+                  <th className="px-3 py-2.5">길이</th>
+                  <th className="px-3 py-2.5">표시</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {callHistory.map((row) => {
+                  const open = !!expandedHistory[row.call_id];
+                  const nUnhandled = row.ai_unhandled_count ?? (row.ai_unhandled_items?.length || 0);
+                  return (
+                    <tr key={row.call_id} className="hover:bg-indigo-50/40 align-top">
+                      <td className="px-3 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedHistory((prev) => ({ ...prev, [row.call_id]: !prev[row.call_id] }))
+                          }
+                          className="text-indigo-600 hover:text-indigo-800 font-medium text-xs whitespace-nowrap"
+                          aria-expanded={open}
+                        >
+                          {open ? "접기" : "펼치기"}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-800 whitespace-nowrap">{formatWhen(row.start_time)}</td>
+                      <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.caller_id || ""}>
+                        {row.caller_id || "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.callee_id || ""}>
+                        {row.callee_id || "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-700 max-w-xs align-top">
+                        {row.call_summary ? (
+                          <div className="group relative z-0 max-w-full">
+                            <p className="line-clamp-2 text-xs leading-snug text-gray-900 cursor-default">
+                              {row.call_summary}
+                            </p>
+                            <div className="absolute left-0 top-full z-[199] h-2 w-full max-w-[min(22rem,calc(100vw-2rem))]" aria-hidden />
+                            <div
+                              role="tooltip"
+                              className="pointer-events-none invisible absolute left-0 top-[calc(100%+0.5rem)] z-[200] max-h-72 min-w-[10rem] max-w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs leading-snug text-gray-900 shadow-xl whitespace-pre-wrap break-words transition-opacity duration-100 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100"
+                              style={{ opacity: 0 }}
+                            >
+                              {row.call_summary}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {row.is_ai_handled_call ? (
+                          <span className="inline-flex text-xs px-2 py-0.5 rounded bg-violet-100 text-violet-800">AI</span>
+                        ) : (
+                          <span className="inline-flex text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">일반</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{formatDuration(row.duration)}</td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex flex-wrap gap-1">
+                          {row.has_recording_mixed && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-100 text-teal-900">녹음</span>
+                          )}
+                          {row.has_transcript && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-900">대본</span>
+                          )}
+                          {nUnhandled > 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-900">
+                              미해결 {nUnhandled}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </section>

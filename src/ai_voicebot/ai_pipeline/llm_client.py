@@ -42,9 +42,9 @@ class LLMClient:
         """
         Args:
             config: LLM 설정
-                - model: "gemini-pro"
+                - model: 기본 gemini-2.5-flash-lite
                 - temperature: 0.7
-                - max_tokens: 200
+                - max_tokens / max_output_tokens: 기본 512 (통화 응답·짧은 호출 공통 상한)
                 - top_p: 1.0
                 - top_k: 1
             api_key: Google API 키
@@ -54,11 +54,11 @@ class LLMClient:
         # Gemini 설정
         genai.configure(api_key=api_key)
         
-        model_name = config.get("model", "gemini-pro")
+        model_name = config.get("model", "gemini-2.5-flash-lite")
         self.model = genai.GenerativeModel(model_name=model_name)
         
         # Generation 설정 (max_output_tokens: config.yaml 키, max_tokens: 구 설정 호환)
-        max_tokens = config.get("max_output_tokens") or config.get("max_tokens", 200)
+        max_tokens = config.get("max_output_tokens") or config.get("max_tokens", 512)
         self.generation_config = genai.types.GenerationConfig(
             temperature=config.get("temperature", 0.7),
             top_p=config.get("top_p", 1.0),
@@ -77,6 +77,17 @@ class LLMClient:
         logger.info("LLMClient initialized", 
                    model=model_name,
                    temperature=config.get("temperature"))
+    
+    def _effective_generation_config(self, max_output_tokens: Optional[int] = None) -> Any:
+        """호출별 출력 상한. None이면 인스턴스 기본(self.generation_config)과 동일 파라미터로 재생성."""
+        base = self.config.get("max_output_tokens") or self.config.get("max_tokens", 512)
+        cap = int(max_output_tokens) if max_output_tokens is not None else int(base)
+        return genai.types.GenerationConfig(
+            temperature=self.config.get("temperature", 0.7),
+            top_p=self.config.get("top_p", 1.0),
+            top_k=self.config.get("top_k", 1),
+            max_output_tokens=max(16, cap),
+        )
     
     async def generate_simple(self, prompt: str, max_tokens: Optional[int] = None, timeout_seconds: float = 10.0) -> str:
         """
@@ -122,14 +133,84 @@ class LLMClient:
         except Exception as e:
             logger.error("llm_generate_simple_failed", error=str(e))
             return ""
-    
+
+    async def generate_help_items_json(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 512,
+        timeout_seconds: float = 22.0,
+    ) -> tuple[str, bool]:
+        """
+        help 의도 전용: JSON만 출력하도록 유도 + 가능 시 response_mime_type=application/json.
+
+        Returns:
+            (raw_text, json_mode_applied) — json_mode_applied는 API에 JSON MIME을 붙였는지 여부.
+        """
+        json_mode_applied = False
+        try:
+            base_kw: Dict[str, Any] = {
+                "temperature": 0.05,
+                "top_p": 0.9,
+                "top_k": 1,
+                "max_output_tokens": max(128, int(max_tokens)),
+            }
+            try:
+                gen_config = genai.types.GenerationConfig(
+                    **base_kw,
+                    response_mime_type="application/json",
+                )
+                json_mode_applied = True
+            except TypeError:
+                gen_config = genai.types.GenerationConfig(**base_kw)
+                logger.info(
+                    "help_llm_json_mime_unsupported",
+                    note="GenerationConfig에 response_mime_type 미지원 — 저온·짧은 출력만 적용",
+                )
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.model.generate_content,
+                    prompt,
+                    generation_config=gen_config,
+                ),
+                timeout=timeout_seconds,
+            )
+            self.total_requests += 1
+            text = response.text.strip() if response and response.text else ""
+            _fr = None
+            try:
+                cands = getattr(response, "candidates", None) or []
+                if cands:
+                    _fr = getattr(cands[0], "finish_reason", None)
+            except Exception:
+                pass
+            logger.info(
+                "help_llm_generate_done",
+                json_mode_applied=json_mode_applied,
+                raw_len=len(text),
+                finish_reason=str(_fr) if _fr is not None else None,
+                note="근본: JSON MIME+저온으로 자연어+배열 혼합·토큰 절단을 억제",
+            )
+            return text, json_mode_applied
+        except asyncio.TimeoutError:
+            logger.error(
+                "help_llm_generate_timeout",
+                timeout_seconds=timeout_seconds,
+            )
+            return "", json_mode_applied
+        except Exception as e:
+            logger.error("help_llm_generate_failed", error=str(e))
+            return "", json_mode_applied
+
     async def generate_response(
         self, 
         user_text: str, 
         context_docs: List[str],
         system_prompt: Optional[str] = None,
         call_id: Optional[str] = None,  # DB 로깅용
-        timeout_seconds: float = 30.0  # ✅ API 타임아웃 설정
+        timeout_seconds: float = 30.0,  # ✅ API 타임아웃 설정
+        max_output_tokens: Optional[int] = None,
     ) -> str:
         """
         사용자 입력에 대한 답변 생성
@@ -140,6 +221,7 @@ class LLMClient:
             system_prompt: 시스템 프롬프트 (선택)
             call_id: 통화 ID (DB 로깅용, 선택)
             timeout_seconds: Gemini API 타임아웃 (기본 30초)
+            max_output_tokens: 이번 호출만 출력 토큰 상한(의도분류·쿼리변환 등은 작게). None이면 설정 기본값.
             
         Returns:
             생성된 답변 텍스트
@@ -155,6 +237,8 @@ class LLMClient:
                 system_prompt
             )
             
+            gen_cfg = self._effective_generation_config(max_output_tokens)
+            
             # ✅ Gemini API 호출 (비동기 + 타임아웃)
             loop = asyncio.get_event_loop()
             try:
@@ -163,7 +247,7 @@ class LLMClient:
                         None,
                         lambda: self.model.generate_content(
                             prompt,
-                            generation_config=self.generation_config
+                            generation_config=gen_cfg
                         )
                     ),
                     timeout=timeout_seconds
@@ -197,14 +281,14 @@ class LLMClient:
                                call_id=call_id or "",
                                finish_reason=fr_desc,
                                response_len=len(answer),
-                               max_output_tokens=getattr(self.generation_config, "max_output_tokens", self.config.get("max_output_tokens")),
+                               max_output_tokens=getattr(gen_cfg, "max_output_tokens", self.config.get("max_output_tokens")),
                                note="STOP=정상, MAX_TOKENS=해당 시 잘림")
                 if fr_desc == "MAX_TOKENS":
                     logger.warning("llm_response_truncated_max_tokens",
                                   call=True,
                                   call_id=call_id or "",
                                   response_len=len(answer),
-                                  max_output_tokens=getattr(self.generation_config, "max_output_tokens", self.config.get("max_output_tokens")),
+                                  max_output_tokens=getattr(gen_cfg, "max_output_tokens", self.config.get("max_output_tokens")),
                                   note="응답이 max_output_tokens에서 잘림. config max_output_tokens 상향 권장(예: 1024).")
             
             # 대화 히스토리 업데이트
@@ -254,7 +338,7 @@ class LLMClient:
                         confidence=confidence,
                         latency_ms=latency_ms,
                         tokens_used=tokens_used,
-                        model_name=self.config.get("model", "gemini-pro"),
+                        model_name=self.config.get("model", "gemini-2.5-flash-lite"),
                         temperature=self.config.get("temperature", 0.7)
                     )
                 except ImportError:
@@ -304,25 +388,50 @@ class LLMClient:
         timeout_seconds: float = 30.0,
     ) -> str:
         """
-        HITL 운영자 답변 + 고객 질문 맥락 → 통화용 자연스러운 1~2문장 (TTS).
+        HITL 운영자 답변 + 고객 질문 맥락 → 통화용 멘트 (TTS).
+        고객 질문이 있으면 **짧게 짚어 준 뒤** 답을 이어 말하도록 유도한다.
         """
         op = (operator_reply or "").strip()
         if not op:
             return operator_reply or ""
         cq = (customer_question or "").strip()
-        prompt = (
-            "전화 통화 AI 비서입니다. 아래 [담당자 확인 내용]만 사실로 취급하고, "
-            "고객에게 말할 한국어 멘트를 1~2문장으로 작성하세요.\n\n"
-            "금지 표현(쓰지 마세요): "
-            '"확인해드렸습니다", "확인해 드렸습니다", "확인되어 알려드립니다", '
-            '"아까 문의 주신", "말씀하신 내용에 대해"\n'
-            "불필요한 사과·형식적 접두어는 줄이고, 정보를 담담하게 전달하세요.\n\n"
-            f"고객 질문:\n{cq if cq else '(생략)'}\n\n"
-            f"담당자 확인 내용:\n{op}\n\n"
-            "고객 멘트만 출력하세요."
+        if cq:
+            prompt = (
+                "전화 통화 AI 비서입니다. 아래 [담당자 확인 내용]만 사실로 취급하고, "
+                "고객에게 들려줄 한국어 멘트를 작성하세요.\n\n"
+                "구성(필수):\n"
+                "1) 고객이 물었던 내용을 한 문장(또는 짧은 두 문장)으로 자연스럽게 요약·짚어 주세요. "
+                "질문을 그대로 읽기보다는 대화체로 바꿔도 됩니다.\n"
+                "2) 이어서 담당자 확인 내용을 전달하세요.\n\n"
+                "금지 표현(쓰지 마세요): "
+                '"확인해드렸습니다", "확인해 드렸습니다", "확인되어 알려드립니다", '
+                '"아까 문의 주신", "말씀하신 내용에 대해"\n'
+                "불필요한 사과·형식적 접두어는 줄이고, 정보를 담담하게 전달하세요.\n"
+                "전체 2~4문장 정도로, TTS로 읽기 좋게 마침표로 끊어 주세요.\n\n"
+                f"고객 질문:\n{cq}\n\n"
+                f"담당자 확인 내용:\n{op}\n\n"
+                "고객에게 들려줄 멘트만 출력하세요."
+            )
+        else:
+            prompt = (
+                "전화 통화 AI 비서입니다. 아래 [담당자 확인 내용]만 사실로 취급하고, "
+                "고객에게 말할 한국어 멘트를 1~2문장으로 작성하세요.\n\n"
+                "금지 표현(쓰지 마세요): "
+                '"확인해드렸습니다", "확인해 드렸습니다", "확인되어 알려드립니다", '
+                '"아까 문의 주신", "말씀하신 내용에 대해"\n'
+                "불필요한 사과·형식적 접두어는 줄이고, 정보를 담담하게 전달하세요.\n\n"
+                f"담당자 확인 내용:\n{op}\n\n"
+                "고객 멘트만 출력하세요."
+            )
+        # HITL 멘트는 질문+담당자 답이 길 수 있음. 상한은 넉넉히 — 잘리면 TTS가 중간에서 끊김.
+        hitl_fmt_max = int(
+            self.config.get("hitl_format_max_output_tokens")
+            or self.config.get("hitl_format_max_tokens")
+            or 2048
         )
+        hitl_fmt_max = max(256, min(hitl_fmt_max, 8192))
         gen_config = genai.types.GenerationConfig(
-            max_output_tokens=512,
+            max_output_tokens=hitl_fmt_max,
             temperature=0.35,
         )
         try:
@@ -355,10 +464,25 @@ class LLMClient:
                 except (TypeError, ValueError):
                     fr_is_max_tokens = str(finish_reason).endswith("MAX_TOKENS")
             if fr_is_max_tokens:
+                # 말미 마침표 등 없고 짧으면 상한 도달로 중간 끊김 가능성 큼 → 담당자 원문 TTS
+                looks_cut = (len(out) < 80) or (
+                    not re.search(r"[.!?。…」』]\s*$", out)
+                )
+                if looks_cut:
+                    logger.warning(
+                        "format_hitl_reply_truncated_max_tokens",
+                        response_len=len(out),
+                        operator_len=len(op),
+                        max_output_tokens=hitl_fmt_max,
+                        note="출력 상한·문장 미완으로 보임 → 담당자 원문으로 TTS",
+                    )
+                    return op
                 logger.warning(
-                    "format_hitl_reply_truncated_max_tokens",
+                    "format_hitl_reply_truncated_max_tokens_tail",
                     response_len=len(out),
-                    note="max_output_tokens 상향 검토",
+                    operator_len=len(op),
+                    max_output_tokens=hitl_fmt_max,
+                    note="MAX_TOKENS이나 문장 종결 있음 — 생성문 사용(말미만 잘렸을 수 있음)",
                 )
             return out
         except asyncio.TimeoutError:
@@ -527,7 +651,17 @@ AI:"""
 
 **입력 형식:** 아래는 "발신자:", "착신자:"로 구분된 **전체 대화** 전사입니다. 발신자 질문/맥락을 참고하여 착신자 답변의 의미를 파악하세요.
 
-**저장 대상:** 저장할 지식은 반드시 **착신자(callee)가 말한 내용**에서만 추출하세요. extracted_info의 text에는 착신자 발화 원문만 넣으세요. 발신자 발화는 저장하지 마세요.
+**저장 대상:** 저장할 지식은 반드시 **착신자(callee)가 말한 내용**에서만 추출하세요. 발신자 발화는 저장하지 마세요.
+
+**중요: 텍스트 정제 규칙**
+- extracted_info의 text는 **STT 원문을 그대로 복사하지 마세요**
+- **띄어쓰기·맞춤법을 교정**하고, **자연스러운 문장으로 정리**하세요
+- **의미는 보존**하되, **읽기 쉽고 재사용하기 좋은 형태**로 작성하세요
+- 예시:
+  - ❌ STT 원문: "네 내일 강 원 지 역 날씨 는 오후 한 때 비가 오는 곳이 있겠습니다"
+  - ✅ 정제된 텍스트: "내일 강원 지역 날씨는 오후 한때 비가 오는 곳이 있겠습니다."
+  - ❌ STT 원문: "기 상 감 정 서 는 기 상 청 홈 페이지 에서 신청 가능 합니다"
+  - ✅ 정제된 텍스트: "기상감정서는 기상청 홈페이지에서 온라인으로 신청 가능합니다."
 
 **유용하다고 판단할 경우 (is_useful = true):**
 - 실행 가능한 질문·답변 (구체적 사실, 절차, 조건이 포함된 경우)
@@ -540,7 +674,6 @@ AI:"""
 - 인사, 맞장구, "날씨가 좋네요" 등 지식으로 쓸 내용이 없는 경우
 - "확인 후 연락드리겠습니다", "잘 모르겠습니다" 등 미해결·유보만 있는 경우
 - 사실·절차 없이 불만·칭찬 등 감정 표현만 있는 경우
-- 원문에 없는 질문/답변을 만들어 내지 말 것 (원문에 명시된 내용만 추출)
 
 **통화 내용 (전체 대화, 저장은 착신자 발화만):**
 {transcript_for_prompt}
@@ -552,7 +685,7 @@ AI:"""
   "reason": "판단 이유 (50자 이내)",
   "extracted_info": [
     {{
-      "text": "원문에 나온 문장 그대로 또는 한 단위로 정리한 텍스트",
+      "text": "띄어쓰기·맞춤법을 교정하고 자연스럽게 정리한 텍스트 (착신자 발화 기반)",
       "category": "FAQ|이슈해결|약속|정보|지시|선호도|기타",
       "keywords": ["키워드1", "키워드2"],
       "contains_pii": false
@@ -571,7 +704,10 @@ AI:"""
 
 **필수 지침:**
 - reason은 **반드시 50자 이내**로 짧게 작성하세요. (토큰 한도 내에서 JSON이 잘리지 않도록)
-- extracted_info는 **최대 5개**만 추출하고, 각 text는 **200자 이내**로 하세요. 착신자가 말한 문장만 넣고, 발신자 발화는 포함하지 마세요. 원문에 나온 내용만 사용하고, 임의로 요약하거나 지어내지 마세요. 한 항목은 하나의 재사용 가능한 지식 단위(예: 하나의 질문-답변 쌍, 하나의 약속)로 추출하세요.
+- extracted_info는 **최대 5개**만 추출하고, 각 text는 **200자 이내**로 하세요.
+- **착신자가 말한 내용의 의미**를 담되, **STT 원문을 그대로 복사하지 말고 자연스럽게 정제**하세요.
+- 발신자 발화는 포함하지 마세요.
+- 한 항목은 하나의 재사용 가능한 지식 단위(예: 하나의 질문-답변 쌍, 하나의 약속)로 추출하세요.
 - 개인을 특정할 수 있는 정보(이름·전화번호·주소 등)가 포함되면 해당 항목에 "contains_pii": true, 없으면 false로 표시하세요.
 - 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록(```)이나 설명 문장 없이 **JSON 본문만** 출력하세요.
 

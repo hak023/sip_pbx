@@ -68,9 +68,37 @@ async def run_ai_voice_pipeline(
     # 통화 시작 이벤트
     try:
         from src.websocket import manager as ws_manager
-        await ws_manager.emit_call_started(call_id, {"callee": callee})
+        await ws_manager.emit_call_started(call_id, {
+            "callee": callee,
+            "is_ai_handled": True,
+            "status": "AI 응대 중",
+            "sip_phase": "ai_active"
+        })
     except Exception as e:
         logger.warning("emit_call_started_failed", call_id=call_id, error=str(e))
+    
+    # API 레지스트리에도 등록 (REST API /api/calls/active에서 참조)
+    try:
+        from src.api.routers.calls import register_active_call
+        register_active_call(
+            call_id=call_id,
+            callee=callee,
+            caller="",
+            is_ai_handled=True
+        )
+    except Exception as reg_err:
+        logger.debug("register_active_call_failed", call_id=call_id, error=str(reg_err))
+
+    # CallManager.ai_enabled_calls에도 등록 (REST 폴링에서 is_ai_handled 판정용)
+    try:
+        from src.api.routers.calls import _call_manager as _cm
+        if _cm is not None and hasattr(_cm, "ai_enabled_calls"):
+            _cm.ai_enabled_calls.add(call_id)
+            logger.info("ai_enabled_calls_registered",
+                        call_id=call_id,
+                        note="run_ai_call에서 ai_enabled_calls에 추가 (호전환 버튼 표시용)")
+    except Exception as ae_err:
+        logger.debug("ai_enabled_calls_register_failed", call_id=call_id, error=str(ae_err))
 
     # HITL 알림 시 프론트로 전달 (미지정 시 기본 연동)
     if hitl_on_alert is None:

@@ -82,6 +82,7 @@ export default function LoginPage() {
       localStorage.setItem('access_token', data.access_token);
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('tenant', JSON.stringify(data.tenant));
+      localStorage.setItem('tenant_id', data.tenant?.owner ?? owner);
       localStorage.setItem('user', JSON.stringify(data.user));
 
       router.push('/dashboard');

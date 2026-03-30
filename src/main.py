@@ -90,6 +90,34 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+
+def _apply_env_file(path: Path) -> None:
+    """프로젝트 루트 .env → os.environ (이미 설정된 키는 유지). python-dotenv 없이 최소 파싱."""
+    try:
+        if not path.is_file():
+            return
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("\"", "'"):
+            val = val[1:-1]
+        if key not in os.environ:
+            os.environ[key] = val
+
+
+_apply_env_file(project_root / ".env")
+
 # UTF-8 인코딩 설정 + 바이너리 데이터 필터링
 class FilteredTextIO(io.TextIOWrapper):
     """바이너리 데이터와 NULL 바이트를 필터링하는 TextIOWrapper"""
@@ -292,6 +320,9 @@ async def run_server(config: Config) -> int:
     """
     import time
 
+    # AI Voicebot 활성 시 초기화(오케스트레이터·STT/TTS 워밍업 등)가 끝나야 SIP·부가 서비스를 띄움
+    AI_STARTUP_TIMEOUT_SEC = 120.0
+
     # ✅ 비동기 로그 워커 시작 (이벤트 루프 내에서만 create_task 가능)
     # initialize_logging()은 동기 컨텍스트에서 호출되므로 여기서 시작합니다.
     start_async_logging(queue_size=1000)
@@ -303,6 +334,7 @@ async def run_server(config: Config) -> int:
     pipecat_builder = None  # Pipecat Pipeline Builder (Phase 1)
     ai_ready = False  # AI 준비 상태
     ai_voicebot_config = getattr(config, 'ai_voicebot', None)  # ⭐ 외부 스코프로 이동
+    ai_voicebot_enabled = False  # SIP 바인딩 전에 AI 필수 초기화 여부 (배너·종료 코드용)
     
     # 백그라운드 AI Voicebot 초기화
     async def initialize_ai_in_background():
@@ -311,9 +343,11 @@ async def run_server(config: Config) -> int:
         ai_start = time.time()
         try:
             print_immediate("🔄 [AI Background] AI Voicebot 백그라운드 초기화 시작...")
-            logger.info("ai_voicebot_background_init_starting",
-                       message="AI Voicebot 백그라운드 초기화 시작",
-                       note="서버는 즉시 시작되며, AI는 백그라운드에서 로딩됩니다")
+            logger.info(
+                "ai_voicebot_background_init_starting",
+                message="AI Voicebot 초기화 시작",
+                note="enabled=True일 때 이 단계가 끝나야 SIP·API·WS가 시작됩니다.",
+            )
 
             # DB 로깅 (config.ai_voicebot.logging.db_url 있으면 asyncpg로 연결 후 RAG/LLM 로깅 활성화)
             try:
@@ -343,50 +377,73 @@ async def run_server(config: Config) -> int:
             if ai_orchestrator:
                 ai_ready = True
                 
-                # ✅ CallManager에 AI Orchestrator 동적 주입
+                # ✅ CallManager에 AI Orchestrator 동적 주입 (없으면 AI 통화 불가 → 기동 중단)
                 if sip_endpoint and sip_endpoint.call_manager:
                     sip_endpoint.call_manager.set_ai_orchestrator(ai_orchestrator)
                     logger.info("ai_orchestrator_connected_to_call_manager")
                     print_immediate(f"✅ [AI Background] AI Orchestrator → CallManager 주입 완료 ({ai_elapsed:.1f}s)")
                 else:
-                    logger.warning("ai_orchestrator_ready_but_no_call_manager",
-                                 has_sip_endpoint=sip_endpoint is not None,
-                                 has_call_manager=hasattr(sip_endpoint, 'call_manager') if sip_endpoint else False)
-                    print_immediate(f"⚠️  [AI Background] AI Orchestrator 생성됨, 하지만 CallManager를 찾을 수 없음")
-                
-                # ✅ Pipecat Pipeline Builder 초기화 (Phase 1)
+                    logger.error(
+                        "startup_fatal_ai_orchestrator_no_call_manager",
+                        has_sip_endpoint=sip_endpoint is not None,
+                        has_call_manager=hasattr(sip_endpoint, "call_manager") if sip_endpoint else False,
+                        message="AI는 켜져 있으나 CallManager에 주입할 수 없음. 준비 실패로 종료합니다.",
+                    )
+                    print_immediate(
+                        "❌ [AI Background] CallManager 없음 — AI Voicebot을 켠 상태에서는 기동할 수 없습니다.",
+                        file=sys.stderr,
+                    )
+                    raise RuntimeError("AI orchestrator ready but CallManager missing for injection")
+
+                # 🔥 Google STT/TTS 사전 초기화 — AI 활성 시 필수 (실패 시 반쯤 떠 있는 상태 방지)
+                from src.ai_voicebot.factory import get_or_create_google_stt_service, get_or_create_google_tts_service
+
+                stt_warmup_start = time.time()
+                print_immediate("🔥 [AI Background] Google STT/TTS Service 사전 초기화 중...")
+                stt_cfg = (ai_config_dict or {}).get("google_cloud", {}).get("stt", {}) or {}
+                if isinstance(stt_cfg, dict) and "language_code" not in stt_cfg:
+                    stt_cfg = {**stt_cfg, "language_code": "ko-KR"}
+                stt_task = asyncio.create_task(get_or_create_google_stt_service(stt_cfg))
+                tts_task = asyncio.create_task(get_or_create_google_tts_service())
                 try:
-                    # 🔥 Google STT/TTS Service 사전 초기화 (통화 시 19초 지연 제거)
-                    from src.ai_voicebot.factory import get_or_create_google_stt_service, get_or_create_google_tts_service
-                    
-                    stt_warmup_start = time.time()
-                    print_immediate("🔥 [AI Background] Google STT/TTS Service 사전 초기화 중... (19초 예상)")
-                    
-                    # STT/TTS를 병렬로 초기화 (설정에서 language_code 등 반영 — 한글 인식 정확도)
-                    stt_cfg = (ai_config_dict or {}).get("google_cloud", {}).get("stt", {}) or {}
-                    if isinstance(stt_cfg, dict) and "language_code" not in stt_cfg:
-                        stt_cfg = {**stt_cfg, "language_code": "ko-KR"}
-                    stt_task = asyncio.create_task(get_or_create_google_stt_service(stt_cfg))
-                    tts_task = asyncio.create_task(get_or_create_google_tts_service())
                     await asyncio.gather(stt_task, tts_task)
-                    
-                    warmup_elapsed = time.time() - stt_warmup_start
-                    logger.info("google_services_warmup_complete",
-                               elapsed=f"{warmup_elapsed:.2f}s",
-                               note="통화 시 즉시 사용 가능 (지연 없음)")
-                    print_immediate(f"✅ [AI Background] Google STT/TTS Service 준비 완료 ({warmup_elapsed:.1f}s)")
-                    
+                except Exception as stt_err:
+                    logger.error(
+                        "startup_fatal_google_stt_tts_warmup",
+                        error=str(stt_err),
+                        error_type=type(stt_err).__name__,
+                        message="Google STT/TTS 준비 실패 — 통화 AI가 동작하지 않습니다. 기동 중단.",
+                        exc_info=True,
+                    )
+                    print_immediate(
+                        f"❌ [AI Background] Google STT/TTS 초기화 실패: {stt_err}",
+                        file=sys.stderr,
+                    )
+                    raise
+
+                warmup_elapsed = time.time() - stt_warmup_start
+                logger.info(
+                    "google_services_warmup_complete",
+                    elapsed=f"{warmup_elapsed:.2f}s",
+                    note="통화 시 즉시 사용 가능 (지연 없음)",
+                )
+                print_immediate(f"✅ [AI Background] Google STT/TTS Service 준비 완료 ({warmup_elapsed:.1f}s)")
+
+                # ✅ Pipecat Pipeline Builder — 선택 (실패해도 레거시 오케스트레이터 유지)
+                try:
                     from src.ai_voicebot.factory import create_pipecat_pipeline_builder
+
                     pipecat_builder = await create_pipecat_pipeline_builder(ai_config_dict)
                     if pipecat_builder and sip_endpoint and sip_endpoint.call_manager:
                         sip_endpoint.call_manager.set_pipecat_builder(pipecat_builder)
-                        logger.info("pipecat_builder_connected_to_call_manager",
-                                   engine="pipecat")
+                        logger.info("pipecat_builder_connected_to_call_manager", engine="pipecat")
                         print_immediate("✅ [AI Background] Pipecat Pipeline Builder 연결 완료")
                 except Exception as pipecat_err:
-                    logger.info("pipecat_builder_not_available",
-                               reason=str(pipecat_err),
-                               message="Falling back to legacy orchestrator")
+                    logger.info(
+                        "pipecat_builder_not_available",
+                        reason=str(pipecat_err),
+                        message="Falling back to legacy orchestrator",
+                    )
                     print_immediate(f"ℹ️  [AI Background] Pipecat 미사용: {pipecat_err}")
                 
                 logger.info("ai_voicebot_ready",
@@ -403,19 +460,28 @@ async def run_server(config: Config) -> int:
                                note="이 로그가 있으면 부재중 시 AI 터크오버 가능. 없으면 초기화 타임아웃/실패.")
                 print_immediate(f"🎉 [AI Background] AI Voicebot 준비 완료! ({ai_elapsed:.1f}s)")
             else:
-                logger.warning("ai_voicebot_init_failed",
-                             message="AI Voicebot initialization failed or disabled",
-                             elapsed=f"{ai_elapsed:.2f}s")
-                print_immediate(f"❌ [AI Background] AI Voicebot 초기화 실패 (factory returned None, {ai_elapsed:.1f}s)")
+                logger.error(
+                    "startup_fatal_ai_orchestrator_none",
+                    elapsed=f"{ai_elapsed:.2f}s",
+                    message="create_ai_orchestrator가 None 반환 (enabled=True인데 팩토리 실패). 기동 중단.",
+                )
+                print_immediate(
+                    f"❌ [AI Background] AI Voicebot 팩토리가 None을 반환했습니다 ({ai_elapsed:.1f}s).",
+                    file=sys.stderr,
+                )
+                raise RuntimeError("create_ai_orchestrator returned None while AI Voicebot is enabled")
         except Exception as e:
             ai_elapsed = time.time() - ai_start
-            logger.error("ai_voicebot_background_init_error",
-                       error=str(e),
-                       error_type=type(e).__name__,
-                       elapsed=f"{ai_elapsed:.2f}s",
-                       message="AI Voicebot 초기화 실패, 서버는 AI Voicebot 없이 계속 작동합니다",
-                       exc_info=True)
-            print_immediate(f"❌ [AI Background] AI Voicebot 초기화 예외: {type(e).__name__}: {e}")
+            logger.error(
+                "ai_voicebot_background_init_error",
+                error=str(e),
+                error_type=type(e).__name__,
+                elapsed=f"{ai_elapsed:.2f}s",
+                message="AI Voicebot 초기화 실패 — 프로세스를 종료합니다",
+                exc_info=True,
+            )
+            print_immediate(f"❌ [AI Background] AI Voicebot 초기화 예외: {type(e).__name__}: {e}", file=sys.stderr)
+            raise
     
     try:
         # SIP Endpoint 생성 (AI Orchestrator 전달)
@@ -435,25 +501,62 @@ async def run_server(config: Config) -> int:
                    elapsed=f"{sip_elapsed:.3f}s",
                    message="SIP Endpoint 생성 완료")
         
-        # ⭐ AI Voicebot 백그라운드 초기화 (대기)
-        if ai_voicebot_config:
-            logger.info("🚀 [MAIN] Starting AI Voicebot initialization...")
-            print_immediate("🚀 [MAIN] AI Voicebot 초기화 중... (최대 60초 대기)")
+        # ⭐ AI Voicebot 초기화 (enabled=True일 때만 필수 성공)
+        ai_voicebot_enabled = bool(
+            ai_voicebot_config and getattr(ai_voicebot_config, "enabled", False)
+        )
+        if ai_voicebot_enabled:
+            logger.info("🚀 [MAIN] Starting AI Voicebot initialization (required for startup)...")
+            print_immediate(
+                f"🚀 [MAIN] AI Voicebot 초기화 중... (최대 {int(AI_STARTUP_TIMEOUT_SEC)}초, 실패 시 프로세스 종료)"
+            )
             ai_bg_task = asyncio.create_task(initialize_ai_in_background())
-            
+
             try:
-                # ⭐ AI 준비 대기 (최대 60초)
-                await asyncio.wait_for(ai_bg_task, timeout=60.0)
-                logger.info("✅ [MAIN] AI Voicebot 준비 완료, SIP 서버 시작")
-                print_immediate("✅ [MAIN] AI Voicebot 준비 완료!")
+                await asyncio.wait_for(ai_bg_task, timeout=AI_STARTUP_TIMEOUT_SEC)
             except asyncio.TimeoutError:
-                logger.warning("ai_init_timeout_60s",
-                             message="AI Voicebot 초기화 60초 타임아웃, SIP 서버 강제 시작",
-                             note="부재중 터크오버 시 ai_orchestrator_not_available 원인. AI 초기화가 60초 초과 시 발생.")
-                print_immediate("⚠️ [MAIN] AI 초기화 타임아웃, 서버는 AI 없이 시작됩니다")
+                logger.error(
+                    "startup_fatal_ai_init_timeout",
+                    timeout_sec=AI_STARTUP_TIMEOUT_SEC,
+                    message="AI Voicebot 초기화 시간 초과. SIP를 띄우지 않고 종료합니다.",
+                    note="타임아웃을 늘리려면 src/main.py 의 AI_STARTUP_TIMEOUT_SEC 를 조정하세요.",
+                )
+                print_immediate(
+                    f"❌ [MAIN] AI 초기화 {int(AI_STARTUP_TIMEOUT_SEC)}초 타임아웃 — 기동을 중단합니다.",
+                    file=sys.stderr,
+                )
+                ai_bg_task.cancel()
+                try:
+                    await ai_bg_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                return 1
             except Exception as e:
-                logger.error("❌ [MAIN] AI Voicebot 초기화 실패", error=str(e), exc_info=True)
-                print_immediate(f"❌ [MAIN] AI 초기화 실패: {e}")
+                logger.error(
+                    "startup_fatal_ai_init_failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    message="AI Voicebot 초기화 실패. SIP를 띄우지 않고 종료합니다.",
+                    exc_info=True,
+                )
+                print_immediate(f"❌ [MAIN] AI 초기화 실패로 기동 중단: {e}", file=sys.stderr)
+                return 1
+
+            if not ai_orchestrator:
+                logger.error(
+                    "startup_fatal_ai_orchestrator_missing_after_init",
+                    message="초기화 태스크는 끝났으나 ai_orchestrator 가 없습니다.",
+                )
+                print_immediate("❌ [MAIN] AI 오케스트레이터가 준비되지 않았습니다. 기동 중단.", file=sys.stderr)
+                return 1
+
+            logger.info("✅ [MAIN] AI Voicebot 준비 완료, SIP 서버 시작")
+            print_immediate("✅ [MAIN] AI Voicebot 준비 완료!")
+        elif ai_voicebot_config:
+            logger.info(
+                "ai_voicebot_config_present_but_disabled",
+                message="config.ai_voicebot 있음, enabled=False — AI 초기화 생략",
+            )
         else:
             logger.info("ai_voicebot_disabled", message="AI Voicebot 비활성화됨 (config.ai_voicebot is None)")
         
@@ -485,7 +588,19 @@ async def run_server(config: Config) -> int:
             ws_server.set_call_manager(sip_endpoint.call_manager)
             logger.info("call_manager_injected_for_api_and_ws")
         except Exception as e:
-            logger.warning("call_manager_inject_failed", error=str(e), message="대시보드 활성 통화 목록이 동작하지 않을 수 있음")
+            logger.error(
+                "startup_fatal_call_manager_inject_failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                message="CallManager API/WS 주입 실패 — 대시보드·활성 통화 연동 불가. 기동 중단.",
+                exc_info=True,
+            )
+            print_immediate(f"❌ CallManager 주입 실패: {e} — SIP를 중지하고 종료합니다.", file=sys.stderr)
+            try:
+                sip_endpoint.stop()
+            except Exception:
+                pass
+            return 1
 
         # HITL: timeout 시 AI가 다시 연결받아 안내 메시지 전달 (통화 종료하지 않음)
         async def handle_hitl_timeout(call_id: str):
@@ -544,8 +659,26 @@ async def run_server(config: Config) -> int:
                 set_knowledge_embedder(_embedder)
                 logger.info("knowledge_embedder_configured_for_api")
             except Exception as emb_err:
-                logger.warning("knowledge_embedder_config_failed", error=str(emb_err))
-            
+                if ai_voicebot_enabled:
+                    logger.error(
+                        "startup_fatal_knowledge_embedder_failed",
+                        error=str(emb_err),
+                        error_type=type(emb_err).__name__,
+                        message="AI 활성 시 Knowledge API용 embedder 필수. 기동 중단.",
+                        exc_info=True,
+                    )
+                    print_immediate(f"❌ Knowledge embedder 설정 실패: {emb_err}", file=sys.stderr)
+                    try:
+                        sip_endpoint.stop()
+                    except Exception:
+                        pass
+                    return 1
+                logger.warning(
+                    "knowledge_embedder_config_failed",
+                    error=str(emb_err),
+                    message="AI 비활성 — embedder 없이 계속. 지식 API는 동작하지 않을 수 있음.",
+                )
+
             import threading
             def _run_api_server():
                 import uvicorn
@@ -556,8 +689,20 @@ async def run_server(config: Config) -> int:
             logger.info("api_server_started_in_process", port=_api_port)
             print_immediate(f"  • API Gateway: http://0.0.0.0:{_api_port} (대시보드 활성 통화 연동)")
         except Exception as e:
-            logger.warning("api_server_start_failed", error=str(e), port=_api_port)
-            print_immediate(f"  • API Gateway: 시작 실패 ({e}) — 별도로 python -m src.api.main 실행 시 포트 충돌 가능")
+            logger.error(
+                "startup_fatal_api_server_thread_failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                port=_api_port,
+                message="인프로세스 API 스레드 기동 실패. 기동 중단.",
+                exc_info=True,
+            )
+            print_immediate(f"❌ API Gateway 스레드 시작 실패 ({e}) — SIP를 중지하고 종료합니다.", file=sys.stderr)
+            try:
+                sip_endpoint.stop()
+            except Exception:
+                pass
+            return 1
 
         # WebSocket 서버 기동 (실시간 대화 STT/TTS 표시용) — 별도 스레드에서 실행해 메인 루프와 태스크 생명주기 분리 (destroyed but pending 방지)
         _ws_port = 8001
@@ -577,8 +722,23 @@ async def run_server(config: Config) -> int:
             logger.info("websocket_server_started_in_process", port=_ws_port)
             print_immediate(f"  • WebSocket: http://0.0.0.0:{_ws_port} (실시간 대화 연동)")
         except Exception as e:
-            logger.warning("websocket_server_start_failed", error=str(e), port=_ws_port)
-            print_immediate(f"  • WebSocket: 시작 실패 ({e}) — 실시간 대화가 표시되지 않을 수 있음")
+            logger.error(
+                "startup_fatal_websocket_thread_failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                port=_ws_port,
+                message="WebSocket 서버 스레드 기동 실패. 기동 중단.",
+                exc_info=True,
+            )
+            print_immediate(
+                f"❌ WebSocket 서버 시작 실패 ({e}) — SIP/API를 중지하고 종료합니다.",
+                file=sys.stderr,
+            )
+            try:
+                sip_endpoint.stop()
+            except Exception:
+                pass
+            return 1
 
         total_elapsed = time.time() - start_time
         
@@ -587,10 +747,12 @@ async def run_server(config: Config) -> int:
         print_immediate(f"⏱️  [{time.strftime('%H:%M:%S')}] ⭐ 서버 시작 완료!")
         print_immediate(f"{'='*70}")
         print_immediate(f"  • 전체 시작 시간: {total_elapsed:.3f}초")
-        if ai_orchestrator:
-            print_immediate(f"  • AI Voicebot: ✅ 활성화")
+        if ai_voicebot_enabled:
+            print_immediate("  • AI Voicebot: ✅ 활성화 (기동 시점에 준비 완료)")
+        elif ai_voicebot_config:
+            print_immediate("  • AI Voicebot: 설정만 있음 (enabled=False)")
         else:
-            print_immediate(f"  • AI Voicebot: ⏳ 백그라운드 로딩 중... (수십 초 소요)")
+            print_immediate("  • AI Voicebot: 비활성화")
         print_immediate(f"  • SIP 서버: {config.sip.listen_ip}:{config.sip.listen_port}")
         print_immediate(f"  • 미디어 모드: {config.media.mode.upper()}")
         print_immediate(f"  • Health Check: http://localhost:{config.monitoring.health_check_port}/health")
@@ -605,7 +767,8 @@ async def run_server(config: Config) -> int:
                    message="SIP PBX is ready to accept calls",
                    sip_port=config.sip.listen_port,
                    health_check_port=config.monitoring.health_check_port,
-                   ai_voicebot_enabled=ai_orchestrator is not None,
+                   ai_voicebot_enabled=ai_voicebot_enabled,
+                   ai_orchestrator_ready=ai_orchestrator is not None,
                    startup_time=f"{total_elapsed:.2f}s")
         
         print_immediate(f"Press Ctrl+C to stop the server.\n")

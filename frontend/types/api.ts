@@ -19,6 +19,67 @@ export interface ActiveCallRestRaw {
   is_ai_handled?: boolean;
 }
 
+/** GET /api/call-history — AI가 끝까지 스스로 못 푼 항목(HITL로 해결된 건 제외, 서버 `call_insights.json` 기준) */
+export interface AiUnhandledItem {
+  id: string;
+  user_question: string;
+  ai_response_preview?: string;
+  kind?: string;
+  reason?: string;
+}
+
+/** CDR / call_debug_trace 한 행 (`log_call_data` → `call_data_record_*.log` JSONL, 대시보드 WS와 동일) */
+export interface CallDebugTraceRow {
+  ts?: string;
+  call_id?: string;
+  category?: string;
+  event?: string;
+  [key: string]: unknown;
+}
+
+/** GET /api/call-history items[] */
+export interface CallHistoryRecordItem {
+  call_id: string;
+  directory?: string;
+  caller_id?: string;
+  callee_id?: string;
+  start_time?: string;
+  end_time?: string;
+  duration?: number;
+  type?: string;
+  has_transcript?: boolean;
+  transcript_source?: string | null;
+  files?: Record<string, string | null | undefined>;
+  /** 녹음 WAV 존재 여부 (API가 채움) */
+  has_recording_mixed?: boolean;
+  has_recording_caller?: boolean;
+  has_recording_callee?: boolean;
+  /** 착신자 관점 요약 (`call_insights.json`) */
+  callee_summary?: string | null;
+  /** 통화 종료 후 LLM·폴백으로 생성한 한 줄형 통화 요약 */
+  call_summary?: string | null;
+  is_ai_handled_call?: boolean;
+  ai_unhandled_items?: AiUnhandledItem[];
+  ai_unhandled_count?: number;
+  ai_unhandled_resolved_by_hitl_count?: number;
+  ai_unhandled_total_recorded?: number;
+}
+
+export interface CallHistoryListResponse {
+  items: CallHistoryRecordItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  recordings_dir?: string;
+}
+
+/** GET /api/call-history/{call_id}/debug-trace */
+export interface CallHistoryDebugTraceResponse {
+  call_id: string;
+  items: CallDebugTraceRow[];
+  truncated?: boolean;
+}
+
 /** GET /api/call-history/follow-ups item */
 export interface FollowUpItem {
   id: string;

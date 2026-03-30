@@ -107,6 +107,25 @@ class MediaConfig(BaseModel):
         default=["opus", "pcmu", "pcma"],
         description="코덱 우선순위"
     )
+    rtp_tx_debug: bool = Field(
+        default=False,
+        description="TTS→caller RTP sendto 직전 송신 TSV 로그 (기본 ./logs/rtp_tx_<call_id>.tsv)",
+    )
+    rtp_tx_debug_path: Optional[str] = Field(
+        default=None,
+        description="TSV 경로 템플릿. {call_id} 치환. 비우면 프로젝트 logs/rtp_tx_<call_id>.tsv",
+    )
+    # AI(Pipecat) 모드: TTS 무송신 구간에 주기적 무음 RTP — 단말 10초 무수신 끊김 완화
+    ai_rtp_silence_keepalive: bool = Field(
+        default=True,
+        description="True면 마지막 RTP 이후 interval마다 무음 20ms 1패킷(환경변수 SIPPBX_AI_RTP_SILENCE_KEEPALIVE가 있으면 그쪽 우선)",
+    )
+    ai_rtp_keepalive_interval_sec: float = Field(
+        default=0.5,
+        ge=0.5,
+        le=60.0,
+        description="묵음 킵얼라이브 간격(초). 0.5초 권장 (재생 gap 최소화). env SIPPBX_AI_RTP_KEEPALIVE_INTERVAL_SEC 있으면 우선",
+    )
 
 
 class STTConfig(BaseModel):
@@ -257,6 +276,10 @@ class KnowledgeExtractionConfig(BaseModel):
     # v2 전용
     steps: Optional[dict] = Field(default=None, description="추출 스텝 설정 (v2)")
     quality: Optional[dict] = Field(default=None, description="품질 검증 설정 (v2)")
+    transcript_normalization: Optional[dict] = Field(
+        default=None,
+        description="전사 정규화 설정 (초단문 턴 통화·환각 검증 완화)",
+    )
     auto_approve: Optional[dict] = Field(default=None, description="자동 승인 설정 (v2)")
     max_llm_calls_per_extraction: int = Field(default=6, description="추출당 최대 LLM 호출 수")
     skip_short_calls_seconds: int = Field(default=30, description="스킵할 짧은 통화 기준 (초)")
@@ -360,6 +383,28 @@ class AIVoicebotConfig(BaseModel):
     barge_in: Optional[dict] = Field(default=None, description="Barge-in 설정")
     audio_buffer: Optional[dict] = Field(default=None, description="Audio Buffer 설정")
     logging: Optional[dict] = Field(default=None, description="로깅 설정")
+
+
+class OrganizationPersona(BaseModel):
+    """조직 페르소나 (Chitchat vs Question 분류용)
+    
+    AI Bot이 응대하는 조직/서비스의 정체성과 업무 범위를 정의.
+    사용자 질문이 persona와 관련되면 question (RAG/LLM), 무관하면 chitchat (템플릿).
+    """
+    owner: str = Field(description="Owner ID (착신번호, 예: 1004)")
+    name: str = Field(description="조직명 (예: 기상청, 서울시청)")
+    description: str = Field(description="조직 설명 및 업무 범위 (예: 날씨정보와 기상특보를 안내하는 국가 공공기관)")
+    scope_keywords: List[str] = Field(
+        default_factory=list,
+        description="업무 범위 키워드 (예: [날씨, 예보, 특보, 기상, 태풍, 황사]). 선택사항 (description으로 자동 판단)"
+    )
+    chitchat_response_template: Optional[str] = Field(
+        default=None,
+        description="Chitchat 시 응답 템플릿 (None이면 기본 템플릿 사용)"
+    )
+    enabled: bool = Field(default=True, description="Persona 활성화 여부")
+    created_at: Optional[str] = Field(default=None, description="생성 시각 (ISO 8601)")
+    updated_at: Optional[str] = Field(default=None, description="수정 시각 (ISO 8601)")
 
 
 class Config(BaseModel):

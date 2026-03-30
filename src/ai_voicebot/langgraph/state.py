@@ -13,11 +13,17 @@ class ConversationState(TypedDict, total=False):
     # ── 대화 컨텍스트 ──
     messages: List[dict]          # 전체 대화 기록 [{role, content, timestamp}]
     user_query: str               # 현재 사용자 발화
+    user_query_raw: str           # STT 원문(시간 정규화 전). RAG 이중 검색·로그용
     turn_count: int               # 대화 턴 수
 
     # ── 의도 및 슬롯 ──
     intent: str                   # 분류된 의도 (greeting, question, complaint, transfer, farewell)
     slots: dict                   # 추출된 슬롯 (예: {product: "A", date: "내일"})
+
+    # ── 발화 레인 (검색 전 라우팅 · HITL 완화) ──
+    utterance_lane: str           # knowledge | social_direct
+    rag_mode: str                 # full | skip (skip 시 RAG·캐시 경로 생략)
+    domain_question_signal: bool  # True면 업무형 question → 엄격한 step_back/HITL
 
     # ── RAG 결과 ──
     rewritten_query: str          # Query Rewriting 결과

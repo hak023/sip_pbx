@@ -170,6 +170,12 @@ class CallManager:
         """SIP Endpoint 참조 설정 (Pipecat에서 RTP Worker 접근용)"""
         self._sip_endpoint = sip_endpoint
 
+    async def shutdown_sip_recording_ingest(self) -> None:
+        """RTP 녹음 인입 워커·큐 정리. 이벤트 루프/프로세스 종료 전에 호출."""
+        if self.sip_recorder is None:
+            return
+        await self.sip_recorder.shutdown_rtp_ingest_worker()
+
     async def cancel_pipeline(self, call_id: str) -> bool:
         """BYE 수신 시 Pipecat Pipeline task 즉시 취소.
         
@@ -585,6 +591,18 @@ class CallManager:
                 # AI 활성화 통화로 등록
                 self.ai_enabled_calls.add(call_id)
                 
+                # API 레지스트리에도 등록 (REST API /api/calls/active에서 참조)
+                try:
+                    from src.api.routers.calls import register_active_call
+                    register_active_call(
+                        call_id=call_id,
+                        callee=callee_username,
+                        caller=caller_username if caller_username else "",
+                        is_ai_handled=True
+                    )
+                except Exception as reg_err:
+                    logger.debug("register_active_call_failed", call_id=call_id, error=str(reg_err))
+                
                 # CallSession을 AI 응대로 업데이트 (대시보드 활성 통화 목록에 표시되도록)
                 call_session = self.get_session(call_id)
                 if call_session:
@@ -608,6 +626,8 @@ class CallManager:
                             "callee": call_session.get_callee_uri() if hasattr(call_session, 'get_callee_uri') else callee_username,
                             "state": call_session.state.value if hasattr(call_session.state, 'value') else str(call_session.state),
                             "is_ai_handled": True,
+                            "status": "AI 응대 중",
+                            "sip_phase": "ai_active",
                         }
                         await ws_manager.emit_call_started(call_id, call_data)
                         logger.info("ai_call_started_event_emitted", call_id=call_id)
@@ -698,24 +718,30 @@ class CallManager:
                                 logger.warning("vad_wrap_failed", call_id=call_id, error=str(vad_err))
                                 _vad_processor = None
                         
-                        # STT/TTS: Pipecat Singleton 서비스 사용 (통화마다 재생성 방지 → 19초 지연 제거)
+                        # STT·TTS: 파이프라인마다 전용 인스턴스 (동시/연속 통화 시 Singleton 공유는 스트림·내부 태스크 꼬임)
                         _stt_pipecat = None
                         _tts_pipecat = None
                         try:
-                            # Singleton에서 가져오기 (이미 생성되어 있음 → 즉시 반환)
-                            from src.ai_voicebot.factory import get_or_create_google_stt_service, get_or_create_google_tts_service
-                            
-                            _stt_pipecat = await get_or_create_google_stt_service()
+                            from src.ai_voicebot.factory import (
+                                create_google_stt_service_per_pipeline,
+                                create_google_tts_service_per_pipeline,
+                            )
+
+                            _stt_pipecat = await create_google_stt_service_per_pipeline()
                             if _stt_pipecat:
-                                logger.info("google_stt_service_from_singleton",
-                                           call_id=call_id,
-                                           note="Singleton에서 STT 서비스 가져옴 (지연 없음)")
+                                logger.info(
+                                    "google_stt_service_per_pipeline_for_call",
+                                    call_id=call_id,
+                                    note="통화별 STT — 동시 Pipecat 호에서 Singleton 공유 금지",
+                                )
                             
-                            _tts_pipecat = await get_or_create_google_tts_service()
+                            _tts_pipecat = await create_google_tts_service_per_pipeline(call_id=call_id)
                             if _tts_pipecat:
-                                logger.info("google_tts_service_from_singleton",
-                                           call_id=call_id,
-                                           note="Singleton에서 TTS 서비스 가져옴 (지연 없음)")
+                                logger.info(
+                                    "google_tts_service_per_pipeline_for_call",
+                                    call_id=call_id,
+                                    note="통화별 TTS — 이전 파이프라인 취소 후 Singleton 잔류로 PCM 미생성 방지",
+                                )
                             
                         except Exception as service_err:
                             logger.error("google_service_singleton_failed", 
@@ -1009,6 +1035,8 @@ class CallManager:
                         'caller': call_session.get_caller_uri(),
                         'callee': call_session.get_callee_uri(),
                         'is_ai_handled': call_session.call_id in self.ai_enabled_calls,
+                        'status': '통화 연결됨 (ACK)',
+                        'sip_phase': 'answered',
                         'timestamp': datetime.now().isoformat(),
                         'started_at': call_session.answer_time.isoformat() if call_session.answer_time else datetime.now().isoformat(),
                     }
@@ -1148,9 +1176,25 @@ class CallManager:
         # AI 통화 종료 처리
         is_ai_call = call_session.call_id in self.ai_enabled_calls
         if is_ai_call:
+            import asyncio
+
+            try:
+                from src.common.sip_owner import normalize_owner_username
+                from src.services.hitl import get_hitl_service
+
+                _uri = call_session.get_callee_uri() or ""
+                _own = normalize_owner_username(_uri) or None
+                asyncio.create_task(
+                    get_hitl_service().flush_hitl_kb_for_call(call_session.call_id, _own)
+                )
+            except Exception as e:
+                logger.debug(
+                    "hitl_kb_flush_cleanup_terminated_schedule_failed call_id=%s error=%s",
+                    call_session.call_id,
+                    e,
+                )
             if self.ai_orchestrator:
                 try:
-                    import asyncio
                     asyncio.create_task(self.ai_orchestrator.end_call())
                     logger.info("ai_call_ended", progress="call", call_id=call_session.call_id)
                 except Exception as e:
@@ -1158,7 +1202,7 @@ class CallManager:
                                call_id=call_session.call_id,
                                error=str(e))
             
-            self.ai_enabled_calls.discard(call_session.call_id)
+            self.discard_ai_enabled_call(call_session.call_id)
         else:
             # 일반 SIP 통화: 종료 시 call_data_record 요약 (AI 파이프라인 없음)
             try:
@@ -1472,6 +1516,27 @@ class CallManager:
         
         return info
     
+    def discard_ai_enabled_call(self, call_id: str) -> bool:
+        """SIP BYE·`_cleanup_call` 등에서 `ai_enabled_calls`에서 제거.
+
+        `cleanup_terminated_call`이 B2BUA 경로에서 호출되지 않을 때 집합 누수를 막는다.
+        """
+        if call_id not in self.ai_enabled_calls:
+            logger.debug(
+                "ai_enabled_call_discard_skip",
+                call_id=call_id,
+                note="집합에 없음 — 일반 통화이거나 이미 제거됨",
+            )
+            return False
+        self.ai_enabled_calls.discard(call_id)
+        logger.info(
+            "ai_enabled_call_discarded",
+            call_id=call_id,
+            remaining_ai_calls=len(self.ai_enabled_calls),
+            note="SIP 정리 경로에서 AI 활성 집합에서 제거",
+        )
+        return True
+
     def is_ai_call(self, call_id: str) -> bool:
         """
         AI 모드 통화 여부 확인

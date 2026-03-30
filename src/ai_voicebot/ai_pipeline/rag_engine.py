@@ -83,8 +83,8 @@ class RAGEngine:
         self, 
         vector_db,  # VectorDB 인스턴스
         embedder,   # TextEmbedder 인스턴스
-        top_k: int = 3,
-        similarity_threshold: float = 0.7,
+        top_k: int = 5,
+        similarity_threshold: float = 0.42,
         reranking_enabled: bool = False,
         doc_type_allowlist: Optional[List[str]] = None,
     ):
@@ -233,8 +233,8 @@ class RAGEngine:
             soft_fallback_applied = False
             soft_floor_used: Optional[float] = None
             after_strict_threshold_count = 0
-            # help: 능력 나열은 질의-청크 유사도가 전반적으로 낮아 임계값 컷 시 0~2건에 그침 → 넓게 수집
-            chroma_n_results = effective_top_k * 2
+            # Chroma 후보 풀을 넉넉히 가져온 뒤, 임계값·backfill로 top_k를 채움 (검색은 넓게, LLM이 선별)
+            chroma_n_results = max(effective_top_k * 5, 32)
             if search_intent == "help":
                 chroma_n_results = max(80, effective_top_k * 4)
             raw = self.vector_db.query(
@@ -260,6 +260,7 @@ class RAGEngine:
             
             # 4. 유사도 필터링
             before_filter = list(documents)
+            recall_backfill_n = 0
             if search_intent == "help":
                 documents = sorted(
                     before_filter, key=lambda d: d.score, reverse=True
@@ -279,23 +280,22 @@ class RAGEngine:
                     note="help 의도: similarity_threshold 컷 생략 → 테넌트 상위 K를 LLM/휴리스틱에 전달",
                 )
             else:
-                documents = [
-                    doc for doc in documents
-                    if doc.score >= self.similarity_threshold
+                strict_docs = [
+                    doc for doc in before_filter if doc.score >= self.similarity_threshold
                 ]
-                after_threshold_count = len(documents)
-                after_strict_threshold_count = after_threshold_count
+                strict_docs.sort(key=lambda d: d.score, reverse=True)
+                documents = list(strict_docs)
+                after_strict_threshold_count = len(documents)
                 # 하드 컷으로 0건이나 Chroma 상위 후보가 있으면 완화 후보 반환 (짧은 STT·거리 스코어 특성)
                 if not documents and before_filter:
-                    soft_floor = max(0.22, min(self.similarity_threshold * 0.5, 0.42))
+                    soft_floor = max(0.16, min(self.similarity_threshold * 0.5, 0.36))
                     soft_floor_used = round(float(soft_floor), 4)
                     soft = [d for d in before_filter if d.score >= soft_floor]
                     if not soft:
                         soft = sorted(before_filter, key=lambda d: d.score, reverse=True)[
-                            : min(2, len(before_filter))
+                            : min(4, len(before_filter))
                         ]
                     documents = soft
-                    after_threshold_count = len(documents)
                     soft_fallback_applied = True
                     logger.info(
                         "rag_search_soft_fallback_applied",
@@ -305,6 +305,29 @@ class RAGEngine:
                         top_score=round(documents[0].score, 4) if documents else 0.0,
                         note="임계값 미달 0건 → 완화 후보 사용 (config threshold 유지, 검색만 완화)",
                     )
+                # 임계값 위 후보만으로 top_k가 안 차면, Chroma 풀에서 점수 순으로 보충(낮은 유사도도 허용)
+                if before_filter:
+                    seen_ids = {d.id for d in documents}
+                    pool = sorted(before_filter, key=lambda d: d.score, reverse=True)
+                    for d in pool:
+                        if len(documents) >= effective_top_k:
+                            break
+                        if d.id in seen_ids:
+                            continue
+                        documents.append(d)
+                        seen_ids.add(d.id)
+                        recall_backfill_n += 1
+                documents.sort(key=lambda d: d.score, reverse=True)
+                if recall_backfill_n:
+                    logger.info(
+                        "rag_search_recall_backfill",
+                        call_id=call_id or "",
+                        added=recall_backfill_n,
+                        top_k_cap=effective_top_k,
+                        lowest_score_in_bundle=round(documents[-1].score, 4) if documents else 0.0,
+                        note="임계값 미달 청크를 점수순으로 보충 — LLM이 관련성 판단",
+                    )
+                after_threshold_count = len(documents)
             logger.info("rag_search_debug",
                         call=True,
                         call_id=call_id or "",
@@ -426,6 +449,7 @@ class RAGEngine:
             tr["after_soft_fallback_count"] = after_threshold_count
             tr["soft_fallback_applied"] = soft_fallback_applied
             tr["soft_floor_used"] = soft_floor_used
+            tr["recall_backfill_added"] = recall_backfill_n
             tr["first_raw_chroma_distance"] = round(first_distance, 6) if first_distance is not None else None
             tr["reranking_applied"] = reranking_applied_flag
             tr["final_returned_count"] = len(documents)

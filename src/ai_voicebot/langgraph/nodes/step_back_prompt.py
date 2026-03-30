@@ -81,7 +81,10 @@ async def step_back_node(state: ConversationState) -> dict:
                     prompt_preview=prompt.replace("\n", " "))
         try:
             step_back_query = await llm.generate_response(
-                prompt, context_docs=[], system_prompt="Step-back 변환기"
+                prompt,
+                context_docs=[],
+                system_prompt="Step-back 변환기",
+                max_output_tokens=256,
             )
         except Exception as llm_err:
             llm_elapsed_err = time.time() - llm_start

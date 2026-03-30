@@ -1,240 +1,307 @@
 """
-통화 이력(Call History) API 라우터
+통화 이력 REST: 녹음 디렉터리 `metadata.json` + `call_insights.json` 병합.
 
-- GET /api/call-history - 통화 이력 목록 조회
-- GET /api/call-history/follow-ups - 확인 필요 목록 조회
-- PATCH /api/call-history/follow-ups/{id} - 확인 필요 상태 업데이트
+- `append_call_history` / `record_hitl_request`: RAG 등에서 import — 현재는 인덱스는 파일 스캔으로 충분해 디버그 로그만 남김.
 """
 
-from fastapi import APIRouter, Query, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from __future__ import annotations
 
-# ✅ Transcript 파싱 유틸리티 import
-from src.api.utils.call_data_record_reader import read_call_data_record_for_call
-from src.api.utils.recording_paths import call_has_audio_recording, get_recordings_dir
-from src.api.utils.transcript_parser import get_all_call_metadata, get_transcript_for_call
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-router = APIRouter(prefix="/api/call-history", tags=["call-history"])
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse, PlainTextResponse
+
+from src.common.call_insights_buffer import (
+    load_call_insights_for_directory,
+    resolve_callee_summary_for_list_item,
+)
+from src.common.sip_owner import normalize_owner_username
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/call-history", tags=["call-history"])
+
+_ALLOWED_MEDIA = {"mixed": "mixed.wav", "caller": "caller.wav", "callee": "callee.wav"}
 
 
-class FollowUpUpdate(BaseModel):
-    """확인 필요 상태 업데이트"""
-    status: str  # pending, noted, contacted, resolved
-    operator_note: Optional[str] = None
+def _recordings_root() -> Path:
+    raw = (
+        os.environ.get("SIP_RECORDINGS_DIR")
+        or os.environ.get("RECORDINGS_DIR")
+        or "./recordings"
+    )
+    return Path(raw).resolve()
 
 
-# 간단한 인메모리 저장소 (실제로는 DB 사용)
-_follow_ups: Dict[str, Dict[str, Any]] = {}
-
-# HITL 요청 저장소 (미처리 HITL 탭 데이터 소스)
-_hitl_requests: Dict[str, Dict[str, Any]] = {}
+def append_call_history(entry: Dict[str, Any]) -> None:
+    """통화 시작 시 1회 호출(설계상). 목록 소스는 통화 종료 후 `metadata.json` 스캔."""
+    cid = entry.get("call_id") if isinstance(entry, dict) else None
+    logger.debug("append_call_history call_id=%s", cid)
 
 
 def record_hitl_request(
+    *,
     call_id: str,
-    callee_id: str,
-    user_question: str,
-    ai_confidence: float,
+    callee_id: str = "",
+    user_question: str = "",
+    ai_confidence: Optional[float] = None,
     caller_id: Optional[str] = None,
 ) -> None:
-    """
-    HITL 요청 건 기록 (통화 이력·대시보드 미처리 HITL 목록용).
-    rag_processor에서 needs_human 시 호출.
-    """
-    if not call_id:
-        return
-    import time
-    key = f"{call_id}_{int(time.time() * 1000)}"  # 동일 call_id 다건 허용
-    _hitl_requests[key] = {
-        "id": key,
-        "call_id": call_id,
-        "callee_id": callee_id,
-        "caller_id": caller_id or "",
-        "user_question": user_question,
-        "ai_confidence": ai_confidence,
-        "status": "pending",
-        "created_at": time.time(),
-    }
+    """HITL 요청 기록 훅 — 미처리 큐는 HITL 서비스·WS 경로 사용."""
+    logger.debug(
+        "record_hitl_request call_id=%s callee_id=%s q_preview=%s conf=%s caller=%s",
+        call_id,
+        callee_id,
+        (user_question or "")[:80],
+        ai_confidence,
+        caller_id,
+    )
 
 
-@router.get("/follow-ups")
-async def get_follow_ups(
-    callee: Optional[str] = Query(None, description="착신자 ID 필터"),
-    status: Optional[str] = Query(None, description="상태 필터")
-) -> Dict[str, Any]:
-    """
-    확인 필요(후처리) 목록 조회
-    
-    AI가 "모르는 내용"으로 응답한 건
-    
-    Args:
-        callee: 착신자 ID 필터
-        status: 상태 필터 (pending, noted, contacted, resolved)
-    
-    Returns:
-        {
-            "items": [
-                {
-                    "id": "...",
-                    "call_id": "...",
-                    "user_question": "...",
-                    "ai_response": "...",
-                    "status": "pending",
-                    "operator_note": null,
-                    "created_at": "..."
-                }
-            ],
-            "total": 0
-        }
-    """
-    items = list(_follow_ups.values())
-    
-    # 필터링 (record_hitl_request는 callee_id로 저장)
-    if callee:
-        items = [
-            item for item in items
-            if item.get("callee_id") == callee or item.get("callee") == callee
-        ]
-    if status:
-        items = [item for item in items if item.get("status") == status]
-    
+def _owner_matches_row(owner_filter: str, callee_id: str) -> bool:
+    if not owner_filter:
+        return True
+    want = normalize_owner_username(owner_filter)
+    got = normalize_owner_username(callee_id or "")
+    if want and got:
+        return want == got or want in got or got in want
+    return (owner_filter.strip().lower() in (callee_id or "").lower()) if owner_filter else True
+
+
+def _load_metadata_rows(root: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not root.is_dir():
+        return rows
+    for sub in root.iterdir():
+        if not sub.is_dir() or sub.name.startswith("."):
+            continue
+        meta_path = sub / "metadata.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(meta, dict) or not meta.get("call_id"):
+            continue
+        meta["_call_dir"] = str(sub)
+        rows.append(meta)
+    return rows
+
+
+def _sort_key(m: Dict[str, Any]) -> str:
+    return str(m.get("end_time") or m.get("start_time") or "")
+
+
+def _sip_pbx_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def _logs_dir() -> Path:
+    d = _sip_pbx_root() / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _find_call_dir(call_id: str) -> Optional[Path]:
+    if not (call_id or "").strip():
+        return None
+    root = _recordings_root()
+    if not root.is_dir():
+        return None
+    for sub in root.iterdir():
+        if not sub.is_dir() or sub.name.startswith("."):
+            continue
+        meta_path = sub / "metadata.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(meta, dict) and str(meta.get("call_id") or "") == str(call_id):
+            return sub
+    return None
+
+
+def _scan_call_data_record_for_call(call_id: str, max_items: int) -> Tuple[List[Dict[str, Any]], bool]:
+    """`logs/call_data_record_*.log` 에서 해당 call_id 행만 수집 (시간순 정렬)."""
+    log_dir = _logs_dir()
+    if not log_dir.is_dir():
+        return [], False
+    files = sorted(log_dir.glob("call_data_record_*.log"), reverse=True)
+    out: List[Dict[str, Any]] = []
+    truncated = False
+    want = str(call_id)
+    for path in files:
+        if len(out) >= max_items:
+            truncated = True
+            break
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if len(out) >= max_items:
+                        truncated = True
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(obj.get("call_id") or "") != want:
+                        continue
+                    out.append(obj)
+        except OSError:
+            continue
+    out.sort(key=lambda x: str(x.get("ts") or ""))
+    return out, truncated
+
+
+def _recording_flags(call_dir: Path, meta: Dict[str, Any]) -> Dict[str, bool]:
+    files = meta.get("files")
+    fd: Dict[str, Any] = files if isinstance(files, dict) else {}
+
+    def _has(key: str, wav_name: str) -> bool:
+        v = fd.get(key)
+        if v and str(v).strip():
+            return True
+        return (call_dir / wav_name).is_file()
+
     return {
-        "items": items,
-        "total": len(items)
+        "has_recording_mixed": _has("mixed", "mixed.wav"),
+        "has_recording_caller": _has("caller", "caller.wav"),
+        "has_recording_callee": _has("callee", "callee.wav"),
     }
 
 
-@router.patch("/follow-ups/{id}")
-async def update_follow_up(
-    id: str,
-    update: FollowUpUpdate
+@router.get("/{call_id}/debug-trace")
+def get_call_debug_trace(
+    call_id: str,
+    limit: int = Query(800, ge=1, le=5000),
 ) -> Dict[str, Any]:
-    """
-    확인 필요 상태 업데이트
-    
-    Args:
-        id: Follow-up ID
-        update: 업데이트 정보
-    
-    Returns:
-        {
-            "success": true,
-            "id": "...",
-            "status": "noted"
-        }
-    """
-    if id not in _follow_ups:
-        raise HTTPException(status_code=404, detail="Follow-up not found")
-    
-    _follow_ups[id]["status"] = update.status
-    if update.operator_note:
-        _follow_ups[id]["operator_note"] = update.operator_note
-    
-    return {
-        "success": True,
-        "id": id,
-        "status": update.status
-    }
+    """통화별 call_data_record (대시보드 `call_debug_trace`와 동일 필드) 조회."""
+    if _find_call_dir(call_id) is None:
+        raise HTTPException(status_code=404, detail="call not found")
+    items, truncated = _scan_call_data_record_for_call(call_id, limit)
+    return {"call_id": call_id, "items": items, "truncated": truncated}
 
 
-@router.get("/{call_id}/call-data-record")
-async def get_call_data_record(call_id: str) -> Dict[str, Any]:
-    """
-    `logs/call_data_record_*.log` 에서 해당 통화의 상세 처리 이벤트(STT/TTS/LLM/RAG 등) 목록.
-    통화이력 화면에서 행 확장 시 사용.
-    """
-    items = read_call_data_record_for_call(call_id)
-    return {"call_id": call_id, "items": items, "total": len(items)}
+@router.get("/{call_id}/media/{kind}")
+def get_call_media(call_id: str, kind: str) -> FileResponse:
+    if kind not in _ALLOWED_MEDIA:
+        raise HTTPException(status_code=404, detail="unknown media kind")
+    call_dir = _find_call_dir(call_id)
+    if call_dir is None:
+        raise HTTPException(status_code=404, detail="call not found")
+    fname = _ALLOWED_MEDIA[kind]
+    base = call_dir.resolve()
+    path = (call_dir / fname).resolve()
+    if path.parent != base:
+        raise HTTPException(status_code=404, detail="invalid path")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(path, media_type="audio/wav", filename=fname)
+
+
+@router.get("/{call_id}/transcript")
+def get_call_transcript(call_id: str) -> PlainTextResponse:
+    call_dir = _find_call_dir(call_id)
+    if call_dir is None:
+        raise HTTPException(status_code=404, detail="call not found")
+    tp = call_dir / "transcript.txt"
+    if not tp.is_file():
+        raise HTTPException(status_code=404, detail="transcript not found")
+    try:
+        text = tp.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raise HTTPException(status_code=404, detail="transcript read failed")
+    return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
 
 
 @router.get("")
-async def get_call_history(
-    page: int = Query(1, ge=1, description="페이지 번호"),
-    limit: int = Query(20, ge=1, le=100, description="페이지당 항목 수"),
-    callee: Optional[str] = Query(None, description="착신자 ID 필터"),
-):
+def list_call_history(
+    owner: Optional[str] = Query(None, description="착신(테넌트) 필터 — localStorage tenant와 동일"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> Dict[str, Any]:
     """
-    통화 이력 목록 반환 (transcript 포함)
-    
-    Args:
-        page: 페이지 번호
-        limit: 페이지당 항목 수
-        callee: 착신자 ID 필터 (선택)
-        
-    Returns:
-        {
-            "items": [
-                {
-                    "call_id": "...",
-                    "caller_id": "...",
-                    "callee_id": "...",
-                    "start_time": "...",
-                    "end_time": "...",
-                    "has_recording": true,
-                    "transcripts": [
-                        {"role": "assistant", "content": "..."},
-                        {"role": "user", "content": "..."}
-                    ]
-                }
-            ],
-            "total": 10,
-            "page": 1,
-            "limit": 20
-        }
+    완료 통화 목록. 각 항목에 `callee_summary`, `ai_unhandled_items`, `ai_unhandled_count` 포함
+    (`call_insights.json`이 있을 때만 채워짐).
     """
-    recordings_root = get_recordings_dir()
-    # 모든 metadata 읽기
-    all_metadata = get_all_call_metadata(recordings_dir=recordings_root)
-    
-    # callee 필터링
-    if callee:
-        filtered_metadata = [
-            m for m in all_metadata 
-            if m.get("callee_id") == callee
-        ]
-    else:
-        filtered_metadata = all_metadata
-    
-    # 각 통화에 transcript 추가
-    items = []
-    for metadata in filtered_metadata:
-        call_id = metadata.get("call_id", "")
-        
-        # transcript 파싱
-        transcripts = get_transcript_for_call(call_id, recordings_dir=recordings_root)
-        has_audio = call_has_audio_recording(call_id, recordings_root)
+    root = _recordings_root()
+    metas = _load_metadata_rows(root)
+    metas.sort(key=_sort_key, reverse=True)
 
-        item = {
-            "call_id": call_id,
-            "caller_id": metadata.get("caller_id", ""),
-            "callee_id": metadata.get("callee_id", ""),
-            "start_time": metadata.get("start_time", ""),
-            "end_time": metadata.get("end_time"),
-            "has_recording": has_audio,
-            "has_transcript": metadata.get("has_transcript", False),
-            "is_ai_handled": metadata.get("type") == "ai_call",  # type으로 판단
-            "transcripts": transcripts or [],  # ✅ transcript 포함
-            "transcript": None,  # 레거시 지원
-            "stt_transcript": None,  # 레거시 지원
-            "hitl_status": None,
-            "user_question": None,
-            "ai_confidence": None,
-            "timestamp": metadata.get("start_time", "")
+    owner_f = (owner or "").strip()
+    filtered = [
+        m
+        for m in metas
+        if not owner_f or _owner_matches_row(owner_f, str(m.get("callee_id") or ""))
+    ]
+    total_matching = len(filtered)
+    page = filtered[offset : offset + limit]
+
+    out: List[Dict[str, Any]] = []
+    for m in page:
+        call_dir = Path(m.get("_call_dir") or "")
+        insights = load_call_insights_for_directory(call_dir) if call_dir.is_dir() else None
+
+        item: Dict[str, Any] = {
+            "call_id": m.get("call_id"),
+            "directory": m.get("directory"),
+            "caller_id": m.get("caller_id"),
+            "callee_id": m.get("callee_id"),
+            "start_time": m.get("start_time"),
+            "end_time": m.get("end_time"),
+            "duration": m.get("duration"),
+            "type": m.get("type"),
+            "has_transcript": m.get("has_transcript"),
+            "transcript_source": m.get("transcript_source"),
+            "files": m.get("files"),
+            "callee_summary": None,
+            "call_summary": None,
+            "is_ai_handled_call": False,
+            "ai_unhandled_items": [],
+            "ai_unhandled_count": 0,
+            "ai_unhandled_resolved_by_hitl_count": 0,
+            "ai_unhandled_total_recorded": 0,
         }
-        
-        items.append(item)
-    
-    # 페이지네이션
-    total = len(items)
-    start_idx = (page - 1) * limit
-    end_idx = start_idx + limit
-    paginated_items = items[start_idx:end_idx]
-    
+        if call_dir.is_dir():
+            item.update(_recording_flags(call_dir, m))
+            summ, ai_flag = resolve_callee_summary_for_list_item(call_dir, m, insights)
+            item["callee_summary"] = summ
+            item["is_ai_handled_call"] = ai_flag
+        else:
+            item["has_recording_mixed"] = False
+            item["has_recording_caller"] = False
+            item["has_recording_callee"] = False
+
+        if insights:
+            _cs = insights.get("call_summary")
+            item["call_summary"] = _cs if isinstance(_cs, str) and _cs.strip() else None
+            item["ai_unhandled_items"] = insights.get("ai_unhandled_items") or []
+            item["ai_unhandled_count"] = int(insights.get("ai_unhandled_count") or 0)
+            item["ai_unhandled_resolved_by_hitl_count"] = int(
+                insights.get("ai_unhandled_resolved_by_hitl_count") or 0
+            )
+            item["ai_unhandled_total_recorded"] = int(
+                insights.get("ai_unhandled_total_recorded") or 0
+            )
+
+        out.append(item)
+
     return {
-        "items": paginated_items,
-        "total": total,
-        "page": page,
+        "items": out,
+        "total": total_matching,
         "limit": limit,
-        "pages": (total + limit - 1) // limit
+        "offset": offset,
+        "recordings_dir": str(root),
     }

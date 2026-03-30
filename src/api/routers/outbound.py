@@ -1,151 +1,256 @@
-"""
-아웃바운드 콜 요청 API.
+"""Outbound Call API Router
 
-- POST /api/outbound/: 발신 요청 생성
-- GET /api/outbound/: 목록 조회 (state 필터 지원)
-- GET /api/outbound/stats: 통계
-- POST /api/outbound/{outbound_id}/cancel: 취소
-
-발신 요청 생성 시 대시보드 활성 통화 목록에 등록하고 call_data_record 로그에 기록.
-취소 시 활성 통화에서 해제하고 로그 기록.
+AI 아웃바운드 콜 생성·취소·조회 엔드포인트 제공.
 """
 
-import time
-import uuid
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import List, Optional
+
+import structlog
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/outbound", tags=["outbound"])
 
 
-def _register_outbound_as_active(outbound_id: str, caller_number: str, callee_number: str) -> None:
-    """대시보드 활성 통화 목록에 아웃바운드 요청 등록."""
-    try:
-        from src.api.routers.calls import register_active_call
-        register_active_call(
-            outbound_id,
-            caller=caller_number,
-            callee=callee_number,
-            is_ai_handled=True,
-        )
-    except Exception:
-        pass
+# ============================================================================
+# Request/Response 모델
+# ============================================================================
 
 
-def _unregister_outbound_from_active(outbound_id: str) -> None:
-    """대시보드 활성 통화 목록에서 아웃바운드 제거."""
-    try:
-        from src.api.routers.calls import unregister_active_call
-        unregister_active_call(outbound_id)
-    except Exception:
-        pass
+class OutboundCreateRequest(BaseModel):
+    """아웃바운드 콜 생성 요청"""
 
-
-def _log_outbound_event(outbound_id: str, event: str, **kwargs: Any) -> None:
-    """call_data_record 로그에 아웃바운드 이벤트 기록."""
-    try:
-        from src.common.call_data_record_logger import log_call_data
-        log_call_data(outbound_id, "call_event", event, **kwargs)
-    except Exception:
-        pass
-
-# 인메모리 저장소 (실제 아웃바운드 엔진 연동 전)
-_store: Dict[str, Dict[str, Any]] = {}
-
-
-class OutboundCreate(BaseModel):
-    caller_number: str = Field(..., min_length=1)
-    callee_number: str = Field(..., min_length=1)
-    purpose: str = Field(..., min_length=1)
-    questions: List[str] = Field(default_factory=list, min_length=1)
-    caller_display_name: Optional[str] = None
-    max_duration: int = Field(default=180, ge=30, le=1800)
-    retry_on_no_answer: bool = True
-
-
-@router.post("/")
-async def create_outbound(body: OutboundCreate) -> Dict[str, Any]:
-    """아웃바운드 발신 요청 생성."""
-    outbound_id = str(uuid.uuid4())
-    now = time.time()
-    _store[outbound_id] = {
-        "outbound_id": outbound_id,
-        "call_id": None,
-        "caller_number": body.caller_number,
-        "callee_number": body.callee_number,
-        "purpose": body.purpose,
-        "questions": body.questions,
-        "caller_display_name": body.caller_display_name or "",
-        "state": "queued",
-        "created_at": now,
-        "started_at": None,
-        "answered_at": None,
-        "completed_at": None,
-        "attempt_count": 0,
-        "failure_reason": None,
-        "result": None,
-        "max_duration": body.max_duration,
-        "retry_on_no_answer": body.retry_on_no_answer,
-    }
-    # 대시보드 활성 통화 목록에 표시 + call_data_record 로그
-    _register_outbound_as_active(outbound_id, body.caller_number, body.callee_number)
-    _log_outbound_event(
-        outbound_id,
-        "outbound_request_created",
-        caller_number=body.caller_number,
-        callee_number=body.callee_number,
-        purpose=body.purpose,
-        caller_display_name=body.caller_display_name or "",
+    caller_number: str = Field(..., description="발신번호 (AI 봇 번호)", min_length=1)
+    callee_number: str = Field(..., description="착신번호 (고객)", min_length=1)
+    purpose: str = Field(..., description="통화 목적", min_length=1)
+    questions: List[str] = Field(
+        default_factory=list, description="질문 목록 (TaskTracker용)"
     )
-    return {"outbound_id": outbound_id}
+    caller_display_name: str = Field(default="", description="발신자 표시 이름")
+    max_duration: int = Field(default=300, description="최대 통화 시간(초)", ge=30, le=1800)
+    retry_on_no_answer: bool = Field(default=True, description="무응답 시 재시도 여부")
+    metadata: Optional[dict] = Field(default=None, description="추가 메타데이터")
 
 
-@router.get("/")
-async def list_outbound(state: Optional[str] = Query(None)) -> Dict[str, Any]:
-    """아웃바운드 목록 (state 필터 선택)."""
-    calls = list(_store.values())
-    if state:
-        calls = [c for c in calls if c.get("state") == state]
-    # 최신순
-    calls.sort(key=lambda c: c.get("created_at") or 0, reverse=True)
-    return {"calls": calls}
+class OutboundCreateResponse(BaseModel):
+    """아웃바운드 콜 생성 응답"""
+
+    success: bool
+    outbound_id: str
+    message: str
+
+
+class OutboundCancelRequest(BaseModel):
+    """아웃바운드 콜 취소 요청"""
+
+    outbound_id: str = Field(..., description="취소할 아웃바운드 콜 ID")
+    reason: str = Field(default="operator_cancel", description="취소 사유")
+
+
+class OutboundRetryRequest(BaseModel):
+    """아웃바운드 콜 재시도 요청"""
+
+    outbound_id: str = Field(..., description="재시도할 아웃바운드 콜 ID")
+
+
+# ============================================================================
+# 엔드포인트
+# ============================================================================
+
+
+@router.post("/create", response_model=OutboundCreateResponse)
+async def create_outbound_call(req: OutboundCreateRequest):
+    """아웃바운드 콜 생성 및 발신 시작
+
+    - OutboundCallManager를 통해 콜 요청 생성
+    - 동시 통화 수 제한 체크 후 즉시 발신 또는 대기열 추가
+    """
+    try:
+        from src.sip_core.call_manager import get_call_manager
+
+        cm = get_call_manager()
+        if not cm:
+            raise HTTPException(status_code=503, detail="CallManager not initialized")
+
+        if not hasattr(cm, "_outbound_manager") or not cm._outbound_manager:
+            raise HTTPException(
+                status_code=503, detail="OutboundCallManager not enabled in config"
+            )
+
+        obm = cm._outbound_manager
+
+        record = await obm.create_call(
+            caller_number=req.caller_number,
+            callee_number=req.callee_number,
+            purpose=req.purpose,
+            questions=req.questions,
+            caller_display_name=req.caller_display_name,
+            max_duration=req.max_duration,
+            retry_on_no_answer=req.retry_on_no_answer,
+            metadata=req.metadata,
+        )
+
+        logger.info(
+            "outbound_create_api_success",
+            outbound_id=record.outbound_id,
+            callee=req.callee_number,
+            purpose=req.purpose,
+        )
+
+        return OutboundCreateResponse(
+            success=True,
+            outbound_id=record.outbound_id,
+            message=f"아웃바운드 콜이 생성되었습니다. ID: {record.outbound_id}",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("outbound_create_api_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cancel")
+async def cancel_outbound_call(req: OutboundCancelRequest):
+    """아웃바운드 콜 취소
+
+    - DIALING/RINGING: CANCEL 전송
+    - CONNECTED: AI 중지 + BYE 전송
+    """
+    try:
+        from src.sip_core.call_manager import get_call_manager
+
+        cm = get_call_manager()
+        if not cm or not getattr(cm, "_outbound_manager", None):
+            raise HTTPException(status_code=503, detail="OutboundCallManager not available")
+
+        obm = cm._outbound_manager
+        result = await obm.cancel_call(req.outbound_id, reason=req.reason)
+
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Outbound call {req.outbound_id} not found")
+
+        logger.info("outbound_cancel_api_success", outbound_id=req.outbound_id)
+
+        return {"success": True, "message": "아웃바운드 콜이 취소되었습니다."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("outbound_cancel_api_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/retry")
+async def retry_outbound_call(req: OutboundRetryRequest):
+    """아웃바운드 콜 수동 재시도
+
+    - 이력에서 찾아 같은 요청으로 새로 발신
+    """
+    try:
+        from src.sip_core.call_manager import get_call_manager
+
+        cm = get_call_manager()
+        if not cm or not getattr(cm, "_outbound_manager", None):
+            raise HTTPException(status_code=503, detail="OutboundCallManager not available")
+
+        obm = cm._outbound_manager
+        new_record = await obm.retry_call(req.outbound_id)
+
+        if not new_record:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Outbound call {req.outbound_id} not found or not retryable",
+            )
+
+        logger.info(
+            "outbound_retry_api_success",
+            old_outbound_id=req.outbound_id,
+            new_outbound_id=new_record.outbound_id,
+        )
+
+        return {
+            "success": True,
+            "new_outbound_id": new_record.outbound_id,
+            "message": "재시도가 시작되었습니다.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("outbound_retry_api_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/active")
+async def get_active_outbound_calls():
+    """활성 아웃바운드 콜 목록 조회"""
+    try:
+        from src.sip_core.call_manager import get_call_manager
+
+        cm = get_call_manager()
+        if not cm or not getattr(cm, "_outbound_manager", None):
+            return {"items": []}
+
+        obm = cm._outbound_manager
+        items = obm.get_active_calls()
+
+        return {"items": items}
+
+    except Exception as e:
+        logger.error("outbound_active_api_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/history")
+async def get_outbound_call_history(limit: int = 50):
+    """아웃바운드 콜 이력 조회"""
+    try:
+        from src.sip_core.call_manager import get_call_manager
+
+        cm = get_call_manager()
+        if not cm or not getattr(cm, "_outbound_manager", None):
+            return {"items": []}
+
+        obm = cm._outbound_manager
+        items = obm.get_call_history(limit=min(limit, 200))
+
+        return {"items": items}
+
+    except Exception as e:
+        logger.error("outbound_history_api_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/stats")
-async def outbound_stats() -> Dict[str, Any]:
-    """아웃바운드 통계."""
-    calls = list(_store.values())
-    completed = [c for c in calls if c.get("state") == "completed"]
-    return {
-        "total_calls": len(calls),
-        "completed_count": len(completed),
-        "task_completed_count": len(completed),
-        "success_rate": len(completed) / len(calls) * 100 if calls else 0,
-        "avg_duration_seconds": 0,
-        "no_answer_count": len([c for c in calls if c.get("state") == "no_answer"]),
-        "busy_count": len([c for c in calls if c.get("state") == "busy"]),
-        "active_count": len([c for c in calls if c.get("state") in ("queued", "dialing", "ringing", "connected")]),
-        "queue_size": len([c for c in calls if c.get("state") == "queued"]),
-    }
+async def get_outbound_stats():
+    """아웃바운드 콜 통계 조회"""
+    try:
+        from src.sip_core.call_manager import get_call_manager
 
+        cm = get_call_manager()
+        if not cm or not getattr(cm, "_outbound_manager", None):
+            return {
+                "total_calls": 0,
+                "completed_count": 0,
+                "task_completed_count": 0,
+                "success_rate": 0.0,
+                "avg_duration_seconds": 0,
+                "no_answer_count": 0,
+                "busy_count": 0,
+                "active_count": 0,
+                "queue_size": 0,
+            }
 
-@router.post("/{outbound_id}/cancel")
-async def cancel_outbound(outbound_id: str) -> Dict[str, str]:
-    """아웃바운드 요청 취소."""
-    if outbound_id not in _store:
-        raise HTTPException(status_code=404, detail="Not Found")
-    rec = _store[outbound_id]
-    if rec.get("state") not in ("queued", "dialing", "ringing"):
-        raise HTTPException(status_code=400, detail="이미 진행 중이거나 완료된 요청은 취소할 수 없습니다.")
-    rec["state"] = "cancelled"
-    # 대시보드 활성 통화 목록에서 제거 + call_data_record 로그
-    _unregister_outbound_from_active(outbound_id)
-    _log_outbound_event(
-        outbound_id,
-        "outbound_cancelled",
-        caller_number=rec.get("caller_number"),
-        callee_number=rec.get("callee_number"),
-    )
-    return {"status": "cancelled"}
+        obm = cm._outbound_manager
+        stats = obm.get_stats()
+
+        return stats
+
+    except Exception as e:
+        logger.error("outbound_stats_api_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))

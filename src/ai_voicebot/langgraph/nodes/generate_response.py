@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 
 import structlog
+from src.ai_voicebot.langgraph.hitl_escalation_policy import is_social_direct_path
 from src.ai_voicebot.langgraph.state import ConversationState
 from src.common.rag_hit_serializer import build_rag_hits_llm_context
 from src.common.call_data_record_logger import log_call_data
@@ -30,11 +31,15 @@ def _llm_exchange_rag_fields(
         "rag_search_trace": trace,
     }
 
-# 모르는 내용일 때 사용할 고정 멘트 (설계: TTS_RTP_AND_HITL_DESIGN.md — "잠시만 기다려 주세요" 후 HITL)
-RESPONSE_UNKNOWN_NEEDS_FOLLOWUP = "해당 내용은 확인이 필요합니다. 잠시만 기다려 주세요."
+# 모르는 내용·HITL 시 고객 TTS용 고정 멘트 (담당자 확인 대기 안내 대신 명확한 한계 안내)
+HITL_CUSTOMER_TTS_MESSAGE = (
+    "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. "
+    "다른 도움이 필요하시면 말씀해 주세요."
+)
+RESPONSE_UNKNOWN_NEEDS_FOLLOWUP = HITL_CUSTOMER_TTS_MESSAGE
 
-# 질문(intent=question) + 이번 턴 RAG 검색 결과 없음 → 고정 멘트 후 HITL
-RESPONSE_QUESTION_NO_KNOWLEDGE = "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다."
+# 질문(intent=question) + 이번 턴 RAG 검색 결과 없음 → 동일 멘트 후 HITL
+RESPONSE_QUESTION_NO_KNOWLEDGE = HITL_CUSTOMER_TTS_MESSAGE
 
 
 # 설계 §13.2: 장문 대화 맥락 유지를 위해 8턴
@@ -56,7 +61,7 @@ RESPONSE_SYSTEM_PROMPT = """당신은 {org_name}의 AI 통화 비서입니다.
 1. 한국어로 자연스럽게 대화하세요 (구어체).
 2. 검색된 정보를 바탕으로 정확하게 답하세요.
 3. 모르는 내용일 때는 반드시 아래 문장만 사용하세요. 지어내지 마세요.
-   "해당 내용은 확인이 필요합니다. 잠시만 기다려 주세요."
+   "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요."
 4. 2~3문장 이내로 간결하게 답하세요 (통화이므로 길면 안 됩니다).
 5. 문장은 반드시 마침표(.) 또는 물음표(?)로 끝내세요. 중간에 끊기지 마세요.
 6. 고객이 불편을 호소하면 공감하고 해결 방안을 제시하세요.
@@ -92,6 +97,38 @@ async def generate_response_node(state: ConversationState) -> dict:
 
     intent = state.get("intent", "")
     rag_results = state.get("rag_results") or []
+    
+    # Chitchat 템플릿 응답 (Persona 기반)
+    # classify_intent에서 _chitchat_template이 설정되면 LLM 없이 즉시 반환
+    if intent == "chitchat" and state.get("_chitchat_template"):
+        template = state["_chitchat_template"]
+        messages = state.get("messages", [])
+        updated_messages = list(messages)
+        updated_messages.append({
+            "role": "user",
+            "content": user_query,
+            "timestamp": datetime.now().isoformat(),
+        })
+        updated_messages.append({
+            "role": "assistant",
+            "content": template,
+            "timestamp": datetime.now().isoformat(),
+        })
+        chunks = _split_into_chunks(template)
+        logger.info(
+            "generate_response_chitchat_template",
+            intent="chitchat",
+            response_len=len(template),
+            note="Persona chitchat 템플릿 — LLM 스킵",
+        )
+        return {
+            "response": template,
+            "response_chunks": chunks,
+            "messages": updated_messages,
+            "confidence": 1.0,
+            "needs_follow_up": False,
+            **_llm_exchange_rag_fields(state, [], context_source="chitchat_template"),
+        }
 
     # 질문으로 분류되었고 이번 턴 지식 검색 결과가 없으면 LLM 생략 → 고정 멘트 + HITL 후속
     if intent == "question" and not rag_results:
@@ -135,8 +172,14 @@ async def generate_response_node(state: ConversationState) -> dict:
         org_context = state.get("org_context", "")
         org_name = _extract_org_name(org_context)
         chitchat_rule = ""
-        if intent in ("chitchat", "greeting"):
-            chitchat_rule = "9. [지금은 일상 말걸기/인사입니다] 1~2문장으로 짧게 공감·안내만 하세요. 길게 설명하지 마세요."
+        _social = is_social_direct_path(state)
+        if intent in ("chitchat", "greeting") or (_social and intent == "out_of_scope"):
+            chitchat_rule = (
+                "9. [지금은 일상 말걸기·범위 밖 잡담입니다] 지식 문서에 없어도 됩니다. "
+                "1~2문장으로 짧게 공감하거나 가볍게 답하고, "
+                "업무 문의는 환영한다고 안내하세요. "
+                "「알지 못하는 내용입니다」 같은 한계 멘트는 쓰지 마세요."
+            )
 
         # 설계 §14.2: 대화 단계·요약을 프롬프트에 주입
         stage_and_summary = _format_stage_and_summary(state)
@@ -180,11 +223,17 @@ async def generate_response_node(state: ConversationState) -> dict:
         # API 오류 등으로 LLM이 에러 문구를 반환한 경우 → 모르는 내용 고정 응답 + 후처리 플래그
         elif _is_llm_error_fallback(response):
             logger.warning("generate_response_llm_error_fallback", response_preview=response)
-            response = RESPONSE_UNKNOWN_NEEDS_FOLLOWUP
-            needs_follow_up = True
+            if _social or intent in ("chitchat", "out_of_scope", "greeting"):
+                response = "잠시 응답이 어려웠어요. 편하게 이어서 말씀해 주세요."
+                needs_follow_up = False
+            else:
+                response = RESPONSE_UNKNOWN_NEEDS_FOLLOWUP
+                needs_follow_up = True
         # 응답이 모르는 내용 유도 문구와 유사하면 후처리 플래그 (LLM이 규칙 3을 따른 경우)
         elif _is_unknown_content_response(response):
             needs_follow_up = True
+            if _social or intent in ("chitchat", "out_of_scope", "greeting"):
+                needs_follow_up = False
 
         elapsed = time.time() - start
         logger.info("llm_response_received",
@@ -194,14 +243,14 @@ async def generate_response_node(state: ConversationState) -> dict:
                     elapsed_ms=round(elapsed * 1000),
                     response_len=len(response))
 
-        # Streaming: 문장 단위 청크 분리
-        chunks = _split_into_chunks(response)
+        # ✅ 청크 분할 제거: Google TTS는 전체 텍스트를 한 번에 받아야 최적
+        # (청크마다 별도 API 호출 시 레이턴시 누적으로 재생 버퍼 고갈)
+        chunks = []
 
         logger.info("timing_segment", segment="generate_response", elapsed_sec=round(elapsed, 3))
         logger.info("⏱️ [TIMING] generate_response (LLM 호출)",
                    query=user_query,
                    response_len=len(response),
-                   chunks=len(chunks),
                    llm_elapsed=f"{elapsed:.3f}s")
 
         call_id = state.get("_call_id") or ""
@@ -229,8 +278,8 @@ async def generate_response_node(state: ConversationState) -> dict:
             "timestamp": datetime.now().isoformat(),
         })
 
-        # Confidence: greeting/chitchat 경로는 adaptive_rag를 타지 않으므로 0.9 고정 (§4.3)
-        if intent in ("greeting", "chitchat"):
+        # Confidence: 일상 직행·잡담은 저신뢰 HITL 방지용으로 높게 유지 (§4.3)
+        if intent in ("greeting", "chitchat", "out_of_scope") or _social:
             confidence = 0.9
         else:
             confidence = state.get("confidence", 0.0)  # From adaptive_rag or step_back
@@ -252,11 +301,21 @@ async def generate_response_node(state: ConversationState) -> dict:
         elapsed = time.time() - start
         logger.info("timing_segment", segment="generate_response", elapsed_sec=round(elapsed, 3), error=str(e))
         logger.error("response_generation_error", error=str(e), exc_info=True)
+        _sd = is_social_direct_path(state)
+        _intent = state.get("intent", "")
+        if _sd or _intent in ("chitchat", "out_of_scope", "greeting"):
+            _resp = "잠시 응답이 어려웠어요. 편하게 이어서 말씀해 주세요."
+            _nfu = False
+            _conf = 0.85
+        else:
+            _resp = RESPONSE_UNKNOWN_NEEDS_FOLLOWUP
+            _nfu = True
+            _conf = 0.0
         return {
-            "response": RESPONSE_UNKNOWN_NEEDS_FOLLOWUP,
-            "confidence": 0.0,
-            "needs_follow_up": True,
-            "follow_up_user_query": user_query if user_query else "",
+            "response": _resp,
+            "confidence": _conf,
+            "needs_follow_up": _nfu,
+            "follow_up_user_query": user_query if _nfu and user_query else "",
             **_llm_exchange_rag_fields(state, rag_results, context_source="llm_generation_error"),
         }
 
@@ -274,14 +333,17 @@ def _is_llm_error_fallback(text: str) -> bool:
 
 
 def _is_unknown_content_response(text: str) -> bool:
-    """모르는 내용/확인 필요 문구인지 여부 (후처리·HITL 유도). 설계: 잠시만 기다려 주세요 + HITL."""
+    """모르는 내용/한계 안내 문구인지 여부 (후처리·HITL 유도)."""
     if not text or len(text) < 10:
         return False
     t = text.strip()
+    if HITL_CUSTOMER_TTS_MESSAGE in t:
+        return True
     if RESPONSE_QUESTION_NO_KNOWLEDGE in t or (
         "알지 못하는 내용" in t and "죄송" in t
     ):
         return True
+    # 구버전 LLM/캐시 호환
     if "잠시만 기다려" in t and "확인" in t:
         return True
     return (
@@ -374,7 +436,10 @@ def _format_stage_and_summary(state: dict) -> str:
 
 def _split_into_chunks(text: str) -> list:
     """
-    문장 단위 청크 분리 (Streaming RAG TTS용).
+    [DEPRECATED] 문장 단위 청크 분리 (Streaming RAG TTS용).
+    
+    Google TTS는 streaming 미지원 → 청크 분할 시 각 청크마다 별도 API 호출로
+    레이턴시 누적 및 재생 버퍼 고갈 발생. 인사말처럼 전체 텍스트를 한 번에 전송해야 함.
     """
     if not text:
         return []

@@ -155,7 +155,8 @@ async def update_state_node(state: ConversationState) -> dict:
         out["response"] = closing
         logger.info("farewell_closing_message_set",
                     intent=intent,
-                    response_preview=closing or "")
+                    response_preview=closing or "",
+                    note="LangGraph 내부 state.response 치환 (실제 TTS는 rag_processor에서 로깅)")
 
     elapsed = time.time() - _start
     logger.info("timing_segment", segment="update_state", elapsed_sec=round(elapsed, 3))

@@ -31,7 +31,7 @@ from .semantic_deduplicator import (
 )
 from .quality_gate import QualityGate
 from .extraction_category import normalize_extraction_category
-from .rag_knowledge_text import apply_rag_knowledge_prefix
+from .rag_knowledge_text import apply_rag_knowledge_prefix, strip_rag_knowledge_prefix
 from src.common.sip_owner import normalize_owner_username
 from src.common.call_data_record_logger import log_call_data
 from src.common.knowledge_call_data_helpers import (
@@ -144,7 +144,9 @@ class ExtractionPipeline:
         self.summarizer = ConversationSummarizer(llm_client)
         self.qa_extractor = QAPairExtractor(llm_client)
         self.entity_extractor = EntityExtractor(llm_client)
-        self.hallucination_checker = HallucinationChecker(embedder, llm_client)
+        self.hallucination_checker = HallucinationChecker(
+            embedder, llm_client, config=self.config
+        )
         self.deduplicator = SemanticDeduplicator(
             vector_db,
             embedder,
@@ -349,10 +351,16 @@ class ExtractionPipeline:
             verified_items: List[ExtractionItem] = []
 
             for item in items:
-                # 3-1: 환각 검증
+                # 3-1: 환각 검증 (전사 대비). knowledge는 RAG 검색 접두가 붙어 있어
+                # 구문 토큰 매칭이 전사와 어긋나 전부 탈락할 수 있으므로 접두 제거 후 검증.
                 if self.enable_hallucination:
+                    _halluc_text = (
+                        strip_rag_knowledge_prefix(item.text)
+                        if item.doc_type == "knowledge"
+                        else item.text
+                    )
                     halluc = await self.hallucination_checker.check(
-                        item.text,
+                        _halluc_text,
                         transcript,
                         skip_entailment=(item.confidence >= 0.9),
                     )
@@ -361,8 +369,11 @@ class ExtractionPipeline:
                         result.skipped_hallucination += 1
                         logger.debug(
                             "hallucination_skip",
-                            text=item.text,
+                            call_id=call_id,
+                            text_preview=item.text[:80],
                             reason=halluc.details,
+                            syntactic_score=halluc.syntactic_score,
+                            semantic_score=halluc.semantic_score,
                         )
                         continue
 
@@ -491,7 +502,7 @@ class ExtractionPipeline:
                     doc_id=doc_id,
                     owner_id=owner_id,
                     doc_type=item.doc_type,
-                    category=store_category,
+                    storage_category=store_category,  # "category"는 위치 인자이므로 키 이름 변경
                     review_status=review_status,
                     embedding_dims=len(embedding) if embedding else 0,
                     text_preview=item.text,

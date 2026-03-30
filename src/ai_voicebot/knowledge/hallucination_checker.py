@@ -10,6 +10,10 @@ Hallucination Checker
 3. 함의 검증: LLM에게 원문이 추출 결과를 함의하는지 판단 요청
 
 비용 최적화: 앞 단계에서 탈락하면 뒷 단계 스킵
+
+전사 정규화(초단문 턴 통화): `transcript_normalization.enabled`가 true이면,
+초단문(4자 이하) 턴 연속 제거 + 공백 압축으로 "발신자: 아 / 착신자: 네 기 상 / 발신자: 기"
+→ "착신자: 네기상" 식으로 이어 붙여 구문 매칭률을 높인다.
 """
 
 import asyncio
@@ -36,18 +40,34 @@ class HallucinationResult:
 class HallucinationChecker:
     """3중 환각 검증기"""
 
-    # 임계값
+    # 임계값 (기본)
     SYNTACTIC_THRESHOLD = 0.4     # 핵심 키워드 40%+ 매칭
     SEMANTIC_THRESHOLD = 0.75     # 코사인 유사도 0.75+
     
-    def __init__(self, embedder=None, llm_client=None):
+    def __init__(self, embedder=None, llm_client=None, config: Optional[Dict] = None):
         """
         Args:
             embedder: TextEmbedder 인스턴스 (의미 검증용)
             llm_client: LLMClient 인스턴스 (함의 검증용)
+            config: transcript_normalization 설정 (초단문 턴 완화)
         """
         self.embedder = embedder
         self.llm = llm_client
+        self.config = config or {}
+        # 전사 정규화(초단문 턴 통화·환각 검증 완화)
+        tn_cfg = self.config.get("transcript_normalization", {})
+        self._normalize_for_hallucination = tn_cfg.get("enabled", True)
+        self._collapse_short_turns = tn_cfg.get("collapse_short_turns", True)
+        self._syntactic_threshold_relaxed = tn_cfg.get(
+            "syntactic_threshold_relaxed", 0.25
+        )
+        self._short_turn_max_chars = tn_cfg.get("short_turn_max_chars", 4)
+        logger.info(
+            "hallucination_checker_init",
+            normalize_enabled=self._normalize_for_hallucination,
+            collapse_short_turns=self._collapse_short_turns,
+            syntactic_relaxed=self._syntactic_threshold_relaxed,
+        )
 
     async def check(
         self,
@@ -66,22 +86,42 @@ class HallucinationChecker:
         Returns:
             HallucinationResult
         """
-        # Stage 1: 구문 검증 (비용 0)
-        syntactic_score = self._syntactic_check(extracted_text, original_text)
-        if syntactic_score < self.SYNTACTIC_THRESHOLD:
+        # 전사 정규화 (초단문 턴 제거·공백 압축)
+        transcript_for_check = (
+            self._normalize_transcript(original_text)
+            if self._normalize_for_hallucination
+            else original_text
+        )
+        is_short_turn_transcript = self._looks_like_short_turn_transcript(original_text)
+        # Stage 1: 구문 검증 (비용 0). 짧은 턴 다수이면 완화 임계값 적용.
+        syntactic_threshold = (
+            self._syntactic_threshold_relaxed
+            if is_short_turn_transcript
+            else self.SYNTACTIC_THRESHOLD
+        )
+        syntactic_score = self._syntactic_check(extracted_text, transcript_for_check)
+        if syntactic_score < syntactic_threshold:
+            logger.debug(
+                "hallucination_syntactic_fail",
+                score=round(syntactic_score, 3),
+                threshold=syntactic_threshold,
+                short_turn=is_short_turn_transcript,
+                extracted_preview=extracted_text[:60],
+                transcript_preview=transcript_for_check[:80],
+            )
             return HallucinationResult(
                 passed=False,
                 syntactic_score=syntactic_score,
                 semantic_score=0.0,
                 entailment_result=None,
                 failed_at="syntactic",
-                details=f"핵심 키워드 매칭률 {syntactic_score:.0%} < {self.SYNTACTIC_THRESHOLD:.0%}",
+                details=f"핵심 키워드 매칭률 {syntactic_score:.0%} < {syntactic_threshold:.0%} (short_turn={is_short_turn_transcript})",
             )
 
         # Stage 2: 의미 검증 (임베딩 비용만)
         semantic_score = 0.0
         if self.embedder:
-            semantic_score = await self._semantic_check(extracted_text, original_text)
+            semantic_score = await self._semantic_check(extracted_text, transcript_for_check)
             if semantic_score < self.SEMANTIC_THRESHOLD:
                 return HallucinationResult(
                     passed=False,
@@ -98,7 +138,7 @@ class HallucinationChecker:
         entailment_result = None
         if not skip_entailment and self.llm:
             entailment_result = await self._entailment_check(
-                extracted_text, original_text
+                extracted_text, transcript_for_check
             )
             if entailment_result != "yes":
                 return HallucinationResult(
@@ -119,29 +159,80 @@ class HallucinationChecker:
             details="3중 검증 통과",
         )
 
+    def _looks_like_short_turn_transcript(self, text: str) -> bool:
+        """짧은 턴(4자 이하)이 전체의 50% 이상이면 초단문 전사로 본다."""
+        if not self._collapse_short_turns:
+            return False
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+        if len(lines) < 5:
+            return False
+        turn_count = 0
+        short_count = 0
+        for ln in lines:
+            if ":" not in ln:
+                continue
+            turn_count += 1
+            parts = ln.split(":", 1)
+            if len(parts) == 2:
+                content = parts[1].strip()
+                if len(content) <= self._short_turn_max_chars:
+                    short_count += 1
+        if turn_count < 5:
+            return False
+        ratio = short_count / turn_count
+        return ratio >= 0.5
+
+    def _normalize_transcript(self, text: str) -> str:
+        """
+        초단문 턴 제거 + 화자 라벨 제거 + 공백 압축.
+        예: "발신자: 기\n착신자: 상 청 홈" → "상 청 홈" (기 스킵, 공백 유지)
+        """
+        if not self._collapse_short_turns:
+            return text
+        lines = text.split("\n")
+        content_parts = []
+        for ln in lines:
+            ln = ln.strip()
+            if not ln or ":" not in ln:
+                continue
+            _, _, content = ln.partition(":")
+            content = content.strip()
+            # 초단문 턴 스킵
+            if len(content) <= self._short_turn_max_chars:
+                continue
+            content_parts.append(content)
+        # 화자 구분 없이 순수 텍스트만 공백으로 이음
+        joined = " ".join(content_parts)
+        # 연속 공백 압축
+        joined = re.sub(r"\s+", " ", joined).strip()
+        return joined
+
     def _syntactic_check(self, extracted: str, original: str) -> float:
         """
-        구문 검증: 추출 텍스트의 핵심 명사가 원문에 존재하는지 확인
-        
-        간단한 키워드 매칭 (형태소 분석 없이 공백 토큰 기반)
+        구문 검증: 추출 텍스트의 핵심 명사가 원문에 존재하는지 확인.
+        정규화된 전사는 공백 유지 상태이므로, 부분 문자열 매칭으로 토큰 존재 확인.
         """
-        # 한국어 조사/어미 제거를 위한 간단한 정규화
-        def normalize(text: str) -> set:
+        def normalize_tokens(text: str) -> set:
+            """2글자 이상 한글/영문/숫자 토큰 추출."""
             text = text.lower()
-            # 숫자, 한글 단어, 영문 단어만 추출
             tokens = re.findall(r'[가-힣]{2,}|[a-zA-Z]{2,}|\d+', text)
-            # 일반적인 불용어 제거
             stopwords = {'이', '그', '저', '것', '수', '등', '더', '및', '또', '의', '를', '에', '은', '는', '이', '가'}
             return {t for t in tokens if t not in stopwords and len(t) >= 2}
 
-        extracted_tokens = normalize(extracted)
-        original_tokens = normalize(original)
-
+        extracted_tokens = normalize_tokens(extracted)
         if not extracted_tokens:
-            return 1.0  # 추출 텍스트에 키워드가 없으면 통과
-
-        matched = extracted_tokens & original_tokens
-        return len(matched) / len(extracted_tokens)
+            return 1.0
+        
+        # 원문을 공백 제거 + lower로 연속 문자열화
+        original_collapsed = re.sub(r"\s+", "", original.lower())
+        
+        matched = 0
+        for tok in extracted_tokens:
+            # 토큰이 원문(공백 제거)에 부분 문자열로 있으면 매칭
+            if tok.lower() in original_collapsed:
+                matched += 1
+        
+        return matched / len(extracted_tokens)
 
     async def _semantic_check(self, extracted: str, original: str) -> float:
         """의미 검증: 임베딩 코사인 유사도"""

@@ -9,6 +9,7 @@ transfer, out_of_scope, nlu_fallback
 """
 
 from datetime import datetime
+import re
 
 import structlog
 from src.ai_voicebot.langgraph.state import ConversationState
@@ -38,12 +39,78 @@ def _log_intent_classify_timing(
         query_preview=(query_preview or ""),
     )
 
+def _is_hangul_syllable(ch: str) -> bool:
+    """완성형 한글 음절 1자 (가~힣)."""
+    return len(ch) == 1 and "가" <= ch <= "힣"
+
+
+def _keyword_matches_intent(query_lower: str, intent: str, kw: str) -> bool:
+    """
+    짧은 긍정 토큰 '네'·'예'는 '네가'·'예를'·'예보'·'예절' 등에 부분 문자열로 걸려 오분류되므로 제외 규칙 적용.
+
+    '예'는 **뒤에 다른 한글 음절이 바로 붙으면** 단어 내부(예보, 예절, 예약 …)로 보고 affirm 제외.
+    예외: '예요'(긍정)만 허용. 끝·공백·구두점 뒤의 '예'는 긍정으로 본다 (화이트리스트 불필요).
+    """
+    if kw not in query_lower:
+        return False
+    if intent != "affirm" or kw not in ("네", "예"):
+        return True
+    if kw == "네":
+        for m in re.finditer("네", query_lower):
+            if m.end() < len(query_lower) and query_lower[m.end()] in ("가", "는", "도"):
+                continue
+            return True
+        return False
+    for m in re.finditer("예", query_lower):
+        end = m.end()
+        if end < len(query_lower) and query_lower[end] == "를":
+            continue  # 예를 들어
+        if end >= len(query_lower):
+            return True
+        nxt = query_lower[end]
+        
+        # ✅ "예요" 처리: 앞에 다른 한글이 붙으면 서술격 조사 (거예요, 이예요 등)
+        if nxt == "요":
+            start = m.start()
+            # 앞에 한글 음절이 있으면 서술격 조사로 판단 (affirm 제외)
+            if start > 0 and _is_hangul_syllable(query_lower[start - 1]):
+                continue  # 거예요, 이예요, 해주는 거예요 등
+            return True  # 독립적인 "예요"만 긍정
+        
+        if not _is_hangul_syllable(nxt):
+            return True  # 예. 예! 예 … 공백·구두점·비한글
+        # 한글 음절이 이어짐 → 예보, 예절, 예약 … (합성어 열거 없이 제외)
+        continue
+    return False
+
+
 # 키워드 기반 빠른 분류 (LLM 호출 없이). 설계 §8.2 키워드 예시 반영
+# 순서 중요: repeat/clarification을 affirm보다 먼저 — "방금 네가 … 다시 얘기해"에서 '네'보다 '다시'·'뭐라고' 우선
 INTENT_KEYWORDS = {
     "greeting": ["안녕", "여보세요", "반갑", "처음"],
     "farewell": ["감사합니다", "고마워", "끊을게", "그만", "종료", "바이바이", "끊을게요"],
     "complaint": ["불만", "화나", "짜증", "항의", "문제가", "왜 이래"],
     "transfer": ["사람", "담당자", "직원", "연결해", "상담원", "전화 돌려", "연결해 줘"],
+    # C. 일상/제어 (affirm 짧은 토큰보다 먼저)
+    "repeat": [
+        "다시",
+        "다시 말해",
+        "뭐라고",
+        "한번 더",
+        "못 들었어요",
+        "다시 말해줘",
+        "다시 얘기",
+        "기억나",
+        "기억 안 나",
+        "뭐라 그랬",
+    ],
+    "clarification": ["무슨 뜻이에요", "뭔 소리야", "이해가 안 가요", "어느 부분이요"],
+    # 잡담 (AI에게 개인적 질문, 일상 감상 등)
+    "chitchat": [
+        "너도", "너는", "ai는", "ai도", "당신은", "좋아하니", "좋아해?", 
+        "기분이 어때", "행복해?", "슬퍼?", "재미있어?", "심심해?",
+        "날씨 좋네", "날씨가 좋", "기분 좋", "오늘 좋",
+    ],
     # B. 반응/피드백
     "affirm": ["네", "예", "넹", "응", "좋아요", "좋습니다", "됐어요", "됐습니다", "알겠어요", "알겠습니다", "그럴게요"],
     "deny": ["아니요", "아니에요", "아니", "필요 없어요", "취소할게요", "그만할게요"],
@@ -51,22 +118,37 @@ INTENT_KEYWORDS = {
     "doubt": ["글쎄요", "아마", "잘 모르겠어요", "몰라요"],
     "positive_reaction": ["좋아요", "맘에 들어요", "좋네요"],
     "negative_reaction": ["별로예요", "안 좋아요", "그냥요"],
-    # C. 일상/제어
-    "repeat": ["다시", "다시 말해", "뭐라고", "한번 더", "못 들었어요", "다시 말해줘"],
-    "clarification": ["무슨 뜻이에요", "뭔 소리야", "이해가 안 가요", "어느 부분이요"],
     "help": [
         "도와줘",
         "도움",
         "어떻게 해요",
         "어떻게 하죠",
         "뭘 할 수 있어요",
-        "어떤 일",
+        # "어떤 일" 제거: "기상청은 어떤 일을 하는 곳인가요?" 등 기관 설명 질문이 help로 오분류됨
         "할 수 있어",
         "할수있어",
         "무엇을 할",
         "뭐 할 수",
     ],
 }
+
+
+def _organization_role_question_not_help(query_lower: str) -> bool:
+    """
+    기관·조직이 '무슨 일을 하는 곳'인지 묻는 질문은 정보 질문(question)이지,
+    AI 능력 나열(help)이 아니다. help 키워드 오탐 시 question으로 보낸다.
+    """
+    if "하는 곳" in query_lower or "하는 기관" in query_lower:
+        return True
+    if "무슨 일을 하는" in query_lower or "뭐하는 곳" in query_lower or "뭐 하는 곳" in query_lower:
+        return True
+    if "기관" in query_lower and ("어떤" in query_lower or "무슨" in query_lower):
+        return True
+    if any(org in query_lower for org in ("기상청", "청은", "공사", "공단", "협회")) and (
+        "어떤 일" in query_lower or "무슨 일" in query_lower or "뭐하는" in query_lower
+    ):
+        return True
+    return False
 
 # 인사말과 함께 나올 수 있는 질문/요청 패턴. 이 패턴이 있으면 greeting보다 question 우선.
 QUESTION_PATTERNS = [
@@ -122,7 +204,7 @@ async def classify_intent_node(state: ConversationState) -> dict:
 
     # 1차: 키워드 기반 빠른 분류 (farewell 우선: "감사합니다" 등 → farewell)
     for intent, keywords in INTENT_KEYWORDS.items():
-        if any(kw in query_lower for kw in keywords):
+        if any(_keyword_matches_intent(query_lower, intent, kw) for kw in keywords):
             # 인사(greeting)인데 질문/요청 패턴도 있으면 → question으로 처리 (RAG 경로 타서 본문 답변)
             if intent == "greeting" and any(p in query_lower for p in QUESTION_PATTERNS):
                 elapsed = time.time() - node_start
@@ -131,6 +213,23 @@ async def classify_intent_node(state: ConversationState) -> dict:
                            intent="question", query=query, elapsed=f"{elapsed:.3f}s")
                 _log_intent_classify_timing(
                     call_id, elapsed_sec=elapsed, path="keyword_greeting_to_question", intent="question", query_preview=query
+                )
+                return {"intent": "question", "slots": {}, "confidence": 1.0}
+            if intent == "help" and _organization_role_question_not_help(query_lower):
+                elapsed = time.time() - node_start
+                logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="keyword")
+                logger.info(
+                    "classify_intent_help_keyword_to_question",
+                    intent="question",
+                    query=query,
+                    note="기관/조직 역할 질문 패턴 → question (help 능력 나열 경로 회피)",
+                )
+                _log_intent_classify_timing(
+                    call_id,
+                    elapsed_sec=elapsed,
+                    path="keyword_help_institution_to_question",
+                    intent="question",
+                    query_preview=query,
                 )
                 return {"intent": "question", "slots": {}, "confidence": 1.0}
             elapsed = time.time() - node_start
@@ -166,6 +265,72 @@ async def classify_intent_node(state: ConversationState) -> dict:
             query_preview=query,
         )
         return {"intent": "question", "slots": {}, "confidence": 0.95}
+    
+    # 1.6차: Persona 기반 Chitchat vs Question 분류 (LLM 전, 최종 휴리스틱 필터)
+    # 사용자 질문이 조직 페르소나(업무 범위)와 관련되면 question, 무관하면 chitchat
+    owner = state.get("_callee") or ""
+    if owner:
+        try:
+            from src.ai_voicebot.knowledge.persona_service import get_persona_service
+            persona_svc = get_persona_service()
+            if persona_svc:
+                relevance = await persona_svc.check_query_relevance(
+                    query=query,
+                    owner=owner,
+                    similarity_threshold=0.6  # 조정 가능
+                )
+                
+                if relevance["persona_found"] and not relevance["is_relevant"]:
+                    # Persona가 설정되어 있고, Query가 업무와 무관 → chitchat
+                    elapsed = time.time() - node_start
+                    logger.info(
+                        "classify_intent_persona_chitchat",
+                        intent="chitchat",
+                        query_preview=query[:50],
+                        similarity=relevance["similarity"],
+                        threshold=0.6,
+                        owner=owner,
+                        note="Query가 조직 페르소나와 무관 — chitchat 템플릿 응답",
+                    )
+                    _log_intent_classify_timing(
+                        call_id,
+                        elapsed_sec=elapsed,
+                        path="persona_chitchat",
+                        intent="chitchat",
+                        query_preview=query,
+                    )
+                    # Chitchat 템플릿을 state에 저장 (generate_response에서 사용)
+                    return {
+                        "intent": "chitchat",
+                        "slots": {},
+                        "confidence": 1.0,
+                        "_chitchat_template": relevance.get("chitchat_template"),
+                    }
+                elif relevance["persona_found"] and relevance["is_relevant"]:
+                    # Persona 설정되어 있고, Query가 업무 관련 → question으로 처리
+                    elapsed = time.time() - node_start
+                    logger.info(
+                        "classify_intent_persona_question",
+                        intent="question",
+                        query_preview=query[:50],
+                        similarity=relevance["similarity"],
+                        threshold=0.6,
+                        owner=owner,
+                        note="Query가 조직 페르소나와 관련 — question (RAG/LLM)",
+                    )
+                    _log_intent_classify_timing(
+                        call_id,
+                        elapsed_sec=elapsed,
+                        path="persona_question",
+                        intent="question",
+                        query_preview=query,
+                    )
+                    return {"intent": "question", "slots": {}, "confidence": 1.0}
+        except Exception as e:
+            logger.warning("persona_relevance_check_skipped",
+                          owner=owner,
+                          error=str(e),
+                          note="Persona 서비스 에러 — 기존 분류 로직 계속")
 
     # 2차: 짧은 발화는 question으로 간주 (LLM 없을 때)
     llm = state.get("_llm_client")
@@ -191,6 +356,14 @@ async def classify_intent_node(state: ConversationState) -> dict:
             "상담 인력 연결을 요청할 때만 사용하세요.\n"
             "기관에 '찾아가다', '방문', '오시는 길', '어떻게 가나요', '위치/주소/교통' 등 "
             "안내를 묻는 말은 정보 질문이므로 question입니다 (transfer 아님).\n"
+            "중요: '예' 뒤에 다른 한글 음절이 붙으면(예보, 예절, 예약 등) affirm이 아닙니다. "
+            "날씨·예보·알려주세요 같은 요청은 question입니다.\n"
+            "중요: chitchat은 업무와 무관한 잡담입니다.\n"
+            "chitchat 예시:\n"
+            "- AI에게 개인적 질문: '너도 좋아하니?', '당신은 어때?', 'AI는 뭘 좋아해?', '너는 행복해?'\n"
+            "- 일상 감상/소감: '날씨 좋네요', '오늘 기분 좋다', '재미있네', '심심해'\n"
+            "- 업무와 무관한 대화: '개나리가 폈더라고', '봄이 왔어', '점심 뭐 먹었어?'\n"
+            "question은 업무 정보를 묻는 것입니다 (날씨 예보, 특보, 위치, 운영시간, 연락처 등).\n"
         )
         if history_snippet:
             classify_prompt += f"최근 대화:\n{history_snippet}\n\n"
@@ -203,7 +376,10 @@ async def classify_intent_node(state: ConversationState) -> dict:
                     prompt_preview=classify_prompt.replace("\n", " "))
         try:
             result = await llm.generate_response(
-                classify_prompt, context_docs=[], system_prompt="의도 분류기"
+                classify_prompt,
+                context_docs=[],
+                system_prompt="의도 분류기",
+                max_output_tokens=64,
             )
         except Exception as llm_err:
             elapsed = time.time() - node_start

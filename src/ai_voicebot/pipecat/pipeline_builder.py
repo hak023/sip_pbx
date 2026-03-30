@@ -155,6 +155,9 @@ class PipelineBuilder:
         from src.ai_voicebot.pipecat.processors.tts_complete_notifier import TTSCompleteNotifier
         tts_complete_notifier = TTSCompleteNotifier(sync_context=tts_sync_context)
 
+        from src.ai_voicebot.pipecat.processors.korean_tts_number_processor import KoreanTTSNumberProcessor
+        korean_tts_numbers = KoreanTTSNumberProcessor(call_id=call_id)
+
         # VAD 래퍼 추가 (로깅 및 모니터링)
         from src.ai_voicebot.pipecat.processors.vad_wrapper import wrap_vad_with_logging
         # 바지인 켬: 3단어 이상 시 AI 말 멈춤 (allow_interruptions=True + user_turn_strategies와 연동)
@@ -168,6 +171,7 @@ class PipelineBuilder:
             "vad_wrapped",
             "stt",
             "rag_llm",
+            "korean_tts_numbers",
             "tts",
             "tts_complete_notifier",
             "rec_output",
@@ -179,6 +183,7 @@ class PipelineBuilder:
             vad_wrapped,
             stt,
             rag_llm,
+            korean_tts_numbers,
             tts,
             tts_complete_notifier,
             rec_output,
@@ -342,12 +347,18 @@ class PipelineBuilder:
             """Pipeline 시작 후 초기 인사말 자동 전송"""
             await asyncio.sleep(0.5)  # Pipeline 초기화 대기
             try:
-                if hasattr(pipeline, 'processors'):
-                    for proc in pipeline.processors:
-                        if hasattr(proc, 'send_greeting'):
-                            await proc.send_greeting()
-                            logger.info("initial_greeting_sent", call_id=call_id)
-                            break
+                rag_llm = getattr(pipeline, "_rag_llm", None)
+                send = getattr(rag_llm, "send_greeting", None) if rag_llm is not None else None
+                if callable(send):
+                    await send()
+                    logger.info("initial_greeting_sent", call_id=call_id, via="pipeline._rag_llm")
+                else:
+                    logger.warning(
+                        "initial_greeting_skipped_no_rag_llm",
+                        call_id=call_id,
+                        has_attr=rag_llm is not None,
+                        note="build_pipeline이 pipeline._rag_llm을 설정하지 않았거나 send_greeting 없음",
+                    )
             except asyncio.CancelledError:
                 pass
             except Exception as e:

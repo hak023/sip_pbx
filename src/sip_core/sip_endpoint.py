@@ -168,10 +168,10 @@ class SIPEndpoint:
                     # Gemini config dict 구성 (지식 정제 입력/출력 길이 포함)
                     _get = gemini_config.get if isinstance(gemini_config, dict) else lambda k, d=None: getattr(gemini_config, k, d)
                     gemini_config_dict = {
-                        "model": _get('model', 'gemini-2.5-flash'),
+                        "model": _get('model', 'gemini-2.5-flash-lite'),
                         "temperature": _get('temperature', 0.5),
-                        "max_tokens": _get('max_output_tokens', 150),
-                        "max_output_tokens": _get('max_output_tokens', 150),
+                        "max_tokens": _get('max_output_tokens', 256),
+                        "max_output_tokens": _get('max_output_tokens', 256),
                         "judgment_max_output_tokens": _get('judgment_max_output_tokens', 2048),
                         "judgment_max_input_chars": _get('judgment_max_input_chars', 6000),
                         "top_p": _get('top_p', 1.0),
@@ -416,7 +416,12 @@ class SIPEndpoint:
     def call_manager(self) -> CallManager:
         """CallManager 접근자"""
         return self._call_manager
-    
+
+    async def shutdown_sip_recording_ingest(self) -> None:
+        """녹음 RTP 인입 워커 graceful shutdown (`CallManager` 위임)."""
+        if self._call_manager:
+            await self._call_manager.shutdown_sip_recording_ingest()
+
     @property
     def transfer_manager(self):
         """TransferManager 접근자"""
@@ -963,6 +968,8 @@ class SIPEndpoint:
                             "caller": caller_uri,
                             "callee": callee_uri,
                             "is_ai_handled": call_info.get("ai_mode_activated", False),
+                            "status": "통화 연결됨 (착신 응답)",
+                            "sip_phase": "answered",
                             "timestamp": _now,
                             "started_at": _at.isoformat() if _at and hasattr(_at, "isoformat") else _now,
                         },
@@ -1721,7 +1728,21 @@ class SIPEndpoint:
                 callee_endpoint=callee_rtp_endpoint,
                 bind_ip=rtp_bind_ip,  # ✅ 설정 가능한 bind IP
                 ai_orchestrator=self.call_manager.ai_orchestrator if self.call_manager else None,  # AI 전달
-                sip_recorder=sip_recorder  # ✅ 녹음 활성화!
+                sip_recorder=sip_recorder,  # ✅ 녹음 활성화!
+                rtp_tx_debug=bool(getattr(self.config.media, "rtp_tx_debug", False)),
+                rtp_tx_debug_path=getattr(self.config.media, "rtp_tx_debug_path", None),
+                ai_rtp_silence_keepalive=bool(
+                    getattr(self.config.media, "ai_rtp_silence_keepalive", True)
+                ),
+                ai_rtp_keepalive_interval_sec=float(
+                    getattr(self.config.media, "ai_rtp_keepalive_interval_sec", 8.0)
+                ),
+                ai_rtp_adaptive_interval_enabled=bool(
+                    getattr(self.config.media, "ai_rtp_adaptive_interval", {}).get("enabled", True)
+                ),
+                ai_rtp_adaptive_interval_thresholds=getattr(
+                    self.config.media, "ai_rtp_adaptive_interval", {}
+                ).get("thresholds", None),
             )
             
             logger.debug("starting_rtp_worker", call_id=call_id)
@@ -2086,14 +2107,48 @@ class SIPEndpoint:
         
         logger.info("cleanup_call_start", call_id=call_id, original_call_id=original_call_id, b2bua_call_id=new_call_id)
 
-        # ⭐ BYE 수신 시 Pipecat Pipeline 즉시 취소 (LLM/TTS 계속 동작 방지)
+        # HITL Q&A(save_to_kb=false → 대기열)은 **Pipecat cancel 전에** 반드시 flush 한다.
+        # cancel_pipeline()이 파이프라인 finally에서 unregister_call()을 호출해
+        # _pending_kb_at_call_end를 비우면(또는 예전 순서에서는) 통화 종료 시 Chroma 적재가 영구 누락됨.
         if self._call_manager:
+            try:
+                from src.common.sip_owner import normalize_owner_username
+                from src.services.hitl import get_hitl_service
+
+                callee_addr = call_info.get("callee_addr") or ("", "")
+                _cu = call_info.get("callee_username") or ""
+                to_uri = f"sip:{_cu}@{callee_addr[0]}" if _cu else ""
+                kb_owner = normalize_owner_username(to_uri) or normalize_owner_username(_cu) or None
+                _saved = await get_hitl_service().flush_hitl_kb_for_call(original_call_id, kb_owner)
+                if _saved:
+                    logger.info(
+                        "hitl_kb_flushed_on_cleanup call_id=%s saved=%s owner_set=%s",
+                        original_call_id,
+                        _saved,
+                        bool(kb_owner),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "hitl_kb_flush_on_cleanup_failed call_id=%s error=%s",
+                    original_call_id,
+                    e,
+                )
+
+            # ⭐ BYE 수신 시 Pipecat Pipeline 즉시 취소 (LLM/TTS 계속 동작 방지)
             try:
                 cancelled = await self._call_manager.cancel_pipeline(original_call_id)
                 if cancelled:
                     logger.info("pipecat_pipeline_cancelled_on_bye", call_id=original_call_id)
             except Exception as e:
                 logger.warning("pipecat_cancel_on_cleanup_error", call_id=original_call_id, error=str(e))
+            try:
+                self._call_manager.discard_ai_enabled_call(original_call_id)
+            except Exception as e:
+                logger.warning(
+                    "ai_enabled_discard_on_cleanup_error",
+                    call_id=original_call_id,
+                    error=str(e),
+                )
 
         # 대시보드 실시간 통화: Repository에서 제거 (활성 목록에서 사라지도록)
         if self.call_manager:
@@ -2559,6 +2614,34 @@ class SIPEndpoint:
                 from_uri = f"sip:{caller_username}@{caller_addr[0]}"
                 to_uri = f"sip:{callee_username}@{callee_addr[0]}"
                 self.call_manager.register_b2bua_call(call_id, from_uri, to_uri)
+            
+            # 대시보드: INVITE 수신 직후부터 실시간 통화·대화 패널에 표시 (200 OK 전)
+            try:
+                from src.websocket import manager as ws_manager
+
+                _inv_from = f"sip:{caller_username}@{caller_addr[0]}"
+                _inv_to = f"sip:{callee_username}@{callee_addr[0]}"
+                _inv_now = datetime.now().isoformat()
+                asyncio.create_task(
+                    ws_manager.emit_call_started(
+                        call_id,
+                        {
+                            "caller": _inv_from,
+                            "callee": _inv_to,
+                            "is_ai_handled": False,
+                            "status": "착신 시도 중 (INVITE)",
+                            "sip_phase": "inviting",
+                            "timestamp": _inv_now,
+                            "started_at": _inv_now,
+                        },
+                    )
+                )
+            except Exception as _ws_inv:
+                logger.warning(
+                    "b2bua_invite_call_started_ws_failed",
+                    call_id=call_id,
+                    error=str(_ws_inv),
+                )
             
             logger.info("b2bua_call_setup",
                        caller=caller_username,
