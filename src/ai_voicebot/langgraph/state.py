@@ -58,6 +58,9 @@ class ConversationState(TypedDict, total=False):
     outbound_answers: dict                 # {질문: 답변} 수집된 응답 (아웃바운드 전용)
     outbound_mission_done: bool            # 모든 질문 답변 완료 여부
     outbound_purpose: str                  # 통화 목적 (아웃바운드 전용)
+    outbound_non_answer: bool              # 이번 발화가 유효한 답변이 아님 (욕설·감탄사·거절 등)
+    outbound_answered: list                # LLM이 추출한 {question, answer} 목록 (generate_response_node 출력)
+    outbound_is_answer: bool               # 이번 발화가 유효한 답변인지 (LLM 판단)
 
     # ── 내부 참조 (노드 간 공유) ──
     _llm_client: object           # LLM 클라이언트 참조

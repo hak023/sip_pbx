@@ -6,8 +6,11 @@ Streaming RAG: 첫 문장이 완성되면 즉시 response_chunks에 추가.
 """
 
 import asyncio
+import json as _json
+import re as _re
 import time
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 import structlog
 from src.ai_voicebot.langgraph.hitl_escalation_policy import is_social_direct_path
@@ -132,8 +135,13 @@ async def generate_response_node(state: ConversationState) -> dict:
             **_llm_exchange_rag_fields(state, [], context_source="chitchat_template"),
         }
 
+    # 아웃바운드 모드: RAG 없는 question 고정 멘트 경로를 건너뜀
+    # (착신자의 답변이 RAG 지식과 무관해도 LLM으로 자연스럽게 응대해야 함)
+    _is_outbound = bool(state.get("outbound_purpose"))
+
     # 질문으로 분류되었고 이번 턴 지식 검색 결과가 없으면 LLM 생략 → 고정 멘트 + HITL 후속
-    if intent == "question" and not rag_results:
+    # (아웃바운드는 제외: 목적/질문 기반 LLM 응대가 우선)
+    if intent == "question" and not rag_results and not _is_outbound:
         response = RESPONSE_QUESTION_NO_KNOWLEDGE
         messages = state.get("messages", [])
         updated_messages = list(messages)
@@ -166,34 +174,117 @@ async def generate_response_node(state: ConversationState) -> dict:
 
     start = time.time()
 
+    # _social은 인바운드 경로에서만 의미 있음. 아웃바운드에서는 항상 False로 초기화해
+    # 이후 코드(elif _is_llm_error_fallback, confidence 결정 등)에서 UnboundLocalError를 방지한다.
+    _social = False
+
     try:
         # 컨텍스트 조립 (§13.2 history 8턴, §4.3 chitchat 짧은 응답)
         rag_context = _format_rag_context(rag_results)
         messages = state.get("messages", [])
         history = _format_history(messages, max_turns=HISTORY_MAX_TURNS)
         org_context = state.get("org_context", "")
-        org_name = _extract_org_name(org_context)
-        chitchat_rule = ""
-        _social = is_social_direct_path(state)
-        if intent in ("chitchat", "greeting") or (_social and intent == "out_of_scope"):
-            chitchat_rule = (
-                "9. [지금은 일상 말걸기·범위 밖 잡담입니다] 지식 문서에 없어도 됩니다. "
-                "1~2문장으로 짧게 공감하거나 가볍게 답하고, "
-                "업무 문의는 환영한다고 안내하세요. "
-                "「알지 못하는 내용입니다」 같은 한계 멘트는 쓰지 마세요."
+
+        if _is_outbound:
+            # ── 아웃바운드 전용 프롬프트 ──
+            outbound_purpose = state.get("outbound_purpose", "")
+            outbound_questions = state.get("outbound_questions") or []
+            outbound_answers = state.get("outbound_answers") or {}
+            answered = list(outbound_answers.keys())
+            unanswered = [q for q in outbound_questions if q not in outbound_answers]
+
+            # 진행 상황 블록
+            if outbound_questions:
+                answered_lines = "\n".join(
+                    f"  - {q}: {outbound_answers[q]}" for q in answered
+                ) or "  (없음)"
+                unanswered_lines = "\n".join(
+                    f"  - {q}" for q in unanswered
+                ) or "  (없음)"
+                progress_block = (
+                    f"[진행 상황]\n"
+                    f"  답변 완료({len(answered)}개):\n{answered_lines}\n"
+                    f"  미수집({len(unanswered)}개):\n{unanswered_lines}"
+                )
+            else:
+                progress_block = f"[통화 목적] {outbound_purpose}"
+
+            next_question = unanswered[0] if unanswered else ""
+
+            # ── JSON 응답 형식 지시 ──
+            # LLM이 응대 생성과 답변 추출을 한 번에 수행한다.
+            # 파싱 후 response 필드만 TTS로 출력하고,
+            # answered 필드는 rag_processor에서 _outbound_answers에 직접 적용한다.
+            json_format_instruction = (
+                "반드시 아래 JSON 형식으로만 답하세요. JSON 외 다른 텍스트는 절대 출력하지 마세요.\n\n"
+                "{\n"
+                '  "response": "착신자에게 할 말 (TTS로 읽힐 텍스트)",\n'
+                '  "answered": [\n'
+                '    {"question": "수집된 질문 원문", "answer": "착신자 답변 요약"}\n'
+                "  ],\n"
+                '  "is_answer": true\n'
+                "}\n\n"
+                "규칙:\n"
+                "- answered: 이번 발화에서 수집된 질문·답변 쌍. 수집된 것이 없으면 빈 배열 [].\n"
+                "- is_answer: 이번 발화가 미수집 질문에 대한 유효한 답변이면 true, 아니면 false.\n"
+                "  (욕설·거절·감탄사·무관한 말 등은 false)\n"
+                "- response 작성 규칙:\n"
             )
 
-        # 설계 §14.2: 대화 단계·요약을 프롬프트에 주입
-        stage_and_summary = _format_stage_and_summary(state)
+            if next_question:
+                json_format_instruction += (
+                    f"  1. 착신자 발화에 자연스럽게 반응하는 1문장을 먼저 쓰세요.\n"
+                    f"  2. is_answer=false이면 미수집 질문을 표현을 바꿔 다시 물어보세요: 「{next_question}」\n"
+                    f"  3. is_answer=true이면 다음 미수집 질문이 있으면 이어서 물어보세요.\n"
+                    "  4. 전체 2~3문장 이내, 통화이므로 짧고 자연스럽게.\n"
+                    "  5. 「알지 못하는 내용입니다」 같은 한계 멘트는 절대 쓰지 마세요."
+                )
+            else:
+                json_format_instruction += (
+                    "  1. 착신자 발화에 자연스럽게 반응하는 1문장을 쓰세요.\n"
+                    "  2. 모든 질문이 수집되었으므로 감사 인사와 함께 통화를 마무리하세요.\n"
+                    "  3. 2~3문장 이내로 간결하게."
+                )
 
-        system_prompt = RESPONSE_SYSTEM_PROMPT.format(
-            org_name=org_name,
-            org_context=org_context,
-            stage_and_summary=stage_and_summary,
-            history=history,
-            rag_context=rag_context or "(관련 정보 없음)",
-            chitchat_rule=chitchat_rule,
-        )
+            system_prompt = (
+                "당신은 아웃바운드 AI 통화 어시스턴트입니다.\n\n"
+                f"[통화 목적]\n{outbound_purpose}\n\n"
+                f"{progress_block}\n\n"
+                f"[대화 기록]\n{history}\n\n"
+                f"{json_format_instruction}"
+            )
+            logger.info(
+                "generate_response_outbound_prompt",
+                outbound_purpose=outbound_purpose[:60],
+                answered_count=len(answered),
+                unanswered_count=len(unanswered),
+                next_question=next_question[:60] if next_question else "",
+                note="LLM JSON 단일 호출 — 응대 생성 + 답변 추출 동시 수행",
+            )
+        else:
+            # ── 인바운드 기존 로직 ──
+            org_name = _extract_org_name(org_context)
+            chitchat_rule = ""
+            _social = is_social_direct_path(state)
+            if intent in ("chitchat", "greeting") or (_social and intent == "out_of_scope"):
+                chitchat_rule = (
+                    "9. [지금은 일상 말걸기·범위 밖 잡담입니다] 지식 문서에 없어도 됩니다. "
+                    "1~2문장으로 짧게 공감하거나 가볍게 답하고, "
+                    "업무 문의는 환영한다고 안내하세요. "
+                    "「알지 못하는 내용입니다」 같은 한계 멘트는 쓰지 마세요."
+                )
+
+            # 설계 §14.2: 대화 단계·요약을 프롬프트에 주입
+            stage_and_summary = _format_stage_and_summary(state)
+
+            system_prompt = RESPONSE_SYSTEM_PROMPT.format(
+                org_name=org_name,
+                org_context=org_context,
+                stage_and_summary=stage_and_summary,
+                history=history,
+                rag_context=rag_context or "(관련 정보 없음)",
+                chitchat_rule=chitchat_rule,
+            )
 
         # 스트리밍 LLM 호출 (최적화 4.9: 문장 단위로 수집)
         request_sent_at = datetime.now().isoformat()
@@ -249,20 +340,46 @@ async def generate_response_node(state: ConversationState) -> dict:
             raise
         response_received_at = datetime.now().isoformat()
 
+        # ── 아웃바운드: LLM JSON 파싱 (응대 + 답변 추출 분리) ──
+        outbound_answered: List[Dict] = []   # rag_processor에서 _outbound_answers에 적용
+        outbound_is_answer: bool = True      # 이번 발화가 유효한 답변인지
+        if _is_outbound:
+            response, outbound_answered, outbound_is_answer = _parse_outbound_llm_json(response)
+            # 스트리밍으로 수집된 chunks에는 JSON 원문 파편이 들어 있으므로
+            # 파싱 후 실제 response 텍스트로 chunks를 재생성한다 (TTS garbage 방지)
+            chunks = _split_into_chunks(response) if response else []
+            logger.info(
+                "outbound_llm_answer_extracted",
+                answered_count=len(outbound_answered),
+                is_answer=outbound_is_answer,
+                chunk_count=len(chunks),
+                answered_preview=[
+                    {"q": d["question"][:30], "a": d["answer"][:30]}
+                    for d in outbound_answered
+                ],
+            )
+
         needs_follow_up = False
         if not response or not response.strip():
             response = "죄송합니다. 답변을 생성하지 못했습니다. 다시 말씀해 주시겠어요?"
             chunks = [response]
         elif _is_llm_error_fallback(response):
-            logger.warning("generate_response_llm_error_fallback", response_preview=response)
-            if _social or intent in ("chitchat", "out_of_scope", "greeting"):
+            logger.warning("generate_response_llm_error_fallback", response_preview=response,
+                           is_outbound=_is_outbound)
+            if _is_outbound:
+                # 아웃바운드: LLM 오류 시에도 HITL 없이 재시도 유도 멘트
+                response = "잠시 응답이 어려웠어요. 다시 한 번 말씀해 주시겠어요?"
+                needs_follow_up = False
+            elif _social or intent in ("chitchat", "out_of_scope", "greeting"):
                 response = "잠시 응답이 어려웠어요. 편하게 이어서 말씀해 주세요."
                 needs_follow_up = False
             else:
                 response = RESPONSE_UNKNOWN_NEEDS_FOLLOWUP
                 needs_follow_up = True
             chunks = [response]
-        elif _is_unknown_content_response(response):
+        elif not _is_outbound and _is_unknown_content_response(response):
+            # 아웃바운드: "알지 못하는 내용입니다" 패턴이어도 HITL 없이 그대로 출력
+            # (착신자 답변 수집 중 LLM이 부자연스러운 응답을 낼 수 있음 — 미션 체크로 별도 처리)
             needs_follow_up = True
             if _social or intent in ("chitchat", "out_of_scope", "greeting"):
                 needs_follow_up = False
@@ -331,6 +448,10 @@ async def generate_response_node(state: ConversationState) -> dict:
             "confidence": confidence,
             "needs_follow_up": needs_follow_up,
             "follow_up_user_query": user_query if needs_follow_up else "",
+            # 아웃바운드 전용: LLM이 추출한 답변 목록 + 유효 답변 여부
+            # rag_processor._process_with_agent에서 읽어 _outbound_answers에 직접 적용
+            "outbound_answered": outbound_answered,
+            "outbound_is_answer": outbound_is_answer,
             **_llm_exchange_rag_fields(state, rag_results, context_source=_rag_src),
         }
 
@@ -486,3 +607,80 @@ def _split_into_chunks(text: str) -> list:
     import re
     sentences = re.split(r'(?<=[.?!])\s+', text)
     return [s.strip() for s in sentences if s.strip()]
+
+
+# ── 아웃바운드 LLM JSON 응답 파싱 ──
+
+def _parse_outbound_llm_json(raw: str) -> Tuple[str, List[Dict], bool]:
+    """아웃바운드 LLM 응답(JSON)에서 response/answered/is_answer를 추출한다.
+
+    LLM이 JSON 외 텍스트를 섞거나 마크다운 코드 블록으로 감싼 경우도 처리한다.
+
+    Returns:
+        (response_text, answered_list, is_answer)
+        파싱 실패 시 (raw 전체, [], True) — 안전하게 TTS 출력은 보장
+    """
+    if not raw:
+        return ("", [], True)
+
+    # 마크다운 코드 블록 제거 (```json ... ``` 또는 ``` ... ```)
+    cleaned = _re.sub(r"```(?:json)?\s*", "", raw).replace("```", "").strip()
+
+    # { } 범위 추출 (중첩 깊이 추적)
+    start = cleaned.find("{")
+    if start == -1:
+        # JSON 없음 → raw 전체를 response로 사용
+        logger.warning("outbound_llm_json_no_brace", raw_preview=raw[:120])
+        return (raw.strip(), [], True)
+
+    depth = 0
+    end = -1
+    for i, ch in enumerate(cleaned[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+
+    if end == -1:
+        logger.warning("outbound_llm_json_unclosed", raw_preview=raw[:120])
+        return (raw.strip(), [], True)
+
+    try:
+        data = _json.loads(cleaned[start : end + 1])
+    except (_json.JSONDecodeError, ValueError) as e:
+        logger.warning("outbound_llm_json_parse_error", error=str(e), raw_preview=raw[:120])
+        return (raw.strip(), [], True)
+
+    response_text = (data.get("response") or "").strip()
+    answered_raw = data.get("answered") or []
+    is_answer = bool(data.get("is_answer", True))
+
+    # answered 형식 검증: [{"question": ..., "answer": ...}]
+    answered: List[Dict] = []
+    if isinstance(answered_raw, list):
+        for item in answered_raw:
+            if isinstance(item, dict):
+                q = (item.get("question") or "").strip()
+                a = (item.get("answer") or "").strip()
+                if q and a:
+                    answered.append({"question": q, "answer": a})
+
+    if not response_text:
+        # response 필드가 비었으면 raw 전체를 fallback으로 사용
+        logger.warning(
+            "outbound_llm_json_empty_response",
+            answered_count=len(answered),
+            raw_preview=raw[:120],
+        )
+        response_text = raw.strip()
+
+    logger.info(
+        "outbound_llm_json_parsed",
+        response_len=len(response_text),
+        answered_count=len(answered),
+        is_answer=is_answer,
+    )
+    return (response_text, answered, is_answer)

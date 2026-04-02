@@ -102,6 +102,7 @@ class PipelineBuilder:
         hitl_on_alert: Optional[Callable[..., Any]] = None,
         stt_post_filter_config: Optional[Dict[str, Any]] = None,
         tts_sync_context: Optional[Dict[str, Any]] = None,
+        is_outbound: bool = False,
     ) -> Any:
         """
         Voice 파이프라인 인스턴스 생성 (실행하지 않음).
@@ -149,6 +150,8 @@ class PipelineBuilder:
             hitl_on_alert=hitl_on_alert,
             tts_sync_context=tts_sync_context,
             stt_post_filter_config=stt_post_filter_config,
+            # 개선안 3: Debounce 비활성화 → 즉시 처리 + Supersede 방식으로 분할 STT 병합
+            stt_final_debounce_sec=0.0,
         )
 
         # TTS 완료 감지 프로세서 (Phase 1/2 인사말 동기화용)
@@ -160,8 +163,22 @@ class PipelineBuilder:
 
         # VAD 래퍼 추가 (로깅 및 모니터링)
         from src.ai_voicebot.pipecat.processors.vad_wrapper import wrap_vad_with_logging
-        # 바지인 켬: 3단어 이상 시 AI 말 멈춤 (allow_interruptions=True + user_turn_strategies와 연동)
-        vad_wrapped = wrap_vad_with_logging(vad, call_id=call_id, enable_barge_in=True)
+        # 아웃바운드: TTS 재생 중 STT 입력 억제 (에코 방지)
+        # inbound는 suppress_stt_during_tts=False (기존 동작 유지)
+        vad_wrapped = wrap_vad_with_logging(
+            vad,
+            call_id=call_id,
+            enable_barge_in=True,
+            suppress_stt_during_tts=is_outbound,
+            tts_sync_context=tts_sync_context if is_outbound else None,
+        )
+        logger.info(
+            "vad_wrapper_suppress_stt_configured",
+            call_id=call_id,
+            is_outbound=is_outbound,
+            suppress_stt_during_tts=is_outbound,
+            note="아웃바운드=True 시 TTS 재생 중 STT 입력 억제 활성화",
+        )
 
         # 바지인 켬: Interruption* 프레임을 TTS까지 전달 (3단어 조건은 user_turn_strategies에서 MinWordsUserTurnStartStrategy로 시도)
         # LLMUserAggregator 미사용 시 VAD 기준으로 동작할 수 있음 — 필요 시 BargeInSuppressProcessor 재도입 가능
@@ -251,6 +268,7 @@ class PipelineBuilder:
                 org_manager = None
 
         tts_sync_context: Dict[str, Any] = {}
+        _is_outbound = bool(outbound_purpose or outbound_questions)
         pipeline = self.build_pipeline(
             rtp_worker,
             vad=vad,
@@ -269,6 +287,7 @@ class PipelineBuilder:
             hitl_on_alert=hitl_on_alert,
             stt_post_filter_config=stt_post_filter_config,
             tts_sync_context=tts_sync_context,
+            is_outbound=_is_outbound,
             **kwargs,
         )
 

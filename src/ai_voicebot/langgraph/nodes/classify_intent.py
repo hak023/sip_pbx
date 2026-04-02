@@ -186,11 +186,30 @@ async def classify_intent_node(state: ConversationState) -> dict:
     1차: 키워드 기반 빠른 매칭 (<1ms)
     2차: 인사+질문 동시 존재 시 question 우선 (짧은 인사만 greeting)
     3차: LLM 기반 분류 (키워드 매칭 실패 시)
+
+    아웃바운드 모드(outbound_purpose 존재): LLM 분류 완전 스킵.
+    착신자 발화는 intent 무관하게 generate_response_node에서 처리하므로
+    keyword 분류만 수행하거나 "outbound_answer"로 고정한다.
     """
     import time
     node_start = time.time()
     
     call_id = state.get("_call_id") or ""
+
+    # 아웃바운드 모드: LLM classify 완전 스킵 — 어차피 _route_after_classify에서
+    # generate_response로 직행하므로 intent는 의미 없음. 최소 비용으로 통과.
+    if state.get("outbound_purpose"):
+        elapsed = time.time() - node_start
+        logger.info(
+            "classify_intent_outbound_skip",
+            call_id=call_id,
+            elapsed_sec=round(elapsed, 4),
+            note="아웃바운드 모드 — LLM classify 스킵, generate_response 직행",
+        )
+        _log_intent_classify_timing(
+            call_id, elapsed_sec=elapsed, path="outbound_skip", intent="outbound_answer"
+        )
+        return {"intent": "outbound_answer", "slots": {}, "confidence": 1.0}
 
     query = state.get("user_query", "").strip()
     if not query:

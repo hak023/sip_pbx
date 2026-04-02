@@ -80,7 +80,12 @@ def _broadcast_call_debug_trace(payload: Dict[str, Any]) -> None:
 
 
 def _ensure_file() -> Optional[Any]:
-    """날짜에 해당하는 오늘자 로그 파일 핸들 반환 (날짜 바뀌면 새 파일)."""
+    """날짜에 해당하는 오늘자 로그 파일 핸들 반환 (날짜 바뀌면 새 파일).
+
+    파일을 처음 열 때 마지막 바이트를 확인한다.
+    이전 서버 비정상 종료로 마지막 라인이 개행 없이 끝났을 경우
+    새 개행을 삽입하여 다음 JSON 라인이 이전 라인에 붙지 않도록 한다.
+    """
     global _current_date, _file_handle
     today = _today_str()
     with _lock:
@@ -96,6 +101,15 @@ def _ensure_file() -> Optional[Any]:
             log_dir = _get_log_dir()
             path = log_dir / f"call_data_record_{today}.log"
             try:
+                # 기존 파일이 있으면 마지막 바이트 확인 — 개행 없이 끝난 경우 복구
+                if path.exists() and path.stat().st_size > 0:
+                    with open(path, "rb") as _rb:
+                        _rb.seek(-1, 2)
+                        last_byte = _rb.read(1)
+                    if last_byte != b"\n":
+                        # 잘린 라인 뒤에 개행 추가 → 다음 JSON이 새 줄에 기록됨
+                        with open(path, "ab") as _ab:
+                            _ab.write(b"\n")
                 _file_handle = open(path, "a", encoding="utf-8", buffering=1)
             except Exception:
                 return None
@@ -139,6 +153,12 @@ def log_call_data(
         # JSON 직렬화 시 ensure_ascii=False, default=str
         line = json.dumps(payload, ensure_ascii=False, default=str) + "\n"
         with _lock:
+            # 서버 종료 시 close_call_data_record_log()가 먼저 호출된 뒤
+            # 이미 스케줄된 코루틴이 뒤늦게 log_call_data를 부르면 ValueError("I/O on closed file")가
+            # 발생해 main.py의 최상위 except에서 "Fatal Error"로 출력된다.
+            # f.closed를 명시적으로 확인해 조용히 스킵한다.
+            if f.closed:
+                return
             f.write(line)
             f.flush()
         # 대시보드 실시간 디버그 (logs/call_data_record_*.log 와 동일 필드)

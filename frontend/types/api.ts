@@ -43,6 +43,8 @@ export interface CallHistoryRecordItem {
   directory?: string;
   caller_id?: string;
   callee_id?: string;
+  /** 통화 방향: "inbound"(수신) 또는 "outbound"(발신). 구형 레코드는 undefined일 수 있음. */
+  direction?: "inbound" | "outbound" | string;
   start_time?: string;
   end_time?: string;
   duration?: number;

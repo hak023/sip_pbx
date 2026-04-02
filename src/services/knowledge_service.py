@@ -27,6 +27,15 @@ class KnowledgeService:
         self._vector_db = vector_db
         self._embedder = embedder
         self._extraction_pending_file = extraction_pending_file
+
+    @property
+    def vector_db(self):
+        """OrganizationInfoManager 등 외부에서 vector_db 직접 접근 시 사용."""
+        return self._vector_db
+
+    @property
+    def embedder(self):
+        return self._embedder
     
     async def add_knowledge(
         self,
@@ -208,6 +217,44 @@ class KnowledgeService:
             logger.error("knowledge_get_all_error", error=str(e))
             return []
     
+    async def increment_hit_count(self, doc_id: str) -> int:
+        """
+        지식 문서의 hit_count를 1 증가시킨다.
+
+        ChromaDB 메타데이터를 읽어 hit_count를 올린 뒤 upsert로 덮어씌운다.
+        임베딩 재계산 없이 메타데이터만 교체하기 위해 collection.update()를 사용한다.
+
+        Returns:
+            갱신 후 hit_count (실패 시 -1)
+        """
+        try:
+            def _run() -> int:
+                res = self._vector_db.collection.get(
+                    ids=[doc_id],
+                    include=["metadatas"],
+                )
+                ids_out = res.get("ids") or []
+                if not ids_out:
+                    logger.warning("hit_count_doc_not_found", doc_id=doc_id)
+                    return -1
+                meta = (res.get("metadatas") or [{}])[0] or {}
+                new_count = int(meta.get("hit_count") or 0) + 1
+                meta["hit_count"] = new_count
+                self._vector_db.collection.update(ids=[doc_id], metadatas=[meta])
+                return new_count
+
+            new_count = await asyncio.to_thread(_run)
+            if new_count >= 0:
+                logger.info(
+                    "knowledge_hit_count_incremented",
+                    doc_id=doc_id,
+                    hit_count=new_count,
+                )
+            return new_count
+        except Exception as e:
+            logger.error("knowledge_hit_count_error", doc_id=doc_id, error=str(e))
+            return -1
+
     async def delete_knowledge(self, doc_id: str) -> bool:
         """
         지식 삭제

@@ -704,6 +704,76 @@ async def run_server(config: Config) -> int:
                 pass
             return 1
 
+        # help 캐시 자동 구성 — 서버 기동 직후 비동기 태스크로 스케줄
+        # CLEAR_QA_CACHE_ON_START=1(기본값)로 인해 qa_cache가 이미 초기화된 후 실행되어야 함
+        if ai_voicebot_enabled:
+            try:
+                from src.ai_voicebot.knowledge.knowledge_service import build_help_cache_on_startup
+                from src.ai_voicebot.knowledge.chromadb_client import get_vector_db
+                from src.ai_voicebot.knowledge.embedder import get_text_embedder as _get_embedder
+
+                _help_vector_db = get_vector_db()
+                _help_embedder = _get_embedder()
+
+                # LLM 클라이언트 — question KB 자동 추출용 (없으면 help KB 직접 입력만 사용)
+                _help_llm = None
+                try:
+                    from src.ai_voicebot.ai_pipeline.llm_client import LLMClient
+                    _help_llm = LLMClient()
+                except Exception:
+                    pass
+
+                # 등록된 모든 owner(테넌트)에 대해 help 캐시 구성
+                # owner 목록: config에 명시된 내선번호 또는 ChromaDB에서 조회
+                _help_owners: list = []
+                try:
+                    _cfg_extensions = getattr(getattr(config, "sip", None), "extensions", None) or []
+                    _help_owners = [str(ext) for ext in _cfg_extensions if ext]
+                except Exception:
+                    pass
+
+                if _help_owners and _help_vector_db and _help_embedder:
+                    import asyncio as _asyncio
+
+                    async def _run_help_cache_startup():
+                        import asyncio
+                        for _owner in _help_owners:
+                            try:
+                                await build_help_cache_on_startup(
+                                    vector_db=_help_vector_db,
+                                    embedder=_help_embedder,
+                                    llm=_help_llm,
+                                    owner=_owner,
+                                )
+                            except Exception as _e:
+                                logger.warning(
+                                    "help_cache_startup_owner_failed",
+                                    owner=_owner,
+                                    error=str(_e),
+                                )
+                        logger.info("help_cache_startup_all_done", owners=_help_owners)
+
+                    # 메인 이벤트 루프에 태스크 등록 (2초 딜레이 — qa_cache 초기화 완료 후 실행)
+                    async def _delayed_help_cache():
+                        await _asyncio.sleep(2.0)
+                        await _run_help_cache_startup()
+
+                    _asyncio.ensure_future(_delayed_help_cache())
+                    logger.info(
+                        "help_cache_startup_scheduled",
+                        owners=_help_owners,
+                        note="2초 후 help 캐시 자동 구성 예정",
+                    )
+                else:
+                    logger.info(
+                        "help_cache_startup_skipped",
+                        has_owners=bool(_help_owners),
+                        has_vector_db=bool(_help_vector_db),
+                        has_embedder=bool(_help_embedder),
+                    )
+            except Exception as _he:
+                logger.warning("help_cache_startup_schedule_failed", error=str(_he))
+
         # WebSocket 서버 기동 (실시간 대화 STT/TTS 표시용) — 별도 스레드에서 실행해 메인 루프와 태스크 생명주기 분리 (destroyed but pending 방지)
         _ws_port = 8001
         try:
@@ -847,6 +917,12 @@ def main() -> int:
     except ConfigurationError:
         return 1
     except Exception as e:
+        # 서버 종료 후 잔류 태스크가 이미 닫힌 로그 파일에 write를 시도할 때
+        # "I/O operation on closed file" ValueError가 여기까지 전파될 수 있다.
+        # 이는 정상 종료 시퀀스의 일부이므로 조용히 처리한다.
+        err_msg = str(e)
+        if "I/O operation on closed file" in err_msg or "closed file" in err_msg:
+            return 0
         print_immediate(f"\n❌ Fatal Error: {e}", file=sys.stderr)
         return 1
 

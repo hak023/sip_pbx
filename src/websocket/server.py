@@ -828,7 +828,33 @@ async def start_server() -> None:
                 "message": f"오류: {str(e)}"
             }
 
-    runner = web.AppRunner(app)
+    # ClientConnectionResetError: 클라이언트가 먼저 연결을 끊은 뒤 서버가 응답을 보내려 할 때
+    # 발생하는 무해한 에러다 (브라우저 탭 닫기, 페이지 이동, 네트워크 재연결 등).
+    # aiohttp web_protocol.py가 ERROR 레벨로 출력하는 스택트레이스를 logging filter로 억제한다.
+    import logging as _logging
+
+    class _SuppressClientResetFilter(_logging.Filter):
+        """aiohttp가 ClientConnectionResetError 를 ERROR로 출력하는 것을 DEBUG로 낮춤."""
+        def filter(self, record: _logging.LogRecord) -> bool:
+            if record.levelno >= _logging.ERROR and record.exc_info:
+                exc = record.exc_info[1]
+                try:
+                    from aiohttp.client_exceptions import ClientConnectionResetError as _CCRE
+                    if isinstance(exc, _CCRE):
+                        record.levelno = _logging.DEBUG
+                        record.levelname = "DEBUG"
+                        return record.levelno >= _logging.root.level
+                except ImportError:
+                    pass
+            return True
+
+    _aiohttp_logger = _logging.getLogger("aiohttp.server")
+    _aiohttp_logger.addFilter(_SuppressClientResetFilter())
+
+    runner = web.AppRunner(
+        app,
+        handle_signals=False,
+    )
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WS_PORT)
     await site.start()

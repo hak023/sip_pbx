@@ -1105,7 +1105,7 @@ export default function Dashboard() {
       </section>
 
       {/* 통화 이력 (최근 20건) */}
-      <section className="bg-white p-6 rounded-lg shadow-md">
+      <section className="mt-8 bg-white p-6 rounded-lg shadow-md">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-gray-800">통화 이력 (최근 20건)</h2>
           <button
@@ -1127,6 +1127,7 @@ export default function Dashboard() {
               <thead>
                 <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-200 bg-gray-50">
                   <th className="px-3 py-2.5 w-10" aria-label="펼침" />
+                  <th className="px-3 py-2.5">방향</th>
                   <th className="px-3 py-2.5">시작</th>
                   <th className="px-3 py-2.5">발신</th>
                   <th className="px-3 py-2.5">착신</th>
@@ -1153,6 +1154,13 @@ export default function Dashboard() {
                         >
                           {open ? "접기" : "펼치기"}
                         </button>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {row.direction === "outbound" ? (
+                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium bg-sky-100 text-sky-800">↑ 발신</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">↓ 수신</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-gray-800 whitespace-nowrap">{formatWhen(row.start_time)}</td>
                       <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.caller_id || ""}>

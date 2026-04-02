@@ -123,6 +123,11 @@ class RTPRelayWorker:
         self.caller_endpoint = caller_endpoint
         self.callee_endpoint = callee_endpoint
         self.bind_ip = bind_ip  # Bind IP 저장
+
+        # TTS RTP를 실제로 보낼 목적지 엔드포인트.
+        # None이면 인바운드 기본값(caller_endpoint)을 사용.
+        # Outbound AI 콜에서는 sip_endpoint.py가 callee_endpoint로 설정한다.
+        self.tts_dest_endpoint: Optional[RTPEndpoint] = None
         
         # ✅ Windows Proactor sendto 동시성 보호 (AssertionError 방지)
         self._sendto_lock = asyncio.Lock()
@@ -962,10 +967,11 @@ class RTPRelayWorker:
             self._rtp_packet_builder = RTPPacketBuilder(codec=codec)
         
         try:
-            # ✅ Caller의 실제 RTP 수신 포트 (SDP에서 가져온 포트)
-            caller_ip = str(self.caller_endpoint.ip)
-            caller_port = int(self.caller_endpoint.port)
-            
+            # tts_dest_endpoint가 설정된 경우(outbound) 그것을 사용, 없으면 caller_endpoint(inbound 기본값)
+            _tts_dest = self.tts_dest_endpoint or self.caller_endpoint
+            dest_ip = str(_tts_dest.ip)
+            dest_port = int(_tts_dest.port)
+
             # PCM(16kHz) → G.711 → RTP 패킷들로 변환
             rtp_packets = self._rtp_packet_builder.build_packets(audio_data, sample_rate=16000)
             
@@ -973,7 +979,7 @@ class RTPRelayWorker:
                 try:
                     # 동기 메서드이므로 직접 전송 (레거시 메서드, Pipecat 모드에서는 미사용)
                     transport.sendto(
-                        packet, (caller_ip, caller_port)
+                        packet, (dest_ip, dest_port)
                     )
                     self.stats["callee_audio_packets"] += 1
                 except Exception as e:
@@ -1084,7 +1090,11 @@ class RTPRelayWorker:
     async def _process_tts_udp_item(self, item: TTS_UDP_QUEUE_ITEM) -> None:
         packet, addr, rec_payload, meta = self._unpack_tts_udp_item(item)
         tx_kind = str((meta or {}).get("tx_kind") or "media")
-        if self.ai_mode:
+        # tts_dest_endpoint가 있으면(outbound) callee 소켓 우선 사용.
+        # 없으면(inbound) ai_mode: caller 소켓 우선(인바운드 기본값).
+        if self.tts_dest_endpoint is not None:
+            _transport = self.callee_audio_transport or self.caller_audio_transport
+        elif self.ai_mode:
             _transport = self.caller_audio_transport or self.callee_audio_transport
         else:
             _transport = self.callee_audio_transport or self.caller_audio_transport
@@ -1576,18 +1586,22 @@ class RTPRelayWorker:
                     self._wait_until_send_deadline(target_time)
                     continue
 
+                # TTS 전송용 transport: ai_mode면 caller 소켓 우선(인바운드와 동일 로직)
                 if self.ai_mode:
                     _chk_transport = self.caller_audio_transport or self.callee_audio_transport
                 else:
                     _chk_transport = self.callee_audio_transport or self.caller_audio_transport
-                if not _chk_transport or not self.caller_endpoint:
+                # tts_dest_endpoint가 설정되어 있으면 그것을 목적지로 사용(outbound),
+                # 없으면 caller_endpoint 폴백(인바운드 기본값)
+                _tts_dest = self.tts_dest_endpoint or self.caller_endpoint
+                if not _chk_transport or not _tts_dest:
                     self._rtp_packets_sent_total += 1
                     target_time = self._rtp_base_time + (self._rtp_packets_sent_total * FIXED_INTERVAL_SEC)
                     self._wait_until_send_deadline(target_time)
                     continue
 
-                caller_ip = str(self.caller_endpoint.ip)
-                caller_port = int(self.caller_endpoint.port)
+                caller_ip = str(_tts_dest.ip)
+                caller_port = int(_tts_dest.port)
 
                 # 4) AEC far-end 참조 (실제 미디어만)
                 if not pcm_is_silence and self._aec_processor:
@@ -1885,12 +1899,14 @@ class RTPRelayWorker:
         )
         self._tts_sender_thread.start()
 
+        _tts_dest = self.tts_dest_endpoint or self.caller_endpoint
         logger.info(
             "pipecat_mode_enabled",
             call_id=self.media_session.call_id,
             codec=codec,
             ssrc=self._rtp_packet_builder.ssrc,
             caller_endpoint=f"{self.caller_endpoint.ip}:{self.caller_endpoint.port}",
+            tts_dest_endpoint=f"{_tts_dest.ip}:{_tts_dest.port}",
             has_transport=self.caller_audio_transport is not None or self.callee_audio_transport is not None,
             note="Pipecat 모드: PCM Queue + TTS RTP 송신 전용 스레드(20ms) + 루프 UDP 전송",
         )
@@ -2071,7 +2087,10 @@ class RTPRelayWorker:
                         total_pcm_chunks_session=self._audio_chunks_total,
                         trace_call_id_verbose=_tverb,
                         **_tctx,
-                        dest_caller_rtp=f"{self.caller_endpoint.ip}:{self.caller_endpoint.port}",
+                        dest_caller_rtp="{ip}:{port}".format(
+                            ip=(self.tts_dest_endpoint or self.caller_endpoint).ip,
+                            port=(self.tts_dest_endpoint or self.caller_endpoint).port,
+                        ),
                         note="TTS PCM→송신 스레드 큐 투입 (인사·대기안내 stream_label과 RTP 끊김 상관)",
                     )
             
@@ -2147,12 +2166,6 @@ class RTPRelayWorker:
                 _kw["last_segment_timing_error_ms"] = round(_wall_ms - _expected_seg_ms, 2)
             logger.info("rtp_absolute_timing_summary", **_kw)
 
-        # 타이밍 상태 리셋 (세션 요약과 무관하게 정리)
-        self._rtp_base_time = None
-        self._rtp_packets_sent_total = 0
-        self._rtp_last_send_time = None
-        self._rtp_new_segment_after_empty = False
-
         self._aec_processor = None
         self._aec_near_buffer = b""
         if self._pipecat_audio_queue:
@@ -2175,6 +2188,13 @@ class RTPRelayWorker:
                               call_id=self.media_session.call_id,
                               note="sender thread가 20초 내 종료되지 않음")
         self._tts_sender_thread = None
+
+        # 타이밍 상태 리셋: 스레드 join 완료 후 리셋해야 None+float TypeError를 방지할 수 있음
+        # (스레드가 살아있는 동안 _rtp_base_time=None으로 만들면 target_time 계산에서 에러 발생)
+        self._rtp_base_time = None
+        self._rtp_packets_sent_total = 0
+        self._rtp_last_send_time = None
+        self._rtp_new_segment_after_empty = False
 
         self._flush_tts_udp_queue_blocking()
         self._rtp_tx_debug_close()

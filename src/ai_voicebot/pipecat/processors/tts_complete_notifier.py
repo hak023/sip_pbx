@@ -24,6 +24,7 @@ logger = structlog.get_logger(__name__)
 KEY_ON_TTS_COMPLETE = "on_tts_complete"
 KEY_LAST_TTS_DURATION_SEC = "last_tts_duration_sec"
 KEY_LAST_TTS_FRAME_COUNT = "last_tts_audio_frame_count"  # tts_rtp_duration_mismatch 로그 강화용
+KEY_TTS_PLAYING = "tts_playing"  # TTS 재생 중 여부 (VADWrapperProcessor에서 STT 억제 용도)
 
 # 16-bit PCM 기준: bytes -> 초
 def _audio_duration_sec(audio_bytes: bytes, sample_rate: int, num_channels: int = 1) -> float:
@@ -44,6 +45,17 @@ class TTSCompleteNotifier(FrameProcessor):
         self._current_duration_sec: float = 0.0
         self._expecting_first_audio: bool = True  # 응답별 첫 오디오 수신 시 로그용
         self._audio_frame_count: int = 0  # 이번 응답에서 누적한 오디오 프레임 수 (디버깅)
+
+    async def _clear_tts_playing_after(self, delay_sec: float) -> None:
+        """TTS 종료 후 짧은 대기 뒤 tts_playing 플래그를 해제한다 (RTP 테일 에코 흡수)."""
+        await asyncio.sleep(delay_sec)
+        self._sync_context[KEY_TTS_PLAYING] = False
+        logger.debug(
+            "tts_playing_flag_cleared",
+            call_id=self._sync_context.get("_call_id", ""),
+            delay_sec=delay_sec,
+            note="TTS 재생 종료 + 버퍼 후 플래그 해제 → VAD STT 억제 비활성화",
+        )
 
     def _add_audio_duration(self, frame: Frame) -> None:
         """오디오 프레임이면 재생 길이 누적 (OutputAudioRawFrame, TTSAudioRawFrame 등)."""
@@ -76,6 +88,13 @@ class TTSCompleteNotifier(FrameProcessor):
             self._current_duration_sec = 0.0
             self._audio_frame_count = 0
             self._expecting_first_audio = True
+            # TTS 재생 시작 — VADWrapperProcessor가 읽어 STT 억제에 활용
+            self._sync_context[KEY_TTS_PLAYING] = True
+            logger.debug(
+                "tts_playing_flag_set",
+                call_id=self._sync_context.get("_call_id", ""),
+                note="TTS 재생 시작 플래그 set → VAD STT 억제 활성화",
+            )
             await self.push_frame(frame, direction)
             return
 
@@ -125,6 +144,8 @@ class TTSCompleteNotifier(FrameProcessor):
             self._current_duration_sec = 0.0
             self._audio_frame_count = 0
             self._expecting_first_audio = True  # 다음 응답의 첫 오디오 대기
+            # TTS 재생 종료 — STT 억제 해제 (약간의 버퍼를 두기 위해 0.3초 후 해제)
+            asyncio.ensure_future(self._clear_tts_playing_after(0.3))
             await self.push_frame(frame, direction)
             return
 

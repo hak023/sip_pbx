@@ -123,9 +123,16 @@ async def _invoke_graph_with_node_timing(
 
 
 def _route_after_cache(state: ConversationState) -> str:
-    """캐시 히트 여부에 따라 분기"""
+    """캐시 히트 여부에 따라 분기.
+
+    - 히트: update_state (즉시 응답)
+    - 미스 + intent=help: help_response (RAG+LLM 폴백)
+    - 미스 + 그 외: rewrite_query (RAG 경로)
+    """
     if state.get("rag_cache_hit"):
         return "update_state"
+    if state.get("intent") == "help":
+        return "help_response"
     return "rewrite_query"
 
 
@@ -141,8 +148,9 @@ def _route_after_intent(state: ConversationState) -> str:
         return "repeat_response"
     if intent == "clarification":
         return "clarification_response"
+    # help: 먼저 check_cache에서 FAQ 캐시 히트 시도, 미스 시 help_response(RAG+LLM)로 폴백
     if intent == "help":
-        return "help_response"
+        return "check_cache"
     # question / complaint / transfer / nlu_fallback 등 — 캐시·RAG 경로
     # chitchat·out_of_scope 는 route_utterance 에서 rag_mode=skip 으로 generate 직행
     return "check_cache"
@@ -150,6 +158,9 @@ def _route_after_intent(state: ConversationState) -> str:
 
 def _route_after_utterance(state: ConversationState) -> str:
     """검색 전 레인: 일상 직행 vs 지식 경로."""
+    # 아웃바운드 모드: classify/cache/rewrite/RAG 전체 스킵 → generate_response 직행
+    if state.get("outbound_purpose"):
+        return "generate_response"
     if state.get("rag_mode") == "skip":
         return "generate_response"
     return _route_after_intent(state)
@@ -172,8 +183,20 @@ def _route_after_greeting_farewell_cache(state: ConversationState) -> str:
     return "update_state"
 
 
+def _route_after_classify(state: ConversationState) -> str:
+    """classify_intent 이후 분기.
+
+    아웃바운드 모드(outbound_purpose 존재)이면 route_utterance·classify 전체 스킵하고
+    generate_response 로 직행한다. classify_intent LLM 호출 비용(~1.5초)은 이미 소요됐지만
+    이후 route→cache→rewrite→RAG(~10초)를 완전 제거한다.
+    """
+    if state.get("outbound_purpose"):
+        return "generate_response"
+    return "route_utterance"
+
+
 # 토폴로지 변경 시 버전 증가 → 기존 프로세스 내 캐시 무효화
-_LANGGRAPH_SCHEMA_VERSION = 3
+_LANGGRAPH_SCHEMA_VERSION = 4
 _compiled_graph_entry = None  # (version, compiled_graph)
 
 
@@ -227,7 +250,16 @@ def build_conversation_graph():
 
     # ── 엣지 정의 ──
     graph.set_entry_point("classify_intent")
-    graph.add_edge("classify_intent", "route_utterance")
+
+    # classify_intent → 아웃바운드이면 generate_response 직행, 인바운드면 route_utterance
+    graph.add_conditional_edges(
+        "classify_intent",
+        _route_after_classify,
+        {
+            "generate_response": "generate_response",
+            "route_utterance": "route_utterance",
+        },
+    )
 
     # route_utterance → 일상 직행(generate) 또는 기존 의도별 분기
     graph.add_conditional_edges(
@@ -259,13 +291,14 @@ def build_conversation_graph():
     for node_name in ("template_response", "repeat_response", "clarification_response", "help_response", "greeting_farewell_kb"):
         graph.add_edge(node_name, "update_state")
 
-    # check_cache → (hit → update_state, miss → rewrite_query)
+    # check_cache → (hit → update_state, miss+help → help_response, miss+other → rewrite_query)
     graph.add_conditional_edges(
         "check_cache",
         _route_after_cache,
         {
             "update_state": "update_state",
             "rewrite_query": "rewrite_query",
+            "help_response": "help_response",
         },
     )
 
@@ -381,6 +414,40 @@ class ConversationAgent:
         # STT 원문(시간 정규화 전) — RAG 이중 검색용. 미전달 시 user_text와 동일로 간주.
         user_query_raw = (kwargs.get("user_query_raw") or user_text or "").strip()
 
+        # 아웃바운드 컨텍스트 (rag_processor가 전달한 경우에만 주입)
+        outbound_purpose = (kwargs.get("outbound_purpose") or "").strip()
+        outbound_questions = kwargs.get("outbound_questions") or []
+        if not isinstance(outbound_questions, list):
+            outbound_questions = []
+        outbound_answers = kwargs.get("outbound_answers")
+        if not isinstance(outbound_answers, dict):
+            outbound_answers = {}
+        outbound_mission_done = bool(kwargs.get("outbound_mission_done", False))
+        hangup_callback = kwargs.get("_hangup_callback", None)
+
+        is_outbound_session = bool(outbound_purpose or outbound_questions)
+
+        # 아웃바운드 전용 시스템 프롬프트: org system_prompt 대신 목적/질문 기반으로 덮어씀
+        if outbound_purpose:
+            qs_text = "\n".join(f"- {q}" for q in outbound_questions) if outbound_questions else ""
+            system_prompt = (
+                "당신은 아웃바운드 AI 통화 어시스턴트입니다.\n"
+                f"[통화 목적] {outbound_purpose}\n"
+                + (f"[확인 질문]\n{qs_text}\n" if qs_text else "")
+                + "상대방의 답변을 자연스럽게 수집하세요. "
+                "질문과 무관한 내용을 묻더라도 간결하게 답하고 목적 달성에 집중하세요. "
+                "모든 정보를 확인하면 정중히 마무리하세요."
+            )
+        elif outbound_questions:
+            qs_text = "\n".join(f"- {q}" for q in outbound_questions)
+            system_prompt = (
+                "당신은 아웃바운드 AI 통화 어시스턴트입니다.\n"
+                f"[확인 질문]\n{qs_text}\n"
+                "상대방의 답변을 자연스럽게 수집하세요. "
+                "질문과 무관한 내용을 묻더라도 간결하게 답하고 목적 달성에 집중하세요. "
+                "모든 정보를 확인하면 정중히 마무리하세요."
+            )
+
         # 현재 상태 + 새 입력 병합
         invoke_state = {
             **self._state,
@@ -397,6 +464,13 @@ class ConversationAgent:
             "_owner": self.owner,  # 착신번호 → RAG owner_filter
             "_call_id": call_id or "",  # 통화 ID → RAG/로그 call 키
         }
+        if is_outbound_session:
+            invoke_state["outbound_purpose"] = outbound_purpose
+            invoke_state["outbound_questions"] = list(outbound_questions)
+            invoke_state["outbound_answers"] = dict(outbound_answers)
+            invoke_state["outbound_mission_done"] = outbound_mission_done
+            if hangup_callback is not None:
+                invoke_state["_hangup_callback"] = hangup_callback
 
         try:
             graph_start = time.time()
@@ -483,6 +557,10 @@ class ConversationAgent:
                 "rag_search_trace": result.get("rag_search_trace") or {},
                 "semantic_cache_score": result.get("semantic_cache_score"),
                 "greeting_farewell_cache_score": result.get("greeting_farewell_cache_score"),
+                # 아웃바운드 전용: LLM이 추출한 답변 목록 + 유효 답변 여부
+                # generate_response_node → agent → rag_processor 전달 경로
+                "outbound_answered": result.get("outbound_answered") or [],
+                "outbound_is_answer": result.get("outbound_is_answer", True),
             }
 
         except Exception as e:
@@ -580,6 +658,43 @@ class ConversationAgent:
             note="Chroma/지식 greeting_phase2 없음 → 기본 문구 TTS",
         )
         return DEFAULT_GREETING_PHASE2
+
+    async def generate_farewell(self) -> str:
+        """
+        종료 멘트 (LLM 없음, 아웃바운드 미션 완료 시 사용).
+
+        지식베이스 category=farewell 본문 우선. 없거나 조회 실패 시 빈 문자열 반환
+        (호출부에서 하드코딩 폴백 처리).
+        """
+        if self.vector_db and self.owner:
+            try:
+                from src.ai_voicebot.knowledge.knowledge_service import get_knowledge_greeting_text
+
+                loop = asyncio.get_event_loop()
+                kb_text = await loop.run_in_executor(
+                    None,
+                    lambda: get_knowledge_greeting_text(
+                        self.vector_db, self.owner, "farewell"
+                    ),
+                )
+                if kb_text and len(kb_text.strip()) >= 2:
+                    logger.info(
+                        "farewell_from_kb",
+                        owner=self.owner,
+                        text_len=len(kb_text),
+                        text=kb_text,
+                        note="지식베이스 farewell 문서 본문 → TTS",
+                    )
+                    return kb_text.strip()
+            except Exception as e:
+                logger.debug("farewell_kb_lookup_failed", owner=self.owner, error=str(e))
+
+        logger.info(
+            "farewell_kb_not_found",
+            owner=self.owner or "",
+            note="farewell 카테고리 지식 없음 → 호출부 하드코딩 폴백",
+        )
+        return ""
 
     def reset(self):
         """상태 초기화 (새 통화 시작)"""

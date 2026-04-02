@@ -31,7 +31,20 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     InterimTranscriptionFrame,
 )
+try:
+    from pipecat.frames.frames import ErrorFrame, FatalErrorFrame as _FatalErrorFrame
+    _ERROR_FRAME_TYPES: tuple = (ErrorFrame, _FatalErrorFrame)
+except ImportError:
+    try:
+        from pipecat.frames.frames import ErrorFrame
+        _ERROR_FRAME_TYPES = (ErrorFrame,)
+    except ImportError:
+        _ERROR_FRAME_TYPES = ()
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+# STT 결과 무응답 감지: 마지막 TranscriptionFrame 이후 이 시간(초) 동안 결과 없으면 경고
+# 오디오는 오는데 STT 결과가 없으면 STT 스트리밍 세션 이상 의심
+_STT_TRANSCRIPT_WATCHDOG_SEC = 30.0
 
 logger = structlog.get_logger(__name__)
 
@@ -69,7 +82,7 @@ class RAGLLMProcessor(FrameProcessor):
         stt_post_filter_config: Optional[Dict[str, Any]] = None,
         stt_post_filter_reply_on_drop: bool = False,
         stt_post_filter_reply_message: str = "다시 말씀해 주시겠어요?",
-        stt_final_debounce_sec: float = 1.0,
+        stt_final_debounce_sec: float = 0.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -109,7 +122,8 @@ class RAGLLMProcessor(FrameProcessor):
         # 사용자 발화 큐 + 워커: process_frame은 즉시 return → 파이프라인 블로킹 없음, TTS/STT 2-way 독립
         self._user_message_queue: asyncio.Queue = asyncio.Queue()
         self._user_message_worker_task: Optional[asyncio.Task] = None
-        # 연속 STT 최종 결과 병합: "…찾아가려고 하는데요" + "때 어떻게…" 같은 짧은 간격 분할 대응
+        # STT Debounce: 개선안 3에서 0으로 설정 → Supersede 방식으로 대체.
+        # stt_final_debounce_sec > 0 으로 설정 시 이전 Debounce 방식 동작 가능(하위 호환).
         self._stt_final_debounce_sec: float = float(stt_final_debounce_sec or 0.0)
         self._stt_debounce_task: Optional[asyncio.Task] = None
         self._stt_debounce_chunks: List[str] = []
@@ -124,6 +138,10 @@ class RAGLLMProcessor(FrameProcessor):
         self._call_history_ensured = False
         # STT 원인 규명: RAG에 도달한 TranscriptionFrame(최종) 개수
         self._transcription_frame_count = 0
+        # STT 무응답 워치독: 마지막 TranscriptionFrame 수신 시각 (monotonic)
+        self._last_transcription_time: Optional[float] = None
+        self._stt_transcript_watchdog_task: Optional[asyncio.Task] = None
+        self._stt_transcript_watchdog_alerted = False
         # Pipecat: push_frame()은 StartFrame 처리 후에만 동작. 인사/HITL이 먼저 돌면 프레임이 드롭되어 TTS/RTP 없음.
         self._pipeline_start_event = asyncio.Event()
 
@@ -191,9 +209,13 @@ class RAGLLMProcessor(FrameProcessor):
     async def _check_outbound_mission_complete(self, ai_response: str) -> None:
         """AI 응답 후 아웃바운드 미션 완료 여부를 판단한다.
 
-        질문이 없는 경우: purpose 달성 여부를 LLM으로 판단.
-        질문이 있는 경우: 대화 이력에서 각 질문에 대한 답변 수집 여부 확인.
-        모든 질문에 답변이 수집되면 farewell TTS 후 hangup_callback 호출.
+        generate_response_node가 LLM JSON 단일 호출로 답변을 이미 추출해
+        _outbound_answers에 적용했으므로, 여기서는 answers 완료 여부만 확인한다.
+        LLM을 추가로 호출하지 않는다.
+
+        완료 조건:
+          - 질문 목록이 있는 경우: 모든 질문이 _outbound_answers에 채워진 경우
+          - 질문 목록이 없는 경우: purpose만 있을 때는 미션 완료 판단 불가 → 로그만 남김
         """
         if self._outbound_mission_done:
             return
@@ -202,92 +224,34 @@ class RAGLLMProcessor(FrameProcessor):
 
         call_id = self._call_id or ""
 
-        # 대화 이력 수집
-        history_text = ""
-        if self._agent_available and self._agent:
-            try:
-                msgs = self._agent._state.get("messages", [])
-                history_text = "\n".join(
-                    f"{'사용자' if m.get('role') == 'user' else 'AI'}: {m.get('content', '')}"
-                    for m in msgs[-20:]
-                )
-            except Exception:
-                pass
-
-        if not history_text:
-            return
-
-        # 질문 목록이 있으면 각 질문 답변 수집 여부 LLM 판단
         if self._outbound_questions:
             unanswered = [q for q in self._outbound_questions if q not in self._outbound_answers]
             if not unanswered:
-                # 이미 모두 수집됨
+                logger.info(
+                    "outbound_mission_complete_answers_full",
+                    call_id=call_id,
+                    total=len(self._outbound_questions),
+                    note="모든 질문 답변 수집 완료 → 미션 종료",
+                )
                 await self._trigger_mission_complete(call_id)
-                return
-
-            # LLM에게 미수집 질문 중 답변이 나왔는지 확인
-            check_prompt = (
-                f"다음은 AI 아웃바운드 통화 대화 기록입니다.\n\n"
-                f"[대화 기록]\n{history_text}\n\n"
-                f"[확인해야 할 질문 목록]\n"
-                + "\n".join(f"{i+1}. {q}" for i, q in enumerate(unanswered))
-                + "\n\n위 질문들 중 상대방이 명확히 답변한 것이 있으면 JSON으로 알려주세요.\n"
-                "형식: {\"answered\": [{\"question\": \"질문\", \"answer\": \"답변\"}], \"all_done\": true/false}\n"
-                "답변이 없으면: {\"answered\": [], \"all_done\": false}"
-            )
-            try:
-                result_text = None
-                if hasattr(self._llm, 'generate_response'):
-                    result_text = await self._llm.generate_response(check_prompt, context_docs=[])
-                elif hasattr(self._llm, 'generate'):
-                    result_text = await self._llm.generate(check_prompt)
-
-                if result_text:
-                    import json, re
-                    m = re.search(r'\{.*\}', result_text, re.DOTALL)
-                    if m:
-                        data = json.loads(m.group())
-                        for item in data.get("answered", []):
-                            q = item.get("question", "")
-                            a = item.get("answer", "")
-                            if q and a:
-                                self._outbound_answers[q] = a
-                                logger.info("outbound_question_answered",
-                                            call_id=call_id, question=q, answer=a[:50])
-
-                        all_done = data.get("all_done", False)
-                        remaining = [q for q in self._outbound_questions if q not in self._outbound_answers]
-                        logger.info("outbound_mission_check",
-                                    call_id=call_id,
-                                    answered_count=len(self._outbound_answers),
-                                    total=len(self._outbound_questions),
-                                    remaining=len(remaining),
-                                    llm_all_done=all_done)
-                        if all_done or not remaining:
-                            await self._trigger_mission_complete(call_id)
-            except Exception as e:
-                logger.warning("outbound_mission_check_error", call_id=call_id, error=str(e))
+            else:
+                logger.info(
+                    "outbound_mission_incomplete_waiting_next_turn",
+                    call_id=call_id,
+                    answered_count=len(self._outbound_answers),
+                    remaining_count=len(unanswered),
+                    remaining_questions=[q[:40] for q in unanswered],
+                    note="generate_response_node가 재질문 포함 응답 출력함 — 다음 턴 대기",
+                )
         else:
-            # 질문 없이 purpose만 있는 경우: LLM이 목적 달성 여부 판단
-            check_prompt = (
-                f"다음은 AI 아웃바운드 통화 대화 기록입니다.\n\n"
-                f"[통화 목적]\n{self._outbound_purpose}\n\n"
-                f"[대화 기록]\n{history_text}\n\n"
-                "위 통화 목적이 달성되었나요? 예/아니오로만 답하세요."
+            # purpose만 있는 경우: 질문 목록 없이 완료 여부를 판단할 기준이 없음
+            # generate_response_node의 응답에서 완료 신호를 감지하는 방식으로 처리
+            logger.info(
+                "outbound_purpose_only_no_questions",
+                call_id=call_id,
+                purpose=self._outbound_purpose[:50],
+                note="질문 목록 없음 — purpose 달성 여부는 generate_response_node 응답 기반으로 판단 필요",
             )
-            try:
-                result_text = None
-                if hasattr(self._llm, 'generate_response'):
-                    result_text = await self._llm.generate_response(check_prompt, context_docs=[])
-                elif hasattr(self._llm, 'generate'):
-                    result_text = await self._llm.generate(check_prompt)
-
-                if result_text and "예" in result_text:
-                    logger.info("outbound_purpose_achieved",
-                                call_id=call_id, purpose=self._outbound_purpose[:50])
-                    await self._trigger_mission_complete(call_id)
-            except Exception as e:
-                logger.warning("outbound_purpose_check_error", call_id=call_id, error=str(e))
 
     async def _trigger_mission_complete(self, call_id: str) -> None:
         """미션 완료 처리: farewell TTS 송출 후 hangup_callback 호출."""
@@ -300,8 +264,24 @@ class RAGLLMProcessor(FrameProcessor):
                     answered_count=len(self._outbound_answers),
                     purpose=self._outbound_purpose[:50] if self._outbound_purpose else "")
 
-        # farewell 멘트 TTS 송출
-        farewell_text = "필요한 내용을 모두 확인했습니다. 감사합니다. 좋은 하루 되세요."
+        # farewell 멘트: KB farewell 카테고리 우선, 없으면 하드코딩 폴백
+        farewell_text = ""
+        if self._agent_available and self._agent:
+            try:
+                farewell_text = (await self._agent.generate_farewell() or "").strip()
+                if farewell_text:
+                    logger.info("outbound_farewell_from_kb",
+                                call_id=call_id, text_preview=farewell_text[:80])
+            except Exception as e:
+                logger.warning("outbound_farewell_kb_error", call_id=call_id, error=str(e))
+
+        if not farewell_text:
+            farewell_text = "필요한 내용을 모두 확인했습니다. 감사합니다. 좋은 하루 되세요."
+            logger.info("outbound_farewell_hardcoded", call_id=call_id)
+
+        # farewell TTS 송출
+        tts_done_event = asyncio.Event()
+        self._tts_sync_context["on_tts_complete"] = tts_done_event
         try:
             await self.push_frame(LLMFullResponseStartFrame())
             await self.push_frame(TextFrame(text=farewell_text))
@@ -310,8 +290,17 @@ class RAGLLMProcessor(FrameProcessor):
         except Exception as e:
             logger.warning("outbound_farewell_failed", call_id=call_id, error=str(e))
 
-        # TTS 송출 완료 대기 (약 3초)
-        await asyncio.sleep(3.0)
+        # TTS 완료 이벤트 대기 (최대 10초), 타임아웃 시 3초 sleep 폴백
+        try:
+            await asyncio.wait_for(tts_done_event.wait(), timeout=10.0)
+            logger.info("outbound_farewell_tts_done_by_event", call_id=call_id)
+        except asyncio.TimeoutError:
+            logger.warning("outbound_farewell_tts_timeout",
+                           call_id=call_id,
+                           note="TTS 완료 이벤트 10초 미수신 — sleep 3초 폴백")
+            await asyncio.sleep(3.0)
+        finally:
+            self._tts_sync_context.pop("on_tts_complete", None)
 
         # hangup_callback 호출 → SIP BYE 전송
         if self._hangup_callback:
@@ -323,6 +312,14 @@ class RAGLLMProcessor(FrameProcessor):
                 logger.info("outbound_hangup_triggered", call_id=call_id)
             except Exception as e:
                 logger.error("outbound_hangup_callback_error", call_id=call_id, error=str(e))
+
+        # Pipecat 파이프라인 종료: BYE 후에도 STT 큐 폴링이 계속되는 것을 방지
+        # EndFrame을 push하면 파이프라인이 정상 종료됨 (max_duration 타임아웃 대기 불필요)
+        try:
+            await self.push_frame(EndFrame())
+            logger.info("outbound_pipeline_end_frame_sent", call_id=call_id)
+        except Exception as e:
+            logger.warning("outbound_pipeline_end_frame_error", call_id=call_id, error=str(e))
 
     @staticmethod
     def _pipeline_tx_caller(call_id: Optional[str], text: str) -> None:
@@ -587,6 +584,57 @@ class RAGLLMProcessor(FrameProcessor):
 
         asyncio.create_task(_consume())
 
+    async def _stt_transcript_watchdog(self) -> None:
+        """STT TranscriptionFrame 무응답 워치독.
+
+        StartFrame 이후 _STT_TRANSCRIPT_WATCHDOG_SEC 초 동안 TranscriptionFrame이 없으면 경고.
+        마지막 TranscriptionFrame 수신 후 _STT_TRANSCRIPT_WATCHDOG_SEC 초 경과해도 재경고.
+
+        근거: Pipecat GoogleSTTService 스트리밍 세션이 에러·timeout으로 종료되면
+        ErrorFrame 없이 조용히 멈추는 경우가 있음 (app.log에 안 찍힘).
+        이 워치독이 운영 중 STT 동결을 탐지하는 안전망 역할.
+        """
+        check_interval = _STT_TRANSCRIPT_WATCHDOG_SEC / 3
+        # 통화 시작 직후 첫 발화까지 충분한 여유 시간 (인사말·안내 TTS 재생 포함)
+        initial_grace = _STT_TRANSCRIPT_WATCHDOG_SEC
+        try:
+            await asyncio.sleep(initial_grace)
+            while True:
+                await asyncio.sleep(check_interval)
+                if self._stt_transcript_watchdog_alerted:
+                    # 이미 경보 발령 → 추가 대기 후 재경보 (연속 경보 방지)
+                    await asyncio.sleep(_STT_TRANSCRIPT_WATCHDOG_SEC)
+                    self._stt_transcript_watchdog_alerted = False
+                    continue
+
+                now_m = time.monotonic()
+                # 기준 시각: 마지막 TranscriptionFrame 수신 or None(한 번도 없음)
+                baseline = self._last_transcription_time
+                if baseline is None:
+                    # 한 번도 TranscriptionFrame 없음 — initial_grace 이미 지난 후이므로 경보
+                    elapsed = initial_grace + check_interval
+                else:
+                    elapsed = now_m - baseline
+
+                if elapsed >= _STT_TRANSCRIPT_WATCHDOG_SEC:
+                    self._stt_transcript_watchdog_alerted = True
+                    logger.error(
+                        "stt_transcript_watchdog_alert",
+                        call_id=self._call_id or "",
+                        progress="stt",
+                        category="stt",
+                        elapsed_sec=round(elapsed, 1),
+                        transcription_count=self._transcription_frame_count,
+                        note=(
+                            f"[STT 동결 확인] {elapsed:.0f}s 동안 TranscriptionFrame 없음 — "
+                            "Pipecat GoogleSTTService 스트리밍 세션이 조용히 종료됐을 가능성. "
+                            "pipecat_stt_error_frame 로그 또는 vad_consecutive_bargein_alert 확인. "
+                            "서버 재시작 권장."
+                        ),
+                    )
+        except asyncio.CancelledError:
+            pass
+
     async def _user_message_worker(self) -> None:
         """사용자 발화를 큐에서 꺼내 순서대로 LLM 호출 → process_frame 블로킹 제거, TTS/STT 2-way 독립."""
         while True:
@@ -655,7 +703,14 @@ class RAGLLMProcessor(FrameProcessor):
         return re.sub(r"\s+", " ", f"{a} {b}").strip()
 
     async def _enqueue_user_text_to_worker_async(self, user_text: str) -> None:
-        """STT 최종(또는 디바운스 병합) 문장을 큐에 넣고 워커 기동. 진행 중 턴이 있으면 취소 후 문장 병합·큐 헤드 교체."""
+        """STT 최종 문장을 큐에 넣고 워커 기동.
+
+        Supersede 방식 (개선안 3):
+          - LLM 처리 중에 새 STT 최종 도착 → 진행 중 태스크를 cancel() + 두 문장 병합 → 병합 문장으로 재처리.
+          - Debounce 대기 없음 → 완결 발화는 STT 도착 즉시 LLM 시작.
+          - cancel()은 비동기이므로 워커가 CancelledError를 처리해 continue 할 때까지
+            큐에서 병합 문장을 꺼내 처리. 레이스컨디션 방지를 위해 큐를 먼저 비운 뒤 병합 문장 투입.
+        """
         from datetime import datetime
 
         lock = self._get_stt_enqueue_lock()
@@ -663,10 +718,17 @@ class RAGLLMProcessor(FrameProcessor):
         async with lock:
             queued_text = incoming
             if self._agent_turn_task and not self._agent_turn_task.done():
+                # ── Supersede: LLM 처리 중 새 STT 도착 ──
                 base = (self._utterance_in_flight or "").strip()
                 merged = self._merge_stt_user_text(base, incoming)
                 self._utterance_in_flight = merged
                 self._agent_superseded = True
+                # 큐에 대기 중인 항목 모두 비움 (이전 Debounce 잔여분 포함)
+                while not self._user_message_queue.empty():
+                    try:
+                        self._user_message_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
                 self._agent_turn_task.cancel()
                 log_call_data(
                     self._call_id or "",
@@ -684,14 +746,11 @@ class RAGLLMProcessor(FrameProcessor):
                     base_preview=base,
                     incoming_preview=incoming,
                     merged_preview=merged,
-                    note="seq N 처리 중 seq N+1 → N+N 병합 후 진행 턴 취소",
+                    note="[Supersede] LLM 처리 중 새 STT 도착 → 병합 후 진행 턴 취소·재처리",
                 )
-                try:
-                    self._user_message_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
                 queued_text = merged
             elif (self._utterance_in_flight or "").strip():
+                # ── Coalesce: 워커가 태스크 시작 직전 구간 ──
                 tail = self._utterance_in_flight.strip()
                 merged = self._merge_stt_user_text(tail, incoming)
                 self._utterance_in_flight = merged
@@ -702,12 +761,13 @@ class RAGLLMProcessor(FrameProcessor):
                     tail_preview=tail,
                     incoming_preview=incoming,
                     merged_preview=merged,
-                    note="에이전트 유휴 직전 구간: 큐 헤드와 후속 STT 병합",
+                    note="[Coalesce] 워커 유휴 직전 구간: 큐 헤드와 후속 STT 병합",
                 )
-                try:
-                    self._user_message_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+                while not self._user_message_queue.empty():
+                    try:
+                        self._user_message_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
                 queued_text = merged
 
         ts_iso = datetime.now().isoformat(timespec="milliseconds")
@@ -813,10 +873,38 @@ class RAGLLMProcessor(FrameProcessor):
                 call_id=self._call_id or "",
                 note="이후 push_frame 허용(인사·HITL·LLM→TTS)",
             )
+            # STT 무응답 워치독 시작 (StartFrame 이후 통화 활성)
+            if self._stt_transcript_watchdog_task is None or self._stt_transcript_watchdog_task.done():
+                self._stt_transcript_watchdog_task = asyncio.create_task(
+                    self._stt_transcript_watchdog()
+                )
+
+        # Pipecat STT 에러 프레임 처리 — GoogleSTTService 내부 에러 노출
+        if _ERROR_FRAME_TYPES and isinstance(frame, _ERROR_FRAME_TYPES):
+            error_msg = getattr(frame, "error", "") or getattr(frame, "message", "") or str(frame)
+            is_fatal = type(frame).__name__ == "FatalErrorFrame"
+            logger.error(
+                "pipecat_stt_error_frame",
+                call_id=self._call_id or "",
+                error=error_msg,
+                frame_type=type(frame).__name__,
+                is_fatal=is_fatal,
+                note=(
+                    "[STT 에러] Pipecat 파이프라인에서 ErrorFrame 수신 — "
+                    "GoogleSTTService 스트리밍 세션 에러 또는 파이프라인 이상. "
+                    "이 에러 직후 STT 결과가 없으면 stt_silence_watchdog_alert 확인"
+                ),
+            )
+            # ErrorFrame은 하류로 전달 (파이프라인이 자체 처리하도록)
+            await self.push_frame(frame, direction)
+            return
 
         if isinstance(frame, TranscriptionFrame):
             user_text = frame.text.strip()
             self._transcription_frame_count += 1
+            # STT 무응답 워치독 갱신 — 정상 결과 수신 시 알림 리셋
+            self._last_transcription_time = time.monotonic()
+            self._stt_transcript_watchdog_alerted = False
             # STT 원인 규명: 최종 결과가 몇 번 RAG에 도달했는지 (말했는데 결과 없음 → 이 수가 1이면 STT가 한 번만 최종 전송)
             logger.info("transcription_frame_received",
                         call_id=self._call_id or "",
@@ -970,6 +1058,22 @@ class RAGLLMProcessor(FrameProcessor):
                 user_text = normalized_text
         except Exception as e:
             logger.debug("temporal_normalizer_skip", call_id=self._call_id or "", error=str(e))
+
+        try:
+            from src.ai_voicebot.stt_korean_normalize import normalize_stt_short_korean
+
+            _stt_norm = normalize_stt_short_korean(user_text)
+            if _stt_norm != user_text:
+                logger.info(
+                    "stt_short_korean_normalized",
+                    call_id=self._call_id or "",
+                    before_preview=(user_text or "")[:80],
+                    after_preview=_stt_norm[:80],
+                    note="짧은 한국어 STT 보정 (요 잘림·점이요 등)",
+                )
+                user_text = _stt_norm
+        except Exception as e:
+            logger.debug("stt_short_korean_normalize_skip", call_id=self._call_id or "", error=str(e))
         
         # ✅ 호 전환 요청 감지 (Quick Check)
         from ..intents import IntentClassifier, Intent
@@ -1149,7 +1253,9 @@ class RAGLLMProcessor(FrameProcessor):
         caller_context = self._get_caller_context_sync()
         
         # LLM 대기 안내: 너무 이르면 HITL/이전 턴 TTS와 겹침 → 12초 후 1회만 짧게 안내
+        # 아웃바운드: "잠시만 기다려 주세요" 류 안내가 어색하고 TTS 완료 대기가 응답을 오히려 지연시킴
         _LLM_WAIT_NOTIFY_SEC = 12.0
+        _is_outbound_call = bool(self._outbound_purpose or self._outbound_questions)
         notify_task = None
         done = asyncio.Event()
         
@@ -1202,7 +1308,15 @@ class RAGLLMProcessor(FrameProcessor):
             except asyncio.CancelledError:
                 pass
         
-        notify_task = asyncio.create_task(wait_and_notify())
+        if _is_outbound_call:
+            # 아웃바운드: 짧은 답변("5점이요" 등)에 대기 안내 TTS는 어색하고
+            # TTS 완료 await가 LLM 응답 지연을 유발하므로 notify 태스크를 생성하지 않음
+            logger.info("llm_wait_notify_skip_outbound",
+                        call_id=self._call_id or "",
+                        note="아웃바운드 모드 — 대기 안내 TTS 스킵")
+            notify_task = None
+        else:
+            notify_task = asyncio.create_task(wait_and_notify())
         
         result: Optional[Dict[str, Any]] = None
         agent_elapsed = 0.0
@@ -1215,6 +1329,17 @@ class RAGLLMProcessor(FrameProcessor):
             # - 개선: asyncio.gather()로 병렬 실행 → max(3.5, 5.2) = 5.2초
             # - 예상 효과: -3.5초 단축 (전체 LLM 처리 14초 → 10.5초)
             
+            # 아웃바운드 컨텍스트: purpose/questions/hangup_callback을 LangGraph state에 주입
+            outbound_extra: dict = {}
+            if self._outbound_purpose or self._outbound_questions:
+                outbound_extra = {
+                    "outbound_purpose": self._outbound_purpose,
+                    "outbound_questions": list(self._outbound_questions),
+                    "outbound_answers": dict(self._outbound_answers),
+                    "outbound_mission_done": self._outbound_mission_done,
+                    "_hangup_callback": self._hangup_callback,
+                }
+
             if caller_context:
                 try:
                     result = await self._agent.process_utterance(
@@ -1222,14 +1347,17 @@ class RAGLLMProcessor(FrameProcessor):
                         call_id=self._call_id or "",
                         caller_context=caller_context,
                         user_query_raw=stt_query_raw,
+                        **outbound_extra,
                     )
                 except TypeError:
                     result = await self._agent.process_utterance(
-                        user_text, call_id=self._call_id or "", user_query_raw=stt_query_raw
+                        user_text, call_id=self._call_id or "", user_query_raw=stt_query_raw,
+                        **outbound_extra,
                     )
             else:
                 result = await self._agent.process_utterance(
-                    user_text, call_id=self._call_id or "", user_query_raw=stt_query_raw
+                    user_text, call_id=self._call_id or "", user_query_raw=stt_query_raw,
+                    **outbound_extra,
                 )
             agent_elapsed = time.time() - agent_start
         except asyncio.CancelledError:
@@ -1253,6 +1381,21 @@ class RAGLLMProcessor(FrameProcessor):
         if not result:
             return
 
+        # ── Cancellation checkpoint: LLM 완료 후 TTS push 직전 ──
+        # Supersede cancel()이 LLM awaitable 완료 직후에 inject된 경우,
+        # 이미 완료된 LLM 응답이 TTS 파이프라인으로 흘러들어가는 것을 방지한다.
+        # (cancel()은 await 경계에서만 효력 → LLM 완료 후 이 sleep(0)이 첫 번째 체크포인트)
+        try:
+            await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            logger.info(
+                "langgraph_agent_tts_push_cancelled",
+                call_id=self._call_id or "",
+                user_text_preview=(user_text or ""),
+                note="[Supersede checkpoint] LLM 완료 후 TTS push 직전에 취소됨 → 병합 문장으로 재처리",
+            )
+            raise
+
         try:
             response = result.get("response", "")
             confidence = result.get("confidence", 0.0)
@@ -1261,6 +1404,87 @@ class RAGLLMProcessor(FrameProcessor):
             needs_human = result.get("needs_human", False)
             business_state = result.get("business_state", "")
             chunks = result.get("response_chunks", [])
+
+            # ── 아웃바운드: LLM이 추출한 답변을 _outbound_answers에 직접 적용 ──
+            # generate_response_node가 JSON으로 반환한 answered 목록을 읽어
+            # fuzzy 매핑 후 _outbound_answers에 저장한다.
+            # (별도 LLM 재확인 호출 없이 단일 LLM 호출로 답변 수집 완료)
+            _outbound_is_answer: bool = result.get("outbound_is_answer", True)
+            if self._outbound_questions and not self._outbound_mission_done:
+                _answered_from_llm: list = result.get("outbound_answered") or []
+                _unanswered_now = [
+                    q for q in self._outbound_questions if q not in self._outbound_answers
+                ]
+                if _answered_from_llm:
+                    for item in _answered_from_llm:
+                        q_raw = (item.get("question") or "").strip()
+                        a = (item.get("answer") or "").strip()
+                        if not a or not _unanswered_now:
+                            continue
+                        # 정확 매핑 우선
+                        target_q = None
+                        if q_raw in _unanswered_now:
+                            target_q = q_raw
+                        elif len(_unanswered_now) == 1:
+                            # 미답변이 1개면 LLM question 키 불일치와 무관하게 매핑
+                            target_q = _unanswered_now[0]
+                            logger.info(
+                                "outbound_llm_answer_fuzzy_single",
+                                call_id=self._call_id or "",
+                                llm_q=q_raw[:40],
+                                mapped_to=target_q[:40],
+                            )
+                        else:
+                            # 부분 문자열 매칭
+                            for uq in _unanswered_now:
+                                if q_raw in uq or uq in q_raw or (len(q_raw) >= 8 and q_raw[:20] in uq):
+                                    target_q = uq
+                                    break
+                        if target_q:
+                            self._outbound_answers[target_q] = a
+                            _unanswered_now = [
+                                q for q in self._outbound_questions if q not in self._outbound_answers
+                            ]
+                            logger.info(
+                                "outbound_llm_answer_applied",
+                                call_id=self._call_id or "",
+                                question=target_q[:50],
+                                answer=a[:50],
+                                remaining=len(_unanswered_now),
+                            )
+
+                # ── fallback: answered가 비었으나 LLM이 is_answer=true로 판단한 경우 ──
+                # 미답변 질문이 1개이면 user_text를 직접 답변으로 등록한다.
+                # (LLM이 answered 필드를 빠뜨리는 경우 대비)
+                _unanswered_now = [
+                    q for q in self._outbound_questions if q not in self._outbound_answers
+                ]
+                if not _answered_from_llm and _outbound_is_answer and _unanswered_now and user_text:
+                    if len(_unanswered_now) == 1:
+                        fallback_q = _unanswered_now[0]
+                        fallback_a = (user_text or "").strip()
+                        self._outbound_answers[fallback_q] = fallback_a
+                        logger.info(
+                            "outbound_llm_answer_fallback_applied",
+                            call_id=self._call_id or "",
+                            question=fallback_q[:50],
+                            answer=fallback_a[:50],
+                            note="LLM answered 빈 배열 + is_answer=true + 미답변 1개 → user_text 직접 등록",
+                        )
+                    else:
+                        logger.warning(
+                            "outbound_llm_answer_fallback_skipped",
+                            call_id=self._call_id or "",
+                            unanswered_count=len(_unanswered_now),
+                            note="is_answer=true이나 answered 빈 배열 + 미답변 복수 → fallback 불가",
+                        )
+                elif not _answered_from_llm and not _outbound_is_answer:
+                    logger.info(
+                        "outbound_llm_non_answer",
+                        call_id=self._call_id or "",
+                        user_preview=(user_text or "")[:60],
+                        note="LLM 판단: 이번 발화는 미션 질문의 유효한 답변이 아님",
+                    )
 
             # 디버깅용: LangGraph 원본 응답 (farewell 템플릿 치환 전)
             logger.info("langgraph_agent_result",
@@ -1606,7 +1830,9 @@ class RAGLLMProcessor(FrameProcessor):
                            total_elapsed=f"{total_elapsed:.3f}s",
                            response_len=len(response))
 
-                # 아웃바운드 미션 완료 여부 체크 (비동기 태스크로 파이프라인 블로킹 방지)
+                # 아웃바운드 미션 완료 여부 체크
+                # LLM이 이미 답변을 추출해 _outbound_answers에 적용했으므로
+                # _check_outbound_mission_complete는 answers 완료 여부만 확인한다 (LLM 재호출 없음)
                 if self._outbound_purpose or self._outbound_questions:
                     asyncio.create_task(
                         self._check_outbound_mission_complete(response),
@@ -1627,6 +1853,119 @@ class RAGLLMProcessor(FrameProcessor):
     _TTS_CHARS_PER_SEC = 5.5
     _PHASE_GAP_BUFFER_SEC = 1.0  # Phase1 발화 완료 후 추가 여유 (RTP 큐 비우기 + 자연스러운 호흡)
     _TTS_COMPLETE_WAIT_TIMEOUT_SEC = 60.0  # TTS 완료 이벤트 대기 최대 시간
+
+    async def _generate_outbound_opening(self, purpose: str, first_question: str) -> str:
+        """아웃바운드 통화 오프닝 문장을 LLM으로 생성한다.
+
+        "통화 목적을 위해 전화드렸습니다. 첫 질문"을 상황에 맞게 자연스럽게 다듬어 반환한다.
+        LLM 호출 실패 시 단순 조합 문자열로 폴백한다.
+        """
+        if not purpose:
+            return first_question or ""
+
+        if first_question:
+            prompt = (
+                "당신은 아웃바운드 AI 전화 봇입니다.\n"
+                "아래 [통화 목적]과 [첫 번째 질문]을 자연스럽게 연결하는 2문장을 작성하세요.\n\n"
+                "규칙:\n"
+                "1. 첫 문장: '[통화 목적]을 위해 전화드렸습니다.' 또는 '[통화 목적]과 관련하여 전화드렸습니다.' 형태로 시작.\n"
+                "2. 두 번째 문장: [첫 번째 질문]을 그대로 또는 자연스럽게 변형해서 반드시 포함시키세요.\n"
+                "3. 반드시 2문장으로 작성하고, [첫 번째 질문]이 출력에 포함되어야 합니다.\n"
+                "4. 따옴표나 부가 설명 없이 말하는 문장 그대로만 출력.\n\n"
+                f"[통화 목적]: {purpose}\n"
+                f"[첫 번째 질문]: {first_question}\n\n"
+                "출력 예시 형태: '(목적) 전화드렸습니다. (질문)?'\n\n"
+                "출력:"
+            )
+        else:
+            prompt = (
+                "당신은 아웃바운드 AI 전화 봇입니다.\n"
+                "아래 [통화 목적]을 고객에게 자연스럽게 안내하는 1~2문장을 작성하세요.\n\n"
+                "규칙:\n"
+                "1. '[통화 목적]을 위해 / [통화 목적]과 관련하여 전화드렸습니다.' 형태로 시작.\n"
+                "2. 1~2문장 이내, 간결하게.\n"
+                "3. 따옴표나 부가 설명 없이 말하는 문장 그대로만 출력.\n\n"
+                f"[통화 목적]: {purpose}\n\n"
+                "출력:"
+            )
+
+        try:
+            generated = ""
+            if hasattr(self._llm, "generate_simple"):
+                # 한국어 1토큰 ≈ 1~2자 → 3문장(최대 120자) 기준 충분한 토큰 확보
+                generated = await self._llm.generate_simple(
+                    prompt, max_tokens=300, timeout_seconds=8.0
+                )
+            generated = (generated or "").strip()
+
+            # 완성 문장 방어 1: 마침표/물음표/느낌표 등으로 끝나지 않으면 폴백
+            _sentence_ends = (".", "?", "!", "요", "까", "다", "죠", "네")
+            _is_complete = generated.endswith(_sentence_ends) if generated else False
+
+            # 완성 문장 방어 2: 한국어 질문은 물음표 없이 명령형(주세요/부탁)으로 끝나는 경우가 많음
+            _fq = (first_question or "").strip()
+            _gen_compact = generated.replace(" ", "") if generated else ""
+            _fq_head = _fq.replace(" ", "")[:24] if _fq else ""
+            _embeds_first_q = (
+                bool(_fq_head) and len(_fq_head) >= 6 and _fq_head in _gen_compact
+            ) if generated else False
+            _has_question_mark = (
+                ("?" in generated or "？" in generated) if generated else False
+            )
+            _has_command_cue = any(
+                x in (generated or "")
+                for x in ("주세요", "부탁", "평가해", "알려주", "말씀해")
+            )
+            _question_missing = bool(first_question) and not (
+                _has_question_mark or _has_command_cue or _embeds_first_q
+            )
+
+            if generated and _is_complete and not _question_missing:
+                logger.info(
+                    "outbound_opening_llm_generated",
+                    call_id=self._call_id or "",
+                    purpose_preview=purpose[:60],
+                    first_q_preview=first_question[:60] if first_question else "",
+                    generated_preview=generated[:120],
+                    note="LLM으로 아웃바운드 오프닝 문장 생성",
+                )
+                return generated
+            elif generated and (not _is_complete or _question_missing):
+                logger.warning(
+                    "outbound_opening_llm_truncated",
+                    call_id=self._call_id or "",
+                    generated_preview=generated[:120],
+                    is_complete=_is_complete,
+                    question_missing=_question_missing,
+                    note="LLM 응답이 잘렸거나 질문이 누락됨 → 폴백",
+                )
+        except Exception as e:
+            logger.warning(
+                "outbound_opening_llm_failed",
+                call_id=self._call_id or "",
+                error=str(e),
+                note="LLM 오프닝 생성 실패 → 폴백",
+            )
+
+        # 폴백: 단순 조합 (LLM 실패·잘림 시)
+        # 조사 선택: 목적이 받침으로 끝나면 "을", 그렇지 않으면 "를"
+        _last_char = purpose[-1] if purpose else ""
+        try:
+            import unicodedata as _ud
+            _decomposed = _ud.normalize("NFD", _last_char)
+            _has_jongseong = len(_decomposed) == 3  # 초성+중성+종성
+        except Exception:
+            _has_jongseong = False
+        _particle = "을" if _has_jongseong else "를"
+        intro = f"{purpose}{_particle} 위해 전화드렸습니다."
+        fallback = f"{intro} {first_question}".strip() if first_question else intro
+        logger.info(
+            "outbound_opening_fallback",
+            call_id=self._call_id or "",
+            fallback_preview=fallback[:120],
+            note="LLM 오프닝 실패·잘림 → 폴백 문자열 사용",
+        )
+        return fallback
 
     async def send_greeting(self):
         """지식 베이스 문구만 TTS (LLM 없음).
@@ -1658,21 +1997,47 @@ class RAGLLMProcessor(FrameProcessor):
         greeting_start = time.time()
         
         try:
-            if self._agent_available:
-                greeting = await self._agent.generate_greeting()
-            else:
-                greeting = await self._generate_greeting_legacy()
-            p1 = (greeting or "").strip()
+            if self._outbound_purpose:
+                # ── 아웃바운드 모드 ──
+                # Phase1: KB greeting_phase1 (인사)
+                if self._agent_available:
+                    greeting = await self._agent.generate_greeting()
+                else:
+                    greeting = await self._generate_greeting_legacy()
+                p1 = (greeting or "").strip()
 
-            if self._agent_available:
-                try:
-                    cap_raw = await self._agent.generate_capability_guide()
-                except Exception as e:
-                    logger.warning("capability_guide_generation_error", error=str(e))
-                    cap_raw = ""
+                # Phase2: LLM으로 "통화 목적 → 첫 질문"을 자연스러운 한 흐름으로 생성
+                first_q = self._outbound_questions[0] if self._outbound_questions else ""
+                p2 = await self._generate_outbound_opening(
+                    purpose=self._outbound_purpose,
+                    first_question=first_q,
+                )
+
+                logger.info(
+                    "outbound_greeting_with_purpose",
+                    call_id=self._call_id,
+                    purpose_preview=self._outbound_purpose[:80],
+                    first_question_preview=first_q[:80],
+                    p2_preview=p2[:100],
+                    note="아웃바운드 인사: KB p1 + LLM 생성 p2 (통화목적→질문)",
+                )
             else:
-                cap_raw = self._generate_capability_guide_legacy()
-            p2 = (cap_raw or "").strip()
+                # ── 인바운드 모드 (기존 로직) ──
+                if self._agent_available:
+                    greeting = await self._agent.generate_greeting()
+                else:
+                    greeting = await self._generate_greeting_legacy()
+                p1 = (greeting or "").strip()
+
+                if self._agent_available:
+                    try:
+                        cap_raw = await self._agent.generate_capability_guide()
+                    except Exception as e:
+                        logger.warning("capability_guide_generation_error", error=str(e))
+                        cap_raw = ""
+                else:
+                    cap_raw = self._generate_capability_guide_legacy()
+                p2 = (cap_raw or "").strip()
 
             if not p1 and not p2:
                 logger.warning(
@@ -2038,6 +2403,16 @@ class RAGLLMProcessor(FrameProcessor):
             except (asyncio.CancelledError, Exception):
                 pass
         self._agent_turn_task = None
+
+        # STT TranscriptionFrame 무응답 워치독 취소
+        watchdog_task = self._stt_transcript_watchdog_task
+        if watchdog_task and not watchdog_task.done():
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._stt_transcript_watchdog_task = None
 
         # HITL 소비 큐에 종료 sentinel 전송 (Task-203 _consume 종료 유도)
         if self._hitl_response_queue:

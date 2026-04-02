@@ -49,6 +49,7 @@ async def knowledge_list(
     category: Optional[str] = Query(None),
     doc_type: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query(None, description="정렬 기준: 'hit_count' (히트수 내림차순)"),
 ) -> Dict[str, Any]:
     ks = _service()
     try:
@@ -77,11 +78,28 @@ async def knowledge_list(
                 "category": it.get("category") or md.get("category") or "",
                 "keywords": it.get("keywords") or [],
                 "metadata": md,
+                "hit_count": int(md.get("hit_count") or 0),
                 "created_at": it.get("created_at") or md.get("created_at") or "",
             }
         )
 
+    if (sort_by or "").strip() == "hit_count":
+        items.sort(key=lambda x: x.get("hit_count", 0), reverse=True)
+
     return {"items": items}
+
+
+@router.post("/knowledge/{doc_id}/hit")
+async def knowledge_hit(doc_id: str) -> Dict[str, Any]:
+    """지식 문서 hit_count를 수동으로 1 증가 (테스트·관리용)."""
+    ks = _service()
+    try:
+        new_count = await ks.increment_hit_count(doc_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if new_count < 0:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+    return {"ok": True, "doc_id": doc_id, "hit_count": new_count}
 
 
 @router.post("/knowledge")

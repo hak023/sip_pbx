@@ -22,6 +22,7 @@ export default function KnowledgePage() {
   const [loadingList, setLoadingList] = useState(false);
   const [groupByCategory, setGroupByCategory] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [sortByHit, setSortByHit] = useState(false);
   
   // Persona 입력 필드 (category === 'persona' 일 때만 표시)
   const [personaName, setPersonaName] = useState('');
@@ -30,6 +31,11 @@ export default function KnowledgePage() {
   const [personaChitchatTemplate, setPersonaChitchatTemplate] = useState('');
   const [personaEnabled, setPersonaEnabled] = useState(true);
   const [keywordInput, setKeywordInput] = useState('');
+  // 저장된 페르소나 요약 (목록 카드용)
+  const [savedPersona, setSavedPersona] = useState<{
+    name: string; description: string; scope_keywords: string[];
+    chitchat_response_template?: string; enabled: boolean;
+  } | null>(null);
 
   useEffect(() => {
     const t = localStorage.getItem('tenant');
@@ -54,8 +60,9 @@ export default function KnowledgePage() {
       params.set('owner', filterOwner);
     }
     if (filterCategory) params.set('category', filterCategory);
-    if (filterDocType) params.set('doc_type', filterDocType); // 추가
-    if (filterSource) params.set('source', filterSource); // 추가
+    if (filterDocType) params.set('doc_type', filterDocType);
+    if (filterSource) params.set('source', filterSource);
+    if (sortByHit) params.set('sort_by', 'hit_count');
     try {
       const res = await fetch(`${API_URL}/api/knowledge?${params.toString()}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -75,7 +82,7 @@ export default function KnowledgePage() {
     } finally {
       setLoadingList(false);
     }
-  }, [filterOwner, filterCategory, filterDocType, filterSource]);
+  }, [filterOwner, filterCategory, filterDocType, filterSource, sortByHit]);
 
   useEffect(() => {
     if (tenant) {
@@ -102,9 +109,19 @@ export default function KnowledgePage() {
         setPersonaScopeKeywords(data.scope_keywords || []);
         setPersonaChitchatTemplate(data.chitchat_response_template || '');
         setPersonaEnabled(data.enabled ?? true);
+        setSavedPersona({
+          name: data.name || '',
+          description: data.description || '',
+          scope_keywords: data.scope_keywords || [],
+          chitchat_response_template: data.chitchat_response_template || '',
+          enabled: data.enabled ?? true,
+        });
+      } else {
+        setSavedPersona(null);
       }
     } catch (e) {
       console.warn('[knowledge] loadPersona error', e);
+      setSavedPersona(null);
     }
   };
 
@@ -147,11 +164,6 @@ export default function KnowledgePage() {
         
         if (res.ok) {
           setMessage({ type: 'ok', text: '조직 페르소나가 저장되었습니다.' });
-          setPersonaName('');
-          setPersonaDescription('');
-          setPersonaScopeKeywords([]);
-          setPersonaChitchatTemplate('');
-          setPersonaEnabled(true);
           setKeywordInput('');
           await loadPersonaIfExists(tenant.owner);
         } else {
@@ -411,6 +423,41 @@ export default function KnowledgePage() {
           </button>
         </form>
 
+        {/* 저장된 페르소나 요약 카드 */}
+        {savedPersona && (
+          <div className="bg-white rounded-lg shadow p-5 mb-6 border-l-4 border-indigo-400">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-lg">🎭</span>
+                <h2 className="text-base font-semibold text-gray-800">{savedPersona.name}</h2>
+                {savedPersona.enabled ? (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">활성</span>
+                ) : (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">비활성</span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setCategory('persona')}
+                className="shrink-0 text-xs text-indigo-600 hover:text-indigo-800 underline"
+              >
+                수정
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mb-2">{savedPersona.description}</p>
+            {savedPersona.scope_keywords.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-1">
+                {savedPersona.scope_keywords.filter(Boolean).map((kw, i) => (
+                  <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100">{kw}</span>
+                ))}
+              </div>
+            )}
+            {savedPersona.chitchat_response_template && (
+              <p className="text-xs text-gray-400 mt-1">잡담 응답: {savedPersona.chitchat_response_template}</p>
+            )}
+          </div>
+        )}
+
         {/* 목록 — 조회·삭제·카테고리별 분류 */}
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-lg font-semibold mb-4">등록된 지식 (조회·삭제·카테고리별 분류)</h2>
@@ -461,6 +508,15 @@ export default function KnowledgePage() {
               />
               카테고리별 분류 표시
             </label>
+            <label className="flex items-center gap-1.5 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={sortByHit}
+                onChange={(e) => setSortByHit(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              히트수 순 정렬
+            </label>
             <button
               type="button"
               onClick={fetchList}
@@ -481,82 +537,117 @@ export default function KnowledgePage() {
                   <h3 className="text-sm font-medium text-gray-700 mb-2 pb-1 border-b">
                     {categoryLabel(cat)} ({itemsByCategory[cat].length}건)
                   </h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b text-left text-gray-600">
-                          <th className="py-2 pr-4">ID</th>
-                          <th className="py-2 pr-4">owner</th>
-                          <th className="py-2 pr-4">doc_type</th>
-                          <th className="py-2 pr-4">source</th>
-                          <th className="py-2 pr-4">내용</th>
-                          <th className="py-2 w-20">삭제</th>
+                  <table className="w-full text-sm table-fixed">
+                    <colgroup>
+                      <col className="w-36" />
+                      <col className="w-14" />
+                      <col className="w-20" />
+                      <col className="w-16" />
+                      <col />
+                      <col className="w-10" />
+                      <col className="w-12" />
+                    </colgroup>
+                    <thead>
+                      <tr className="border-b text-left text-gray-600">
+                        <th className="py-2 pr-3">ID</th>
+                        <th className="py-2 pr-3">owner</th>
+                        <th className="py-2 pr-3">doc_type</th>
+                        <th className="py-2 pr-3">source</th>
+                        <th className="py-2 pr-3">내용</th>
+                        <th className="py-2 text-center">HIT</th>
+                        <th className="py-2 text-right">삭제</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {itemsByCategory[cat].map((row) => (
+                        <tr key={row.id} className="border-b border-gray-100">
+                          <td className="py-2 pr-3 font-mono text-xs truncate" title={row.id}>{row.id}</td>
+                          <td className="py-2 pr-3 truncate">{row.metadata?.owner ?? '-'}</td>
+                          <td className="py-2 pr-3 truncate text-xs text-gray-600" title={row.metadata?.doc_type ?? ''}>{row.metadata?.doc_type ?? '-'}</td>
+                          <td className="py-2 pr-3 truncate text-xs text-gray-600">{row.metadata?.source ?? '-'}</td>
+                          <td className="py-2 pr-3 truncate" title={row.text}>{row.text}</td>
+                          <td className="py-2 text-center">
+                            {(row.hit_count ?? 0) > 0 ? (
+                              <span className="inline-flex items-center justify-center min-w-[1.5rem] px-1 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold text-xs">
+                                {row.hit_count}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300 text-xs">0</span>
+                            )}
+                          </td>
+                          <td className="py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(row.id)}
+                              disabled={deletingId === row.id}
+                              className="text-red-600 hover:text-red-800 text-xs disabled:opacity-50"
+                            >
+                              {deletingId === row.id ? '…' : '삭제'}
+                            </button>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {itemsByCategory[cat].map((row) => (
-                          <tr key={row.id} className="border-b border-gray-100">
-                            <td className="py-2 pr-4 font-mono text-xs">{row.id}</td>
-                            <td className="py-2 pr-4">{row.metadata?.owner ?? '-'}</td>
-                            <td className="py-2 pr-4">{DOC_TYPES.find(t => t.value === row.metadata?.doc_type)?.label ?? row.metadata?.doc_type ?? '-'}</td>
-                            <td className="py-2 pr-4">{KNOWLEDGE_SOURCES.find(s => s.value === row.metadata?.source)?.label ?? row.metadata?.source ?? '-'}</td>
-                            <td className="py-2 max-w-md truncate" title={row.text}>{row.text}</td>
-                            <td className="py-2">
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(row.id)}
-                                disabled={deletingId === row.id}
-                                className="text-red-600 hover:text-red-800 text-xs disabled:opacity-50"
-                              >
-                                {deletingId === row.id ? '삭제 중…' : '삭제'}
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-gray-600">
-                    <th className="py-2 pr-4">ID</th>
-                    <th className="py-2 pr-4">카테고리</th>
-                    <th className="py-2 pr-4">owner</th>
-                    <th className="py-2 pr-4">doc_type</th>
-                    <th className="py-2 pr-4">source</th>
-                    <th className="py-2 pr-4">내용</th>
-                    <th className="py-2 w-20">삭제</th>
+            <table className="w-full text-sm table-fixed">
+              <colgroup>
+                <col className="w-36" />
+                <col className="w-24" />
+                <col className="w-14" />
+                <col className="w-20" />
+                <col className="w-16" />
+                <col />
+                <col className="w-10" />
+                <col className="w-12" />
+              </colgroup>
+              <thead>
+                <tr className="border-b text-left text-gray-600">
+                  <th className="py-2 pr-3">ID</th>
+                  <th className="py-2 pr-3">카테고리</th>
+                  <th className="py-2 pr-3">owner</th>
+                  <th className="py-2 pr-3">doc_type</th>
+                  <th className="py-2 pr-3">source</th>
+                  <th className="py-2 pr-3">내용</th>
+                  <th className="py-2 text-center">HIT</th>
+                  <th className="py-2 text-right">삭제</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((row) => (
+                  <tr key={row.id} className="border-b border-gray-100">
+                    <td className="py-2 pr-3 font-mono text-xs truncate" title={row.id}>{row.id}</td>
+                    <td className="py-2 pr-3 truncate text-xs">{categoryLabel(row.metadata?.category ?? '')}</td>
+                    <td className="py-2 pr-3 truncate">{row.metadata?.owner ?? '-'}</td>
+                    <td className="py-2 pr-3 truncate text-xs text-gray-600" title={row.metadata?.doc_type ?? ''}>{row.metadata?.doc_type ?? '-'}</td>
+                    <td className="py-2 pr-3 truncate text-xs text-gray-600">{row.metadata?.source ?? '-'}</td>
+                    <td className="py-2 pr-3 truncate" title={row.text}>{row.text}</td>
+                    <td className="py-2 text-center">
+                      {(row.hit_count ?? 0) > 0 ? (
+                        <span className="inline-flex items-center justify-center min-w-[1.5rem] px-1 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold text-xs">
+                          {row.hit_count}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300 text-xs">0</span>
+                      )}
+                    </td>
+                    <td className="py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(row.id)}
+                        disabled={deletingId === row.id}
+                        className="text-red-600 hover:text-red-800 text-xs disabled:opacity-50"
+                      >
+                        {deletingId === row.id ? '…' : '삭제'}
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {items.map((row) => (
-                    <tr key={row.id} className="border-b border-gray-100">
-                      <td className="py-2 pr-4 font-mono text-xs">{row.id}</td>
-                      <td className="py-2 pr-4">{row.metadata?.category ?? '-'}</td>
-                      <td className="py-2 pr-4">{row.metadata?.owner ?? '-'}</td>
-                      <td className="py-2 pr-4">{DOC_TYPES.find(t => t.value === row.metadata?.doc_type)?.label ?? row.metadata?.doc_type ?? '-'}</td>
-                      <td className="py-2 pr-4">{KNOWLEDGE_SOURCES.find(s => s.value === row.metadata?.source)?.label ?? row.metadata?.source ?? '-'}</td>
-                      <td className="py-2 max-w-md truncate" title={row.text}>{row.text}</td>
-                      <td className="py-2">
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(row.id)}
-                          disabled={deletingId === row.id}
-                          className="text-red-600 hover:text-red-800 text-xs disabled:opacity-50"
-                        >
-                          {deletingId === row.id ? '삭제 중…' : '삭제'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       </div>

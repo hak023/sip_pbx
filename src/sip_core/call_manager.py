@@ -1169,13 +1169,15 @@ class CallManager:
                         self.sip_recorder.start_recording(
                             call_id=call_session.call_id,
                             caller_id=call_session.get_caller_uri(),
-                            callee_id=call_session.get_callee_uri()
+                            callee_id=call_session.get_callee_uri(),
+                            direction="inbound",
                         )
                     )
                     logger.info("sip_recording_started",
                                call_id=call_session.call_id,
                                caller=call_session.get_caller_uri(),
-                               callee=call_session.get_callee_uri())
+                               callee=call_session.get_callee_uri(),
+                               direction="inbound")
                 except Exception as e:
                     logger.error("sip_recording_start_error",
                                call_id=call_session.call_id,

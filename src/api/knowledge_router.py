@@ -10,6 +10,7 @@
 🔥 VERSION: v2_no_tenant_id (2026-03-16)
 """
 
+import asyncio
 from typing import Any, Optional
 from datetime import datetime
 import structlog
@@ -22,6 +23,7 @@ from src.ai_voicebot.knowledge.knowledge_service import (
     add_knowledge,
     delete_knowledge,
     immediate_cache_for_knowledge,
+    immediate_cache_for_help_direct,
     list_knowledge,
     VALID_CATEGORIES,
 )
@@ -41,7 +43,7 @@ class KnowledgeCreateRequest(BaseModel):
     owner: str = Field(..., description="소유자 ID (필수)")
     category: str = Field(..., description="카테고리 (필수)")
     doc_type: Optional[str] = Field("knowledge", description="문서 유형 (knowledge|faq)")
-    answer: Optional[str] = Field(None, description="답변 (greeting/farewell 시 즉시 캐시용)")
+    answer: Optional[str] = Field(None, description="답변 (greeting/farewell 즉시 캐시용 응답 문구, question 시 help 캐시 안내 내용)")
     source: Optional[str] = Field("api", description="출처 (api|hitl|call|seed)")
     call_id: Optional[str] = Field(None, description="통화 ID")
     # contact category용 추가 필드
@@ -199,7 +201,7 @@ async def post_knowledge(
                 category=category,
                 needs_cache=result.get("needs_immediate_cache", False))
 
-    # 즉시 캐싱 (async)
+    # greeting/farewell 즉시 캐싱 (async)
     if result.get("needs_immediate_cache") and result.get("_cache_query_text"):
         try:
             logger.info("knowledge_api_caching",
@@ -224,11 +226,37 @@ async def post_knowledge(
                           error=str(e),
                           owner=owner,
                           category=category)
-    
+
+    # help 카테고리 직접 등록 시 qa_cache(intent=help) 즉시 upsert
+    if result.get("needs_help_direct_cache") and result.get("_help_cache_text"):
+        try:
+            logger.info(
+                "knowledge_api_help_direct_cache",
+                owner=owner,
+                help_text_preview=result["_help_cache_text"][:60],
+            )
+            await immediate_cache_for_help_direct(
+                vector_db=vector_db,
+                embedder=embedder,
+                help_text=result["_help_cache_text"],
+                help_answer=result["_help_cache_answer"],
+                owner=owner,
+            )
+            result["help_cached"] = True
+            logger.info("knowledge_api_help_direct_cached", owner=owner)
+        except Exception as e:
+            result["help_cached"] = False
+            result["help_cache_error"] = str(e)
+            logger.warning(
+                "knowledge_api_help_direct_cache_failed",
+                error=str(e),
+                owner=owner,
+            )
+
     for k in list(result.keys()):
         if k.startswith("_"):
             result.pop(k, None)
-    
+
     return result
 
 

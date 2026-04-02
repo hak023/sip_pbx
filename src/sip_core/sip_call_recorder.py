@@ -341,7 +341,8 @@ class SIPCallRecorder:
         self, 
         call_id: str,
         caller_id: str,
-        callee_id: str
+        callee_id: str,
+        direction: str = "inbound",
     ):
         """
         통화 녹음 시작
@@ -350,6 +351,7 @@ class SIPCallRecorder:
             call_id: 통화 ID
             caller_id: 발신자 ID
             callee_id: 수신자 ID
+            direction: 통화 방향 — "inbound"(수신) 또는 "outbound"(발신). metadata.json에 저장됨.
         """
         if call_id in self.active_recordings:
             logger.warning("Recording already active", call_id=call_id)
@@ -358,11 +360,14 @@ class SIPCallRecorder:
         logger.info("SIP call recording started", 
                    call_id=call_id,
                    caller=caller_id,
-                   callee=callee_id)
+                   callee=callee_id,
+                   direction=direction)
         
         # 녹음 디렉토리 생성 (타임스탬프 기반)
+        # 아웃바운드: "ob_" 접두사로 인바운드와 구분
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dir_name = f"{timestamp}_{caller_id}_to_{callee_id}"
+        prefix = "ob" if direction == "outbound" else "ib"
+        dir_name = f"{timestamp}_{prefix}_{caller_id}_to_{callee_id}"
         call_dir = self.output_dir / dir_name
         call_dir.mkdir(parents=True, exist_ok=True)
         
@@ -375,6 +380,7 @@ class SIPCallRecorder:
             "start_time": datetime.now(),
             "caller_id": caller_id,
             "callee_id": callee_id,
+            "direction": direction,
             "caller_buffer": [],
             "callee_buffer": [],
             "caller_frames": 0,
@@ -605,6 +611,7 @@ class SIPCallRecorder:
             "directory": recording["dir_name"],  # ✅ 디렉토리 이름 추가
             "caller_id": recording["caller_id"],
             "callee_id": recording["callee_id"],
+            "direction": recording.get("direction", "inbound"),
             "start_time": recording["start_time"].isoformat(),
             "end_time": end_time.isoformat(),
             "duration": duration,

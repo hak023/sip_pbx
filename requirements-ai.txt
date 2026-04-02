@@ -24,8 +24,10 @@ protobuf==4.25.1                     # Protocol buffers
 # -----------------------------------------------------------------------------
 # Vector Database & Embeddings
 # -----------------------------------------------------------------------------
-# ChromaDB 1.x: PostHog 텔레메트리 capture() 호환 수정 포함 (이슈 #4997/#4966)
-chromadb>=1.5.0,<2.0.0              # Vector DB (1.5.x: telemetry fix, PersistentClient/Settings 호환)
+# ChromaDB 0.6.x: 현재 DB 스키마(sysdb v10, metadb v6) 호환 버전.
+# 1.x 이상은 Rust 백엔드 도입으로 기존 BLOB seq_id 스키마와 호환 불가 (InternalError: mismatched types).
+# DB를 신규 생성하거나 공식 마이그레이션 경로가 확인되기 전까지 0.6.x 고정.
+chromadb>=0.6.0,<1.0.0              # Vector DB (0.6.x: 기존 DB 스키마 호환)
 # pinecone-client==3.0.0             # Vector DB for production (uncomment when ready)
 
 # Transformers & Embeddings (PyTorch 2.1 compatible versions)

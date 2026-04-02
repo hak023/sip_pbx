@@ -390,9 +390,9 @@ class _ChromaClientWrapper:
             logger.info("ChromaDB initialized: path=%s, collection=%s", path, KNOWLEDGE_COLLECTION)
         except Exception as e:
             err_msg = str(e)
-            if "collections.topic" in err_msg:
+            if "collections.topic" in err_msg or "mismatched types" in err_msg:
                 logger.warning(
-                    "ChromaDB initialize failed (schema mismatch): %s | fix: pip install 'chromadb>=0.5.0' 또는 data/chroma 삭제 후 재시작. docs/reports/CHROMA_COLLECTIONS_TOPIC_ERROR.md",
+                    "ChromaDB initialize failed (schema mismatch): %s | fix: pip install 'chromadb>=0.6.0,<1.0.0' 로 다운그레이드 (chromadb 1.x Rust 백엔드는 기존 DB 스키마와 호환 불가)",
                     err_msg,
                 )
             else:
@@ -428,9 +428,9 @@ def get_vector_db() -> Optional[Any]:
         return _vector_db
     except Exception as e:
         err_msg = str(e)
-        if "collections.topic" in err_msg:
+        if "collections.topic" in err_msg or "mismatched types" in err_msg:
             logger.warning(
-                "ChromaDB sync init failed (schema mismatch): %s | fix: pip install 'chromadb>=0.5.0' 또는 data/chroma 삭제. docs/reports/CHROMA_COLLECTIONS_TOPIC_ERROR.md",
+                "ChromaDB sync init failed (schema mismatch): %s | fix: pip install 'chromadb>=0.6.0,<1.0.0' 로 다운그레이드 (chromadb 1.x Rust 백엔드는 기존 DB 스키마와 호환 불가)",
                 err_msg,
             )
         else:

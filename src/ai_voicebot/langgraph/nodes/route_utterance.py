@@ -85,6 +85,29 @@ async def route_utterance_node(state: ConversationState) -> dict:
             "rewritten_query": query,
         }
 
+    # 아웃바운드 모드: affirm/deny/doubt/gratitude 는 RAG 불필요
+    # 착신자의 짧은 응답(예, 아니요, 감사 등)을 LLM으로 자연스럽게 처리
+    _outbound_purpose = state.get("outbound_purpose", "") if hasattr(state, "get") else ""
+    if _outbound_purpose and intent in ("affirm", "deny", "doubt", "gratitude",
+                                        "positive_reaction", "negative_reaction"):
+        elapsed = time.perf_counter() - _start
+        logger.info(
+            "route_utterance_outbound_answer_direct",
+            intent=intent,
+            utterance_lane="social_direct",
+            outbound_purpose_preview=_outbound_purpose[:40],
+            elapsed_sec=round(elapsed, 4),
+            note="아웃바운드 모드: 착신자 답변 의도 → RAG 스킵, LLM 직행",
+        )
+        return {
+            **base_clear,
+            "utterance_lane": "social_direct",
+            "rag_mode": "skip",
+            "domain_question_signal": False,
+            "confidence": 0.9,
+            "rewritten_query": query,
+        }
+
     domain = compute_domain_question_signal(intent, query, org_context)
     elapsed = time.perf_counter() - _start
     logger.info(

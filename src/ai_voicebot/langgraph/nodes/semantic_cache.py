@@ -312,6 +312,12 @@ async def update_cache_node(state: ConversationState) -> dict:
         logger.info("timing_segment", segment="update_cache", elapsed_sec=round(elapsed, 3), skip="cache_hit")
         return {}
 
+    # 아웃바운드 통화: 착신자 답변은 캐시 대상이 아님 (목적·질문 기반 응대이므로)
+    if state.get("outbound_purpose") or state.get("intent") == "outbound_answer":
+        elapsed = time.time() - _start
+        logger.info("timing_segment", segment="update_cache", elapsed_sec=round(elapsed, 3), skip="outbound_skip")
+        return {}
+
     query = state.get("rewritten_query") or state.get("user_query", "")
     response = state.get("response", "")
     vector_db = state.get("_vector_db")

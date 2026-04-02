@@ -1757,15 +1757,18 @@ class SIPEndpoint:
                     if call_info:
                         caller_username = call_info.get('caller_username', 'unknown')
                         callee_username = call_info.get('callee_username', 'unknown')
+                        _direction = "outbound" if call_info.get('is_outbound') else "inbound"
                         await sip_recorder.start_recording(
                             call_id=call_id,
                             caller_id=caller_username,
-                            callee_id=callee_username
+                            callee_id=callee_username,
+                            direction=_direction,
                         )
                         logger.info("recording_started",
                                    call_id=call_id,
                                    caller=caller_username,
-                                   callee=callee_username)
+                                   callee=callee_username,
+                                   direction=_direction)
                 
             except Exception as e:
                 logger.error("rtp_worker_start_failed", call_id=call_id, error=str(e), exc_info=True)
@@ -1863,6 +1866,15 @@ class SIPEndpoint:
                 )
                 self._send_response(bye_resp, addr)
                 await self._outbound_manager.on_bye_received(call_id)
+                # 🎙️ 아웃바운드 녹음 종료 (BYE 수신 경로는 일반 cleanup_terminated_call을 타지 않으므로 여기서 직접 처리)
+                _sip_rec = getattr(self._call_manager, 'sip_recorder', None) if self._call_manager else None
+                if _sip_rec and _sip_rec.is_recording(call_id):
+                    try:
+                        asyncio.create_task(_sip_rec.stop_recording(call_id))
+                        logger.info("outbound_recording_stopped_on_bye", call_id=call_id)
+                    except Exception as _rec_err:
+                        logger.error("outbound_recording_stop_error_on_bye",
+                                     call_id=call_id, error=str(_rec_err))
                 # RTP Worker 정리 (아웃바운드는 일반 BYE 경로를 타지 않으므로 여기서 직접 정리)
                 rtp_worker_ob = self._rtp_workers.pop(call_id, None)
                 if rtp_worker_ob:
@@ -4161,6 +4173,16 @@ class SIPEndpoint:
             self._socket.sendto(bye_msg.encode(), target_addr)
             logger.info("outbound_bye_sent", call_id=call_id, cseq=bye_cseq)
 
+            # 🎙️ 아웃바운드 녹음 종료 (봇이 BYE를 먼저 보내는 경우)
+            _sip_rec = getattr(self._call_manager, 'sip_recorder', None) if self._call_manager else None
+            if _sip_rec and _sip_rec.is_recording(call_id):
+                try:
+                    asyncio.create_task(_sip_rec.stop_recording(call_id))
+                    logger.info("outbound_recording_stopped_on_send_bye", call_id=call_id)
+                except Exception as _rec_err:
+                    logger.error("outbound_recording_stop_error_on_send_bye",
+                                 call_id=call_id, error=str(_rec_err))
+
             # 정리
             self._active_calls.pop(call_id, None)
             self._call_mapping.pop(call_id, None)
@@ -4321,13 +4343,28 @@ class SIPEndpoint:
             media_session.caller_leg.original_audio_port = local_rtp_port
             media_session.caller_leg.allocated_ports = [local_rtp_port, local_rtcp_port]
             # callee_leg: 착신자 방향
+            # ai_mode=True 에서는 callee 소켓을 직접 바인드할 필요 없음.
+            # allocated_ports=[0,0]으로 설정하면 rtp_relay.start()에서
+            # get_audio_rtp_port()→0 반환 → 바인딩 스킵.
+            # 동일 포트를 두 번 바인드하는 [WinError 10048] 방지.
             media_session.callee_leg = MediaLeg()
             media_session.callee_leg.original_ip = callee_ip
             media_session.callee_leg.original_audio_port = callee_rtp_port
-            media_session.callee_leg.allocated_ports = [local_rtp_port, local_rtcp_port]
+            media_session.callee_leg.allocated_ports = [0, 0]
 
+            # Outbound 콜 RTP 엔드포인트 설정.
+            # caller_endpoint: B2BUA 자신이 bind한 로컬 포트(local_rtp_port) — RTP 소켓의 bind 기준점.
+            # callee_endpoint: 착신자가 SDP에서 협상한 수신 포트(callee_rtp_port) — 실제 TTS 전송 대상.
+            # tts_dest_endpoint: enable_pipecat_mode / _pcm_sender_thread_main에서 사용하는 명시적 전송 목적지.
+            #   → Inbound와 동일하게 caller_endpoint를 RTP Worker 내부 로직의 기준으로 두되,
+            #     실제 TTS 패킷은 tts_dest_endpoint(= callee_rtp_port)로 전송한다.
             caller_endpoint = RTPEndpoint(ip=callee_ip, port=local_rtp_port)
             callee_endpoint = RTPEndpoint(
+                ip=callee_ip,
+                port=callee_rtp_port if callee_rtp_port else local_rtp_port,
+            )
+            # TTS RTP 실제 목적지: 착신자(수신 전화기)의 RTP 포트
+            tts_dest_endpoint = RTPEndpoint(
                 ip=callee_ip,
                 port=callee_rtp_port if callee_rtp_port else local_rtp_port,
             )
@@ -4360,6 +4397,8 @@ class SIPEndpoint:
 
             # 아웃바운드는 처음부터 AI 모드 — 릴레이할 caller/callee 실제 통화 없음
             rtp_worker.ai_mode = True
+            # TTS 패킷의 실제 UDP 목적지를 착신자 포트로 고정
+            rtp_worker.tts_dest_endpoint = tts_dest_endpoint
 
             await rtp_worker.start()
             self._rtp_workers[call_id] = rtp_worker
@@ -4369,7 +4408,28 @@ class SIPEndpoint:
                         bind_ip=rtp_bind_ip,
                         local_rtp_port=local_rtp_port,
                         callee_ip=callee_ip,
-                        callee_rtp_port=callee_rtp_port)
+                        callee_rtp_port=callee_rtp_port,
+                        tts_dest=f"{callee_ip}:{callee_rtp_port}")
+
+            # 🎙️ 아웃바운드 녹음 시작 (_start_rtp_relay와 동일 패턴)
+            if sip_recorder:
+                caller_id = call_info.get("from_number", "unknown")
+                callee_id = call_info.get("to_number", "unknown")
+                try:
+                    await sip_recorder.start_recording(
+                        call_id=call_id,
+                        caller_id=caller_id,
+                        callee_id=callee_id,
+                        direction="outbound",
+                    )
+                    logger.info("outbound_recording_started",
+                                call_id=call_id,
+                                caller=caller_id,
+                                callee=callee_id)
+                except Exception as rec_err:
+                    logger.error("outbound_recording_start_error",
+                                 call_id=call_id, error=str(rec_err))
+
             return True
 
         except Exception as e:

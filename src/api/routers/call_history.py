@@ -62,14 +62,19 @@ def record_hitl_request(
     )
 
 
-def _owner_matches_row(owner_filter: str, callee_id: str) -> bool:
+def _owner_matches_row(owner_filter: str, callee_id: str, caller_id: str = "") -> bool:
+    """owner_filter가 callee_id(수신) 또는 caller_id(발신) 어느 쪽에든 해당하면 True."""
     if not owner_filter:
         return True
     want = normalize_owner_username(owner_filter)
-    got = normalize_owner_username(callee_id or "")
-    if want and got:
-        return want == got or want in got or got in want
-    return (owner_filter.strip().lower() in (callee_id or "").lower()) if owner_filter else True
+
+    def _matches(field: str) -> bool:
+        got = normalize_owner_username(field or "")
+        if want and got:
+            return want == got or want in got or got in want
+        return owner_filter.strip().lower() in (field or "").lower()
+
+    return _matches(callee_id) or _matches(caller_id)
 
 
 def _load_metadata_rows(root: Path) -> List[Dict[str, Any]]:
@@ -228,24 +233,52 @@ def get_call_transcript(call_id: str) -> PlainTextResponse:
 
 @router.get("")
 def list_call_history(
-    owner: Optional[str] = Query(None, description="착신(테넌트) 필터 — localStorage tenant와 동일"),
+    owner: Optional[str] = Query(None, description="테넌트 필터 — caller_id(발신) 또는 callee_id(착신) 어느 쪽에든 매칭"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    since: Optional[str] = Query(None, description="ISO 8601 기준 시각 — 이 시각 이후 통화만 반환 (최근 30일 등)"),
+    direction: Optional[str] = Query(
+        None,
+        description="통화 방향 필터: inbound | outbound (미지정 시 전체)",
+    ),
 ) -> Dict[str, Any]:
     """
     완료 통화 목록. 각 항목에 `callee_summary`, `ai_unhandled_items`, `ai_unhandled_count` 포함
     (`call_insights.json`이 있을 때만 채워짐).
+    owner 필터는 caller_id(발신)·callee_id(착신) 양쪽을 검사하므로 수신·발신 통화 모두 반환됨.
     """
     root = _recordings_root()
     metas = _load_metadata_rows(root)
     metas.sort(key=_sort_key, reverse=True)
 
     owner_f = (owner or "").strip()
-    filtered = [
-        m
-        for m in metas
-        if not owner_f or _owner_matches_row(owner_f, str(m.get("callee_id") or ""))
-    ]
+    since_f = (since or "").strip()
+    direction_f = (direction or "").strip().lower()
+    if direction_f and direction_f not in ("inbound", "outbound"):
+        direction_f = ""
+
+    def _row_matches(m: Dict[str, Any]) -> bool:
+        if owner_f and not _owner_matches_row(
+            owner_f,
+            str(m.get("callee_id") or ""),
+            str(m.get("caller_id") or ""),
+        ):
+            return False
+        if since_f:
+            row_time = str(m.get("end_time") or m.get("start_time") or "")
+            if row_time and row_time < since_f:
+                return False
+        if direction_f:
+            row_dir = str(m.get("direction") or "").strip().lower()
+            # direction 필드가 없는 경우 call_id 접두사로 방향 판별
+            if not row_dir:
+                cid = str(m.get("call_id") or "")
+                row_dir = "outbound" if cid.startswith("outbound-") else "inbound"
+            if row_dir != direction_f:
+                return False
+        return True
+
+    filtered = [m for m in metas if _row_matches(m)]
     total_matching = len(filtered)
     page = filtered[offset : offset + limit]
 
@@ -259,6 +292,10 @@ def list_call_history(
             "directory": m.get("directory"),
             "caller_id": m.get("caller_id"),
             "callee_id": m.get("callee_id"),
+            "direction": (
+                m.get("direction")
+                or ("outbound" if str(m.get("call_id") or "").startswith("outbound-") else "inbound")
+            ),
             "start_time": m.get("start_time"),
             "end_time": m.get("end_time"),
             "duration": m.get("duration"),

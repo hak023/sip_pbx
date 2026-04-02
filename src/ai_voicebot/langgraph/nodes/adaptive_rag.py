@@ -306,6 +306,27 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
             rag_search_trace=rag_search_trace,
         )
 
+        # 5단계: top1 문서 hit_count 증가 (fire-and-forget, 실패해도 RAG 결과에 영향 없음)
+        if search_results:
+            top1 = search_results[0]
+            top1_id = top1.id if hasattr(top1, "id") else top1.get("id", "")
+            if top1_id:
+                try:
+                    from src.services.knowledge_service import get_knowledge_service
+                    ks = get_knowledge_service()
+                    if ks:
+                        import asyncio as _asyncio
+                        _asyncio.ensure_future(ks.increment_hit_count(top1_id))
+                        logger.info(
+                            "adaptive_rag_top1_hit",
+                            call_id=call_id,
+                            doc_id=top1_id,
+                            score=round(float(top1.score if hasattr(top1, "score") else top1.get("score", 0)), 4),
+                            note="top1 지식 문서 hit_count 증가 예약",
+                        )
+                except Exception as _e:
+                    logger.warning("adaptive_rag_hit_count_schedule_failed", doc_id=top1_id, error=str(_e))
+
         return {
             "rag_results": compressed,
             "confidence": confidence,
