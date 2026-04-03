@@ -1,5 +1,10 @@
-# SIP PBX - 설정 파일 예시
-# 이 파일을 config.yaml로 복사하여 사용하세요: cp config.example.yaml config.yaml
+# SIP PBX - 설정 파일 예시 (Git 추적용)
+#
+# 사용법: 이 파일을 복사해 로컬 전용 config/config.yaml 을 만드세요.
+#   cp config/config.example.yaml config/config.yaml
+#
+# ⚠️ config/config.yaml 은 .gitignore 되어 있으며 원격 저장소에 올리지 마세요.
+#    API 키·SA JSON 등 비밀은 config.yaml 또는 환경 변수에만 두세요.
 
 # =============================================================================
 # SIP 서버 설정
@@ -145,7 +150,24 @@ security:
       - "192.168.0.0/16"
 
 # =============================================================================
+# AI 보이스봇 / Gemini (운영 시 로컬 config.yaml 에서 보통 설정)
+# =============================================================================
+# - google_cloud.gemini.api_key: 로컬 config.yaml 에만 실제 키 입력
+# - 또는 환경 변수 GEMINI_API_KEY (코드에서 api_key 미설정 시 사용)
+# - 이 예시 파일에는 비밀을 넣지 마세요.
+#
+ai_voicebot:
+  enabled: true
+  google_cloud:
+    project_id: "your-gcp-project-id"
+    credentials_path: "config/gcp-key.json"
+    gemini:
+      model: "gemini-2.5-flash"
+      api_key: ""
+
+# =============================================================================
 # 환경 변수로 오버라이드 가능
 # 예: export SIP_PBX_SIP_LISTEN_PORT=5061
+# Gemini: export GEMINI_API_KEY="..."  (config 의 api_key 가 비어 있을 때)
 # =============================================================================
 
