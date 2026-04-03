@@ -97,34 +97,134 @@ async def get_or_create_google_stt_service(config: Dict[str, Any] = None):
     return _global_google_stt_service
 
 
+def _is_gemini_tts_voice(voice_name: str) -> bool:
+    """voice_name이 Gemini TTS 보이스인지 판별.
+
+    Gemini TTS 보이스는 'ko-KR-' 등 언어 접두사 없이 단순 이름(Kore, Aoede, Charon …)으로 지정.
+    Chirp 3 HD는 'ko-KR-Chirp3-HD-Kore' 형태.
+    config.yaml의 gemini_tts.model 키가 있으면 명시적 Gemini 경로.
+    """
+    if not voice_name:
+        return False
+    # 언어 코드 접두사(예: ko-KR-, en-US-)가 없으면 Gemini 보이스로 간주
+    return "-" not in voice_name
+
+
 def _build_google_tts_service(config: Dict[str, Any] = None, call_id: str = ""):
-    """GoogleTTSService 인스턴스 생성 (Singleton·파이프라인 전용 공통).
-    
+    """TTS 서비스 인스턴스 생성 (Singleton·파이프라인 전용 공통).
+
+    voice_name 또는 gemini_tts.model 설정에 따라 자동으로 Gemini TTS / Chirp 3 HD를 선택한다.
+
+    Gemini TTS 선택 조건 (OR):
+      - config['gemini_tts']['model'] 키가 존재
+      - voice_name 이 단순 이름 (예: 'Kore', 'Aoede') — 언어 접두사 없음
+
+    그 외(기본): Chirp 3 HD (DebugGoogleTTSService)
+
     Args:
-        config: TTS 설정 (sample_rate, voice_name 등)
+        config: TTS 설정 dict (sample_rate, voice_name, gemini_tts 등)
         call_id: 로깅용 call_id (선택)
     """
-    from src.ai_voicebot.pipecat.services.debug_google_tts import DebugGoogleTTSService
+    from src.ai_voicebot.pipecat.services.debug_google_tts import (
+        DebugGoogleTTSService,
+        DebugGeminiTTSService,
+    )
 
-    _tts_config = config or {
+    _tts_config = dict(config or {
         "sample_rate": 16000,
-        "voice_name": "ko-KR-Standard-A",
+        "voice_name": "ko-KR-Chirp3-HD-Kore",
         "language_code": "ko-KR",
-    }
-    # ✅ aggregate_sentences=False: 문장 자동 분할 비활성화
-    # Google TTS API는 streaming 미지원 → 분할 시 각 문장마다 별도 API 호출로 레이턴시 누적
-    # RAG 응답 전체를 한 번에 전송해야 최적의 재생 품질 (인사말과 동일 방식)
+    })
+
+    # aggregate_sentences=False: 문장 자동 분할 비활성화 (RAG 응답 전체를 1회 전송)
     _tts_config["aggregate_sentences"] = False
-    
-    # 📌 TTS 서비스 생성 시 aggregate_sentences 설정 확인 로깅
-    logger.info("google_tts_service_created",
-               aggregate_sentences=_tts_config.get("aggregate_sentences"),
-               sample_rate=_tts_config.get("sample_rate"),
-               voice_name=_tts_config.get("voice_name"),
-               call_id=call_id or "",
-               note="GoogleTTSService 생성 — aggregate_sentences=False 확인 (문장 분할 비활성화)")
-    
-    return DebugGoogleTTSService(call_id=call_id, **_tts_config)
+
+    # Gemini TTS 설정 블록 (config.yaml의 tts.gemini_tts 하위 키)
+    gemini_cfg = _tts_config.pop("gemini_tts", None) or {}
+    gemini_model = gemini_cfg.get("model", "")
+    gemini_prompt = gemini_cfg.get("style_prompt", "")
+
+    voice_name = _tts_config.get("voice_name", "")
+    use_gemini = bool(gemini_model) or _is_gemini_tts_voice(voice_name)
+
+    if use_gemini:
+        # Gemini TTS: GeminiTTSService는 voice_id / model 파라미터를 사용
+        # DebugGeminiTTSService(GeminiTTSService) 생성자 시그니처:
+        #   voice_id, model, sample_rate, params(language, prompt), ...
+        effective_model = gemini_model or "gemini-2.5-flash-tts"
+        effective_voice = voice_name or "Kore"
+        # language_code 처리: Gemini는 'ko-KR' 형식 사용
+        lang_code = _tts_config.get("language_code", "ko")
+        if len(lang_code) == 2:
+            lang_code = f"{lang_code}-KR" if lang_code == "ko" else f"{lang_code}-US"
+
+        from pipecat.services.google.tts import GeminiTTSService
+        from pipecat.transcriptions.language import Language
+
+        # speaking_rate는 Gemini TTS에서 streaming_audio_config에 직접 지원 안 함(2026-04 기준)
+        # → AudioConfig 레벨 파라미터로 전달되지 않아 무시됨, 로그로 안내
+        speaking_rate = _tts_config.get("speaking_rate")
+        if speaking_rate and speaking_rate != 1.0:
+            logger.info(
+                "gemini_tts_speaking_rate_not_supported",
+                speaking_rate=speaking_rate,
+                note="Gemini TTS Streaming API는 speaking_rate 미지원 — style_prompt로 속도 제어 가능",
+            )
+
+        # Gemini TTS에 불필요한 키 제거 후 생성
+        gemini_kwargs = {
+            "call_id": call_id,
+            "model": effective_model,
+            "voice_id": effective_voice,
+            "sample_rate": _tts_config.get("sample_rate", 24000),
+        }
+        if gemini_prompt:
+            gemini_kwargs["params"] = GeminiTTSService.InputParams(
+                language=Language.KO_KR,
+                prompt=gemini_prompt,
+            )
+        else:
+            gemini_kwargs["params"] = GeminiTTSService.InputParams(language=Language.KO_KR)
+
+        logger.info(
+            "gemini_tts_service_created",
+            model=effective_model,
+            voice_id=effective_voice,
+            sample_rate=gemini_kwargs["sample_rate"],
+            style_prompt=gemini_prompt or "(없음)",
+            call_id=call_id or "",
+            note="Gemini TTS 선택 — 24kHz 출력, RTPPacketBuilder에서 8kHz 리샘플링",
+        )
+        return DebugGeminiTTSService(**gemini_kwargs)
+
+    # Chirp 3 HD (기본 경로)
+    # DebugGoogleTTSService(GoogleTTSService) 생성자: voice_id, sample_rate, params(language, speaking_rate)
+    from pipecat.services.google.tts import GoogleTTSService
+    from pipecat.transcriptions.language import Language
+
+    speaking_rate = _tts_config.get("speaking_rate")
+    lang_code = _tts_config.get("language_code", "ko-KR")
+
+    chirp_kwargs = {
+        "call_id": call_id,
+        "voice_id": voice_name or "ko-KR-Chirp3-HD-Kore",
+        "sample_rate": _tts_config.get("sample_rate", 16000),
+        "params": GoogleTTSService.InputParams(
+            language=Language.KO_KR,
+            speaking_rate=float(speaking_rate) if speaking_rate is not None else None,
+        ),
+        "aggregate_sentences": False,
+    }
+
+    logger.info(
+        "chirp3hd_tts_service_created",
+        voice_id=chirp_kwargs["voice_id"],
+        sample_rate=chirp_kwargs["sample_rate"],
+        speaking_rate=speaking_rate,
+        call_id=call_id or "",
+        note="Chirp 3 HD TTS 선택 — 스트리밍 API, aggregate_sentences=False",
+    )
+    return DebugGoogleTTSService(**chirp_kwargs)
 
 
 async def create_google_tts_service_per_pipeline(config: Dict[str, Any] = None, call_id: str = ""):

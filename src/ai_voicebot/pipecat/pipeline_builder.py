@@ -12,7 +12,7 @@ SIP PBX RTP Worker와 연동해 통화당 Voice AI 파이프라인을 구성·�
 
   builder = PipelineBuilder(on_call_ended=ws_manager.emit_call_ended)
   await builder.build_and_run(
-      callee="1003",
+      owner="1003",
       rtp_worker=rtp_worker,
       vad=vad, stt=stt, tts=tts, llm_client=llm_client,
       knowledge_service=knowledge_service,
@@ -163,21 +163,21 @@ class PipelineBuilder:
 
         # VAD 래퍼 추가 (로깅 및 모니터링)
         from src.ai_voicebot.pipecat.processors.vad_wrapper import wrap_vad_with_logging
-        # 아웃바운드: TTS 재생 중 STT 입력 억제 (에코 방지)
-        # inbound는 suppress_stt_during_tts=False (기존 동작 유지)
+        # TTS 재생 중 STT 입력 억제 — 임시 비활성화 (에코 원인 재검토 중)
+        # 실제 에코가 아닌 두 턴 발화 얽힘으로 판단, 스피커폰 미사용 환경에서 에코 없음 확인 필요
         vad_wrapped = wrap_vad_with_logging(
             vad,
             call_id=call_id,
             enable_barge_in=True,
-            suppress_stt_during_tts=is_outbound,
-            tts_sync_context=tts_sync_context if is_outbound else None,
+            suppress_stt_during_tts=False,
+            tts_sync_context=None,
         )
         logger.info(
             "vad_wrapper_suppress_stt_configured",
             call_id=call_id,
             is_outbound=is_outbound,
-            suppress_stt_during_tts=is_outbound,
-            note="아웃바운드=True 시 TTS 재생 중 STT 입력 억제 활성화",
+            suppress_stt_during_tts=False,
+            note="TTS 중 STT 억제 임시 비활성화 (에코 원인 재검토 중)",
         )
 
         # 바지인 켬: Interruption* 프레임을 TTS까지 전달 (3단어 조건은 user_turn_strategies에서 MinWordsUserTurnStartStrategy로 시도)
@@ -223,7 +223,7 @@ class PipelineBuilder:
 
     async def build_and_run(
         self,
-        callee: str,
+        owner: str,
         rtp_worker: Any,
         *,
         vad: Any,
@@ -248,7 +248,8 @@ class PipelineBuilder:
         파이프라인 빌드 후 실행. 종료 시 on_call_ended(call_id) 호출.
 
         Args:
-            callee: 착신번호 (owner로 사용)
+            owner: KB/페르소나 로드 기준 테넌트 ID.
+                   인바운드: callee(착신번호), 아웃바운드: caller_number(AI봇 발신번호).
             rtp_worker: RTP Worker
             vad, stt, tts, llm_client: 필수 Voice/AI 컴포넌트
             outbound_purpose: 아웃바운드 통화 목적 (미션 완료 감지용)
@@ -261,10 +262,10 @@ class PipelineBuilder:
         if not org_manager and knowledge_service:
             try:
                 from src.ai_voicebot.knowledge.organization_info import OrganizationInfoManager
-                org_manager = OrganizationInfoManager(owner=callee, knowledge_service=knowledge_service)
+                org_manager = OrganizationInfoManager(owner=owner, knowledge_service=knowledge_service)
                 await org_manager.load()
             except Exception as e:
-                logger.warning("org_manager_load_failed", callee=callee, error=str(e))
+                logger.warning("org_manager_load_failed", owner=owner, error=str(e))
                 org_manager = None
 
         tts_sync_context: Dict[str, Any] = {}
@@ -282,7 +283,7 @@ class PipelineBuilder:
             knowledge_service=knowledge_service,
             system_prompt=system_prompt,
             max_history_turns=max_history_turns,
-            owner=callee,
+            owner=owner,
             call_id=call_id or None,
             hitl_on_alert=hitl_on_alert,
             stt_post_filter_config=stt_post_filter_config,
@@ -417,10 +418,10 @@ class PipelineBuilder:
                     first_user_proc=type(procs[1]).__name__ if procs and len(procs) > 1 else None,
                     note="PipelineRunner.run() 진입 — StartFrame은 procs[0](Source)에서 procs[1](Input)으로 전달 예상")
         if call_id:
-            log_call_data(call_id, "call_event", "call_connected", callee=callee or "")
+            log_call_data(call_id, "call_event", "call_connected", callee=owner or "")
             try:
                 from src.api.routers.calls import register_active_call
-                register_active_call(call_id, callee=callee or "", is_ai_handled=True)
+                register_active_call(call_id, callee=owner or "", is_ai_handled=True)
             except Exception:
                 pass
         try:
@@ -470,7 +471,7 @@ class PipelineBuilder:
                     except (ValueError, OSError):
                         pass  # 서버 종료 시 로그가 이미 닫혀 있을 수 있음
             if call_id:
-                log_call_data(call_id, "call_event", "call_ended", callee=callee or "")
+                log_call_data(call_id, "call_event", "call_ended", callee=owner or "")
                 try:
                     from src.api.routers.calls import unregister_active_call
                     unregister_active_call(call_id)

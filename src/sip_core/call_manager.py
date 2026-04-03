@@ -166,6 +166,9 @@ class CallManager:
 
                     # 대시보드 등록 (활성 통화 목록)
                     callee_number = outbound_context.get("callee_number", "")
+                    # outbound에서 KB/페르소나 owner = AI봇 발신번호(caller_number).
+                    # callee_number는 고객 번호이므로 owner로 사용하면 안 됨.
+                    caller_number = outbound_context.get("caller_number", "") or callee_number
                     _self_ref.ai_enabled_calls.add(call_id)
                     try:
                         from src.api.routers.calls import register_active_call
@@ -269,7 +272,7 @@ class CallManager:
                             await _self_ref._sip_endpoint.send_outbound_bye(cid)
 
                     _coro = _self_ref.pipecat_builder.build_and_run(
-                        callee_number,
+                        caller_number,   # outbound: AI봇 발신번호 기준으로 KB/페르소나 로드
                         rtp_worker,
                         vad=_vad_processor,
                         stt=_stt_pipecat,
@@ -297,6 +300,7 @@ class CallManager:
                     logger.info("outbound_pipecat_pipeline_started",
                                 call_id=call_id,
                                 outbound_id=outbound_context.get("outbound_id"),
+                                kb_owner=caller_number,
                                 callee=callee_number)
 
                 async def _stop_outbound_ai(call_id: str):

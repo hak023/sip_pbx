@@ -68,6 +68,8 @@ class ConversationState(TypedDict, total=False):
     _embedder: object             # Embedder 참조
     _vector_db: object            # VectorDB 참조
     _org_manager: object          # 기관 정보 관리자 참조
-    _owner: str                    # 착신번호 (테넌트 ID, 예: "1004")
+    _owner: str                    # 테넌트 ID (inbound=callee, outbound=caller)
+    _persona_owner: str            # 페르소나 조회용 owner: inbound=callee(_owner), outbound=callee(상대방번호)
+    _persona_scope_matched: bool   # classify_intent에서 페르소나 scope_keywords 매칭된 경우 True (domain_question_signal 산출용)
     _call_id: Optional[str]        # 통화 ID (로그/DB 연계용)
     _hangup_callback: object       # 미션 완료 시 BYE 전송 콜백 (아웃바운드 전용)

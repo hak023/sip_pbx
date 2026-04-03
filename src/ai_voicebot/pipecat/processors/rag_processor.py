@@ -276,8 +276,11 @@ class RAGLLMProcessor(FrameProcessor):
                 logger.warning("outbound_farewell_kb_error", call_id=call_id, error=str(e))
 
         if not farewell_text:
-            farewell_text = "필요한 내용을 모두 확인했습니다. 감사합니다. 좋은 하루 되세요."
-            logger.info("outbound_farewell_hardcoded", call_id=call_id)
+            # purpose 기반으로 자연스러운 마무리 문구 생성
+            farewell_text = "통화에 응해주셔서 감사합니다. 좋은 하루 되세요."
+            logger.info("outbound_farewell_hardcoded",
+                        call_id=call_id,
+                        note="KB farewell 없음 — 기본 마무리 멘트 사용. KB에 farewell 카테고리 문서를 등록하면 커스텀 멘트로 교체됩니다.")
 
         # farewell TTS 송출
         tts_done_event = asyncio.Event()
@@ -290,17 +293,38 @@ class RAGLLMProcessor(FrameProcessor):
         except Exception as e:
             logger.warning("outbound_farewell_failed", call_id=call_id, error=str(e))
 
-        # TTS 완료 이벤트 대기 (최대 10초), 타임아웃 시 3초 sleep 폴백
+        # TTS 완료 이벤트 대기 (최대 15초), 타임아웃 시 5초 sleep 폴백
+        # ※ 이 이벤트는 "PCM 큐 투입 완료" 시점에 set 된다 (RTP 송출 완료가 아님).
+        #    이벤트 수신 후 last_tts_duration_sec 만큼 추가 대기해야
+        #    RTP 전송이 끝난 뒤 BYE를 전송할 수 있다.
+        tts_rtp_play_duration: float = 0.0
         try:
-            await asyncio.wait_for(tts_done_event.wait(), timeout=10.0)
-            logger.info("outbound_farewell_tts_done_by_event", call_id=call_id)
+            await asyncio.wait_for(tts_done_event.wait(), timeout=15.0)
+            tts_rtp_play_duration = float(
+                self._tts_sync_context.get("last_tts_duration_sec") or 0.0
+            )
+            logger.info("outbound_farewell_tts_done_by_event",
+                        call_id=call_id,
+                        tts_rtp_play_duration=round(tts_rtp_play_duration, 3))
         except asyncio.TimeoutError:
             logger.warning("outbound_farewell_tts_timeout",
                            call_id=call_id,
-                           note="TTS 완료 이벤트 10초 미수신 — sleep 3초 폴백")
-            await asyncio.sleep(3.0)
+                           note="TTS 완료 이벤트 15초 미수신 — sleep 5초 폴백")
+            await asyncio.sleep(5.0)
         finally:
             self._tts_sync_context.pop("on_tts_complete", None)
+
+        # PCM 큐에 투입된 오디오가 실제로 RTP 전송될 때까지 대기
+        # (합성 완료 시점과 RTP 재생 완료 시점 사이 갭 보정)
+        if tts_rtp_play_duration > 0.1:
+            # 안전 마진 0.3초 추가 (RTP 지터·큐 소비 딜레이 흡수)
+            wait_sec = tts_rtp_play_duration + 0.3
+            logger.info("outbound_farewell_rtp_wait",
+                        call_id=call_id,
+                        tts_duration_sec=round(tts_rtp_play_duration, 3),
+                        wait_sec=round(wait_sec, 3),
+                        note="farewell RTP 재생 완료 대기 (BYE 조기 전송 방지)")
+            await asyncio.sleep(wait_sec)
 
         # hangup_callback 호출 → SIP BYE 전송
         if self._hangup_callback:

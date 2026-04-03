@@ -128,7 +128,7 @@ async def run_ai_voice_pipeline(
 
     builder = PipelineBuilder(on_call_ended=_on_call_ended)
     await builder.build_and_run(
-        callee=callee,
+        owner=callee,
         rtp_worker=rtp_worker,
         vad=vad,
         stt=stt,

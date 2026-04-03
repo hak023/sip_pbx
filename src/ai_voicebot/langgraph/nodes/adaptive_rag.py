@@ -109,7 +109,8 @@ def _merge_dialog_context_for_rag(state: ConversationState, base_query: str) -> 
 
 
 # 검색 파라미터
-SENTENCE_TOP_K = 10     # 문장 레벨 검색 수 (RAG 엔진 top_k·backfill과 함께 넉넉히)
+# top_k를 줄이면 chroma 후보 풀·recall_backfill 모두 감소 → LLM 컨텍스트 축소·응답 지연 단축
+SENTENCE_TOP_K = 5      # 문장 레벨 검색 수 (10→5: 과도한 backfill 억제, 핵심 문서 집중)
 PARENT_EXPAND_LINES = 5  # 상위 문맥 확장 줄 수
 COMPRESSION_MAX_CHARS = 1200  # 압축 후 최대 문자 수
 
@@ -139,64 +140,95 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
         return {"rag_results": [], "confidence": 0.0, "rag_search_trace": {}}
 
     try:
-        # 1단계: Small (Sentence) Retrieval (owner + intent→category 필터)
+        # 1단계: Small (Sentence) Retrieval — 정규화 쿼리와 원문 STT 쿼리를 병렬 실행 후 병합
         search_start = time.time()
-        search_out = await rag_engine.search(
-            query,
-            owner_filter=owner,
-            call_id=call_id or None,
-            top_k_override=SENTENCE_TOP_K,
-            intent=intent,
-        )
-        search_results = list(search_out.documents or [])
-        rag_search_trace = getattr(search_out, "trace", None) or {}
-        # 질문(intent=question): STT 원문과 정규화/rewrite 쿼리가 다르면 2-pass 검색 후 병합
-        # (예: "내일 날씨" → 절대일 문장으로만 임베딩하면 KB의 상대일 표현과 유사도 저하)
+        import asyncio as _asyncio
+
         raw_q = (state.get("user_query_raw") or "").strip()
-        if intent == "question" and raw_q:
-            raw_merged = _merge_dialog_context_for_rag(state, raw_q)
-            if raw_merged.strip() and raw_merged.strip() != (query or "").strip():
-                try:
-                    raw_out = await rag_engine.search(
-                        raw_merged,
-                        owner_filter=owner,
-                        call_id=call_id or None,
-                        top_k_override=SENTENCE_TOP_K,
-                        intent=intent,
+        raw_merged = _merge_dialog_context_for_rag(state, raw_q) if raw_q else ""
+        run_dual = (
+            intent == "question"
+            and raw_merged.strip()
+            and raw_merged.strip() != (query or "").strip()
+        )
+
+        if run_dual:
+            # 두 검색을 동시 실행 (순차 대비 ~50% 단축)
+            primary_coro = rag_engine.search(
+                query,
+                owner_filter=owner,
+                call_id=call_id or None,
+                top_k_override=SENTENCE_TOP_K,
+                intent=intent,
+            )
+            raw_coro = rag_engine.search(
+                raw_merged,
+                owner_filter=owner,
+                call_id=call_id or None,
+                top_k_override=SENTENCE_TOP_K,
+                intent=intent,
+            )
+            results_gathered = await _asyncio.gather(primary_coro, raw_coro, return_exceptions=True)
+            primary_out = results_gathered[0]
+            raw_out = results_gathered[1]
+
+            if isinstance(primary_out, Exception):
+                logger.warning(
+                    "adaptive_rag_primary_search_failed",
+                    call_id=call_id or "",
+                    error=str(primary_out),
+                )
+                search_results = []
+                rag_search_trace = {}
+            else:
+                search_results = list(primary_out.documents or [])
+                rag_search_trace = getattr(primary_out, "trace", None) or {}
+
+            if not isinstance(raw_out, Exception):
+                raw_docs = list(raw_out.documents or [])
+                if raw_docs:
+                    before = len(search_results)
+                    search_results = _merge_search_documents(
+                        search_results,
+                        raw_docs,
+                        max_docs=max(SENTENCE_TOP_K * 2, 10),
                     )
-                    raw_docs = list(raw_out.documents or [])
-                    if raw_docs:
-                        before = len(search_results)
-                        search_results = _merge_search_documents(
-                            search_results,
-                            raw_docs,
-                            max_docs=max(15, SENTENCE_TOP_K * 2),
-                        )
-                        rag_search_trace = {
-                            **rag_search_trace,
-                            "rag_dual_query": {
-                                "primary_query": query,
-                                "raw_stt_query": raw_merged,
-                                "primary_hits": before,
-                                "raw_hits": len(raw_docs),
-                                "merged_hits": len(search_results),
-                            },
-                        }
-                        logger.info(
-                            "adaptive_rag_dual_query_merged",
-                            call_id=call_id or "",
-                            primary_preview=(query or "")[:80],
-                            raw_preview=raw_merged[:80],
-                            merged_count=len(search_results),
-                            note="원문+정규화 쿼리 병행 검색",
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "adaptive_rag_dual_query_failed",
+                    rag_search_trace = {
+                        **rag_search_trace,
+                        "rag_dual_query": {
+                            "primary_query": query,
+                            "raw_stt_query": raw_merged,
+                            "primary_hits": before,
+                            "raw_hits": len(raw_docs),
+                            "merged_hits": len(search_results),
+                            "parallel": True,
+                        },
+                    }
+                    logger.info(
+                        "adaptive_rag_dual_query_merged",
                         call_id=call_id or "",
-                        error=str(e),
-                        note="원문 보조 검색 실패 시 1-pass 결과만 사용",
+                        primary_preview=(query or "")[:80],
+                        raw_preview=raw_merged[:80],
+                        merged_count=len(search_results),
+                        note="원문+정규화 쿼리 병렬 검색 후 병합",
                     )
+            else:
+                logger.warning(
+                    "adaptive_rag_dual_query_failed",
+                    call_id=call_id or "",
+                    error=str(raw_out),
+                    note="원문 보조 검색 실패 시 1-pass 결과만 사용",
+                )
+        else:
+            search_out = await rag_engine.search(
+                query,
+                owner_filter=owner,
+                call_id=call_id or None,
+                top_k_override=SENTENCE_TOP_K,
+                intent=intent,
+            )
+            search_results = list(search_out.documents or [])
+            rag_search_trace = getattr(search_out, "trace", None) or {}
 
         search_elapsed = time.time() - search_start
 
@@ -242,6 +274,43 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
 
         # 3단계: Contextual Compression
         compressed = _contextual_compress(expanded_docs, query)
+
+        # 3-3 개선: soft fallback 저품질 문서 필터
+        # soft fallback(strict 임계치 미달 시 완화 적용) 결과에서 너무 낮은 score 문서는
+        # LLM 컨텍스트 노이즈가 되어 응답 생성 품질 저하 및 지연을 유발한다.
+        # top1 score < 0.12이면 결과 전체를 빈 배열로 취급 (score < 0.12 = chroma distance > 7.3, 사실상 무관)
+        RAG_MIN_USEFUL_SCORE = 0.12
+        top_search_score = (
+            search_results[0].score
+            if search_results and hasattr(search_results[0], "score")
+            else search_results[0].get("score", 0) if search_results else 0.0
+        )
+        if top_search_score < RAG_MIN_USEFUL_SCORE:
+            logger.info(
+                "adaptive_rag_low_quality_filtered",
+                call_id=call_id or "",
+                top_score=round(float(top_search_score), 4),
+                min_score=RAG_MIN_USEFUL_SCORE,
+                dropped_count=len(compressed),
+                note="전체 RAG 결과가 최소 품질 기준 미달 → LLM에 빈 컨텍스트 전달 (노이즈 제거)",
+            )
+            log_call_data(
+                call_id or "",
+                "rag",
+                "rag_search_done",
+                query=query,
+                result_count=0,
+                expanded_count=0,
+                compressed_count=0,
+                owner_filter=owner,
+                confidence=0.0,
+                search_elapsed_sec=round(search_elapsed, 3),
+                total_elapsed_sec=round(time.time() - _start, 3),
+                rag_hits_retrieval=[],
+                rag_hits_llm_context=[],
+                rag_search_trace={**rag_search_trace, "low_quality_filtered": True, "top_score": round(float(top_search_score), 4)},
+            )
+            return {"rag_results": [], "confidence": 0.0, "rag_search_trace": {**rag_search_trace, "low_quality_filtered": True}}
 
         # 4단계: Confidence 산출 — top_score 기반 (평균 방식은 하위 문서가 점수를 끌어내림)
         scores = [

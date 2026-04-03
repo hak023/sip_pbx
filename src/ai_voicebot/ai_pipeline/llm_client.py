@@ -58,13 +58,20 @@ class LLMClient:
         self.model = genai.GenerativeModel(model_name=model_name)
         
         # Generation 설정 (max_output_tokens: config.yaml 키, max_tokens: 구 설정 호환)
+        # thinking은 모든 호출에서 비활성화 — 통화 응대·의도분류 등 어떤 작업도 내부 추론이 불필요하며
+        # thinking 활성 시 TTFT 3~6초 지연이 발생한다.
         max_tokens = config.get("max_output_tokens") or config.get("max_tokens", 512)
-        self.generation_config = genai.types.GenerationConfig(
-            temperature=config.get("temperature", 0.7),
-            top_p=config.get("top_p", 1.0),
-            top_k=config.get("top_k", 1),
-            max_output_tokens=max_tokens,
-        )
+        _init_kw: Dict[str, Any] = {
+            "temperature": config.get("temperature", 0.7),
+            "top_p": config.get("top_p", 1.0),
+            "top_k": config.get("top_k", 1),
+            "max_output_tokens": max_tokens,
+        }
+        try:
+            _init_kw["thinking_config"] = genai.types.ThinkingConfig(thinking_budget=0)
+        except (AttributeError, TypeError):
+            pass
+        self.generation_config = genai.types.GenerationConfig(**_init_kw)
         
         # 대화 히스토리
         self.conversation_history: List[Dict[str, str]] = []
@@ -78,16 +85,37 @@ class LLMClient:
                    model=model_name,
                    temperature=config.get("temperature"))
     
+    @staticmethod
+    def _thinking_off() -> Any:
+        """Gemini 2.5 Flash/Pro thinking을 완전 비활성화하는 ThinkingConfig 객체.
+
+        모든 LLM 호출에 적용한다. 통화 응대·의도 분류·쿼리 변환·지식 정제 등
+        어떤 작업도 내부 추론(reasoning token)이 필요할 만큼 복잡하지 않으며,
+        thinking이 활성화되면 짧은 응답도 TTFT 3~6초 지연이 발생한다.
+        """
+        try:
+            return genai.types.ThinkingConfig(thinking_budget=0)
+        except (AttributeError, TypeError):
+            logger.debug(
+                "llm_thinking_config_not_supported",
+                note="google-generativeai SDK가 ThinkingConfig를 지원하지 않음 — 무시",
+            )
+            return None
+
     def _effective_generation_config(self, max_output_tokens: Optional[int] = None) -> Any:
-        """호출별 출력 상한. None이면 인스턴스 기본(self.generation_config)과 동일 파라미터로 재생성."""
+        """호출별 GenerationConfig. thinking은 항상 비활성(thinking_budget=0)."""
         base = self.config.get("max_output_tokens") or self.config.get("max_tokens", 512)
         cap = int(max_output_tokens) if max_output_tokens is not None else int(base)
-        return genai.types.GenerationConfig(
-            temperature=self.config.get("temperature", 0.7),
-            top_p=self.config.get("top_p", 1.0),
-            top_k=self.config.get("top_k", 1),
-            max_output_tokens=max(16, cap),
-        )
+        kwargs: Dict[str, Any] = {
+            "temperature": self.config.get("temperature", 0.7),
+            "top_p": self.config.get("top_p", 1.0),
+            "top_k": self.config.get("top_k", 1),
+            "max_output_tokens": max(16, cap),
+        }
+        tc = self._thinking_off()
+        if tc is not None:
+            kwargs["thinking_config"] = tc
+        return genai.types.GenerationConfig(**kwargs)
     
     async def generate_simple(self, prompt: str, max_tokens: Optional[int] = None, timeout_seconds: float = 10.0) -> str:
         """
@@ -102,14 +130,7 @@ class LLMClient:
             생성된 텍스트
         """
         try:
-            gen_config = self.generation_config
-            if max_tokens:
-                gen_config = genai.types.GenerationConfig(
-                    temperature=self.config.get("temperature", 0.7),
-                    top_p=self.config.get("top_p", 1.0),
-                    top_k=self.config.get("top_k", 1),
-                    max_output_tokens=max_tokens,
-                )
+            gen_config = self._effective_generation_config(max_tokens)
             
             # ✅ 타임아웃 추가
             try:
@@ -149,12 +170,15 @@ class LLMClient:
         """
         json_mode_applied = False
         try:
+            tc = self._thinking_off()
             base_kw: Dict[str, Any] = {
                 "temperature": 0.05,
                 "top_p": 0.9,
                 "top_k": 1,
                 "max_output_tokens": max(128, int(max_tokens)),
             }
+            if tc is not None:
+                base_kw["thinking_config"] = tc
             try:
                 gen_config = genai.types.GenerationConfig(
                     **base_kw,
@@ -431,15 +455,16 @@ class LLMClient:
             f"담당자 원문:\n{raw_text.strip()}"
         )
         try:
+            tc = self._thinking_off()
+            fmt_kw: Dict[str, Any] = {"max_output_tokens": 256, "temperature": 0.3}
+            if tc is not None:
+                fmt_kw["thinking_config"] = tc
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self.model.generate_content(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        max_output_tokens=256,
-                        temperature=0.3,
-                    ),
+                    generation_config=genai.types.GenerationConfig(**fmt_kw),
                 ),
             )
             return (response.text or raw_text).strip()
@@ -496,10 +521,11 @@ class LLMClient:
             or 2048
         )
         hitl_fmt_max = max(256, min(hitl_fmt_max, 8192))
-        gen_config = genai.types.GenerationConfig(
-            max_output_tokens=hitl_fmt_max,
-            temperature=0.35,
-        )
+        hitl_kw: Dict[str, Any] = {"max_output_tokens": hitl_fmt_max, "temperature": 0.35}
+        tc = self._thinking_off()
+        if tc is not None:
+            hitl_kw["thinking_config"] = tc
+        gen_config = genai.types.GenerationConfig(**hitl_kw)
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -655,15 +681,16 @@ AI:"""
                 '답변: "맞장구" 또는 "interruption" 중 하나만 출력하세요.'
             )
 
+            barge_kw: Dict[str, Any] = {"temperature": 0.1, "max_output_tokens": 10}
+            tc = self._thinking_off()
+            if tc is not None:
+                barge_kw["thinking_config"] = tc
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self.model.generate_content(
                     prompt,
-                    generation_config={
-                        "temperature": 0.1,
-                        "max_output_tokens": 10,
-                    },
+                    generation_config=genai.types.GenerationConfig(**barge_kw),
                 ),
             )
 
@@ -724,10 +751,10 @@ AI:"""
 - **띄어쓰기·맞춤법을 교정**하고, **자연스러운 문장으로 정리**하세요
 - **의미는 보존**하되, **읽기 쉽고 재사용하기 좋은 형태**로 작성하세요
 - 예시:
-  - ❌ STT 원문: "네 내일 강 원 지 역 날씨 는 오후 한 때 비가 오는 곳이 있겠습니다"
-  - ✅ 정제된 텍스트: "내일 강원 지역 날씨는 오후 한때 비가 오는 곳이 있겠습니다."
-  - ❌ STT 원문: "기 상 감 정 서 는 기 상 청 홈 페이지 에서 신청 가능 합니다"
-  - ✅ 정제된 텍스트: "기상감정서는 기상청 홈페이지에서 온라인으로 신청 가능합니다."
+  - ❌ STT 원문: "네 내일 오 전 에 방 문 하 시 면 됩 니 다"
+  - ✅ 정제된 텍스트: "내일 오전에 방문하시면 됩니다."
+  - ❌ STT 원문: "영 업 시 간 은 오 전 아 홉 시 부 터 오 후 여 섯 시 까 지 입 니 다"
+  - ✅ 정제된 텍스트: "영업시간은 오전 9시부터 오후 6시까지입니다."
 
 **유용하다고 판단할 경우 (is_useful = true):**
 - 실행 가능한 질문·답변 (구체적 사실, 절차, 조건이 포함된 경우)
@@ -793,15 +820,16 @@ JSON:"""
                         prompt_full=prompt,
                         note="지식 정제 요청 (전체 대화 맥락, 저장은 착신자 발화만)")
 
+            judge_kw: Dict[str, Any] = {"temperature": 0.3, "max_output_tokens": judgment_max_tokens}
+            tc = self._thinking_off()
+            if tc is not None:
+                judge_kw["thinking_config"] = tc
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self.model.generate_content(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.3,
-                        max_output_tokens=judgment_max_tokens,
-                    )
+                    generation_config=genai.types.GenerationConfig(**judge_kw),
                 )
             )
 

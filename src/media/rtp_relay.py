@@ -1824,13 +1824,28 @@ class RTPRelayWorker:
 
             except Exception as e:
                 self.stats["rtp_tts_send_errors"] += 1
-                logger.error(
-                    "pcm_sender_thread_error",
-                    call_id=self.media_session.call_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                    send_errors_total=self.stats["rtp_tts_send_errors"],
-                )
+                # 프로세스 종료 시 로그 파일이 먼저 닫힌 후 daemon 스레드가
+                # 아직 실행 중일 수 있다 (stop_async_logging 타이밍 경쟁).
+                # ValueError("I/O operation on closed file") 는 무해하므로
+                # stderr fallback 으로만 출력하고 루프를 종료한다.
+                if isinstance(e, ValueError) and "closed file" in str(e):
+                    import sys as _sys
+                    print(
+                        f"[tts_rtp_thread] logger closed — thread exiting: {e}",
+                        file=_sys.stderr,
+                    )
+                    return
+                try:
+                    logger.error(
+                        "pcm_sender_thread_error",
+                        call_id=self.media_session.call_id,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        send_errors_total=self.stats["rtp_tts_send_errors"],
+                    )
+                except (ValueError, OSError):
+                    # 로그 파일이 이미 닫힌 경우 조용히 무시
+                    pass
 
     def enable_pipecat_mode(self):
         """

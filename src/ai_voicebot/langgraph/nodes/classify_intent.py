@@ -57,7 +57,11 @@ def _keyword_matches_intent(query_lower: str, intent: str, kw: str) -> bool:
         return True
     if kw == "네":
         for m in re.finditer("네", query_lower):
-            if m.end() < len(query_lower) and query_lower[m.end()] in ("가", "는", "도"):
+            pos = m.start()
+            end = m.end()
+            # 앞에 한글 음절이 붙으면 단어 내부 → 제외 ("이네", "거네" 등 문장 끝 서술어는 허용 필요하므로 앞 체크는 생략)
+            # 뒤에 한글 음절이 바로 붙으면 합성어 → 제외 (네임, 네이버, 네가, 네는, 네도 모두 포함)
+            if end < len(query_lower) and _is_hangul_syllable(query_lower[end]):
                 continue
             return True
         return False
@@ -106,8 +110,10 @@ INTENT_KEYWORDS = {
     ],
     "clarification": ["무슨 뜻이에요", "뭔 소리야", "이해가 안 가요", "어느 부분이요"],
     # 잡담 (AI에게 개인적 질문, 일상 감상 등)
+    # 계절/날씨 감상 같은 미묘한 경계는 키워드가 너무 제한적이어서 오분류 위험 높음
+    # → LLM 분류에 위임 (3차: classify_prompt의 chitchat 정의로 판단)
     "chitchat": [
-        "너도", "너는", "ai는", "ai도", "당신은", "좋아하니", "좋아해?", 
+        "너도", "너는", "ai는", "ai도", "당신은", "좋아하니", "좋아해?",
         "기분이 어때", "행복해?", "슬퍼?", "재미있어?", "심심해?",
         "날씨 좋네", "날씨가 좋", "기분 좋", "오늘 좋",
     ],
@@ -130,13 +136,34 @@ INTENT_KEYWORDS = {
         "무엇을 할",
         "뭐 할 수",
     ],
+    # 정보 질문 직행 패턴: 자주 나오는 질문 유형 → LLM classify 없이 question으로 직행
+    # 도메인 무관 범용 패턴만 유지 (기상청 전용 키워드 제거 — 페르소나 scope_keywords로 동적 적용)
+    "question": [
+        # 범용 정보 문의 패턴
+        "알려줘", "알려주세요", "알 수 있", "알고 싶", "궁금", "문의",
+        "영업시간", "운영시간", "몇 시", "언제까지", "언제부터",
+        "어디", "어디서", "어디에서", "위치", "주소", "찾아오", "오시는 길",
+        "전화번호", "연락처",
+        "방법", "어떻게", "어떻게 하면", "어떻게 신청", "신청 방법",
+        "얼마", "비용", "가격", "요금",
+        "발급", "신청", "접수", "등록",
+        # 수신 방법 문의 (SMS, 앱 등)
+        "받을 수", "받아볼", "받아볼 수", "받는 방법", "문자로", "앱으로",
+        "휴대폰으로",
+    ],
 }
 
+# question 키워드 매칭 시 다른 intent 키워드가 이미 매칭된 경우를 피하기 위해
+# INTENT_KEYWORDS 순서상 "question"은 마지막에 위치 (위 다른 intent 우선 처리)
+_QUESTION_KEYWORDS = set(INTENT_KEYWORDS.get("question", []))
 
-def _organization_role_question_not_help(query_lower: str) -> bool:
+
+def _organization_role_question_not_help(query_lower: str, org_name: str = "") -> bool:
     """
     기관·조직이 '무슨 일을 하는 곳'인지 묻는 질문은 정보 질문(question)이지,
     AI 능력 나열(help)이 아니다. help 키워드 오탐 시 question으로 보낸다.
+
+    org_name: 페르소나/org_context에서 가져온 기관명 (동적). 미전달 시 범용 패턴만 체크.
     """
     if "하는 곳" in query_lower or "하는 기관" in query_lower:
         return True
@@ -144,11 +171,19 @@ def _organization_role_question_not_help(query_lower: str) -> bool:
         return True
     if "기관" in query_lower and ("어떤" in query_lower or "무슨" in query_lower):
         return True
-    if any(org in query_lower for org in ("기상청", "청은", "공사", "공단", "협회")) and (
-        "어떤 일" in query_lower or "무슨 일" in query_lower or "뭐하는" in query_lower
-    ):
-        return True
+    # 페르소나 기관명 기반 동적 체크 (하드코딩 기관 유형 제거)
+    if org_name:
+        org_lower = org_name.lower()
+        if org_lower in query_lower and (
+            "어떤 일" in query_lower or "무슨 일" in query_lower or "뭐하는" in query_lower
+        ):
+            return True
     return False
+
+
+def _build_persona_question_keywords(scope_keywords: list[str]) -> set[str]:
+    """페르소나 scope_keywords를 question 1차 키워드로 변환 (소문자화)."""
+    return {kw.lower() for kw in (scope_keywords or []) if kw.strip()}
 
 # 인사말과 함께 나올 수 있는 질문/요청 패턴. 이 패턴이 있으면 greeting보다 question 우선.
 QUESTION_PATTERNS = [
@@ -220,6 +255,29 @@ async def classify_intent_node(state: ConversationState) -> dict:
         return {"intent": "nlu_fallback", "slots": {}, "confidence": 0.0}
 
     query_lower = query.lower()
+    _loaded_persona = None  # 1.6차에서 페르소나 로드 후 저장 (1차 루프에서 재사용)
+
+    # 0.5차: 명확한 question 지시어 선행 체크 (affirm 등 짧은 토큰보다 우선)
+    # "알려 주세요", "알려줘" 등이 INTENT_KEYWORDS에 있어도 순서상 affirm보다 늦게 처리되므로
+    # 오분류를 방지하기 위해 먼저 체크한다. (ex: "네임에 서울 날씨 알려 주세요" → question)
+    _STRONG_QUESTION_INDICATORS = (
+        "알려 주세요", "알려주세요", "알려 줘", "알려줘",
+        "가르쳐 주세요", "가르쳐주세요", "설명해 주세요", "설명해주세요",
+        "알 수 있을까요", "알 수 있나요", "알 수 있어요",
+        "어떻게 되나요", "어떻게 되요", "어떻게 되죠",
+    )
+    if any(ind in query_lower for ind in _STRONG_QUESTION_INDICATORS):
+        elapsed = time.time() - node_start
+        logger.info(
+            "classify_intent_strong_question_indicator",
+            intent="question",
+            query_preview=query[:60],
+            note="강한 question 지시어 선행 매칭 — affirm/기타 키워드보다 우선",
+        )
+        _log_intent_classify_timing(
+            call_id, elapsed_sec=elapsed, path="keyword_strong_question", intent="question", query_preview=query
+        )
+        return {"intent": "question", "slots": {}, "confidence": 1.0}
 
     # 1차: 키워드 기반 빠른 분류 (farewell 우선: "감사합니다" 등 → farewell)
     for intent, keywords in INTENT_KEYWORDS.items():
@@ -234,7 +292,8 @@ async def classify_intent_node(state: ConversationState) -> dict:
                     call_id, elapsed_sec=elapsed, path="keyword_greeting_to_question", intent="question", query_preview=query
                 )
                 return {"intent": "question", "slots": {}, "confidence": 1.0}
-            if intent == "help" and _organization_role_question_not_help(query_lower):
+            _org_name_for_help = (_loaded_persona.name if _loaded_persona else "") or ""
+            if intent == "help" and _organization_role_question_not_help(query_lower, _org_name_for_help):
                 elapsed = time.time() - node_start
                 logger.info("timing_segment", segment="classify_intent", elapsed_sec=round(elapsed, 3), path="keyword")
                 logger.info(
@@ -286,19 +345,48 @@ async def classify_intent_node(state: ConversationState) -> dict:
         return {"intent": "question", "slots": {}, "confidence": 0.95}
     
     # 1.6차: Persona 기반 Chitchat vs Question 분류 (LLM 전, 최종 휴리스틱 필터)
-    # 사용자 질문이 조직 페르소나(업무 범위)와 관련되면 question, 무관하면 chitchat
-    owner = state.get("_callee") or ""
-    if owner:
+    # _persona_owner: inbound=callee(착신번호), outbound=kwargs["callee"](상대방번호)
+    # agent.py에서 주입. 미설정 시 _owner(테넌트ID) 폴백.
+    persona_owner = state.get("_persona_owner") or state.get("_owner") or ""
+    _loaded_persona = None  # LLM 프롬프트 동적화를 위해 페르소나 참조 보관
+
+    if persona_owner:
         try:
             from src.ai_voicebot.knowledge.persona_service import get_persona_service
             persona_svc = get_persona_service()
             if persona_svc:
+                # 페르소나 객체 캐싱 (scope_keywords 재사용)
+                _loaded_persona = await persona_svc.get_persona(persona_owner)
+
+                # 1.6.1차: scope_keywords 1차 키워드 매칭 (question 직행)
+                if _loaded_persona and _loaded_persona.enabled and _loaded_persona.scope_keywords:
+                    dyn_kws = _build_persona_question_keywords(_loaded_persona.scope_keywords)
+                    matched_kw = next((kw for kw in dyn_kws if kw in query_lower), None)
+                    if matched_kw:
+                        elapsed = time.time() - node_start
+                        logger.info(
+                            "classify_intent_persona_scope_keyword",
+                            intent="question",
+                            query_preview=query[:50],
+                            matched_keyword=matched_kw,
+                            persona_owner=persona_owner,
+                            note="페르소나 scope_keyword 매칭 → question 직행 (LLM 스킵)",
+                        )
+                        _log_intent_classify_timing(
+                            call_id, elapsed_sec=elapsed,
+                            path="persona_scope_keyword", intent="question", query_preview=query,
+                        )
+                        # _persona_scope_matched=True: route_utterance에서 domain_question_signal 산출 시 재사용
+                        return {"intent": "question", "slots": {}, "confidence": 1.0,
+                                "rewritten_query": query, "_persona_scope_matched": True}
+
+                # 1.6.2차: 유사도 기반 chitchat vs question 분류
                 relevance = await persona_svc.check_query_relevance(
                     query=query,
-                    owner=owner,
-                    similarity_threshold=0.6  # 조정 가능
+                    owner=persona_owner,
+                    similarity_threshold=0.6,
                 )
-                
+
                 if relevance["persona_found"] and not relevance["is_relevant"]:
                     # Persona가 설정되어 있고, Query가 업무와 무관 → chitchat
                     elapsed = time.time() - node_start
@@ -308,17 +396,13 @@ async def classify_intent_node(state: ConversationState) -> dict:
                         query_preview=query[:50],
                         similarity=relevance["similarity"],
                         threshold=0.6,
-                        owner=owner,
+                        persona_owner=persona_owner,
                         note="Query가 조직 페르소나와 무관 — chitchat 템플릿 응답",
                     )
                     _log_intent_classify_timing(
-                        call_id,
-                        elapsed_sec=elapsed,
-                        path="persona_chitchat",
-                        intent="chitchat",
-                        query_preview=query,
+                        call_id, elapsed_sec=elapsed,
+                        path="persona_chitchat", intent="chitchat", query_preview=query,
                     )
-                    # Chitchat 템플릿을 state에 저장 (generate_response에서 사용)
                     return {
                         "intent": "chitchat",
                         "slots": {},
@@ -334,20 +418,19 @@ async def classify_intent_node(state: ConversationState) -> dict:
                         query_preview=query[:50],
                         similarity=relevance["similarity"],
                         threshold=0.6,
-                        owner=owner,
+                        persona_owner=persona_owner,
                         note="Query가 조직 페르소나와 관련 — question (RAG/LLM)",
                     )
                     _log_intent_classify_timing(
-                        call_id,
-                        elapsed_sec=elapsed,
-                        path="persona_question",
-                        intent="question",
-                        query_preview=query,
+                        call_id, elapsed_sec=elapsed,
+                        path="persona_question", intent="question", query_preview=query,
                     )
-                    return {"intent": "question", "slots": {}, "confidence": 1.0}
+                    # _persona_scope_matched=True: domain_question_signal 산출에 사용 (HITL 억제 방지)
+                    return {"intent": "question", "slots": {}, "confidence": 1.0,
+                            "_persona_scope_matched": True}
         except Exception as e:
             logger.warning("persona_relevance_check_skipped",
-                          owner=owner,
+                          persona_owner=persona_owner,
                           error=str(e),
                           note="Persona 서비스 에러 — 기존 분류 로직 계속")
 
@@ -365,6 +448,23 @@ async def classify_intent_node(state: ConversationState) -> dict:
         import json as _json
         messages = state.get("messages", [])
         history_snippet = _format_recent_for_intent(messages, max_turns=2)
+
+        # 페르소나 기반 동적 프롬프트 구성 (_loaded_persona는 1.6차에서 조회됨)
+        _persona_name = (_loaded_persona.name if _loaded_persona else "") or "AI 서비스"
+        _persona_scope = ""
+        if _loaded_persona and _loaded_persona.scope_keywords:
+            _persona_scope = ", ".join(_loaded_persona.scope_keywords[:6])
+        _persona_desc = ""
+        if _loaded_persona and _loaded_persona.description:
+            _persona_desc = _loaded_persona.description[:180]
+
+        _question_scope_hint = (
+            f" ({_persona_scope})" if _persona_scope else " (위치, 운영시간, 연락처, 비용, 신청 방법 등)"
+        )
+        _question_desc_hint = (
+            f"\n  [{_persona_name} 업무 범위: {_persona_desc}]" if _persona_desc else ""
+        )
+
         classify_prompt = (
             "다음 고객 발화를 분석하세요.\n"
             "1) intent: 의도를 분류 (아래 목록 중 하나)\n"
@@ -374,8 +474,10 @@ async def classify_intent_node(state: ConversationState) -> dict:
             "question, complaint, transfer, out_of_scope\n\n"
             "규칙:\n"
             "- transfer: '담당자/상담원/직원에게 연결' 요청만. 방문/위치/교통 안내는 question.\n"
-            "- chitchat: 업무 무관 잡담 (AI에게 개인 질문, 일상 감상 등)\n"
-            "- question: 업무 정보 질문 (날씨 예보, 특보, 위치, 운영시간, 연락처 등)\n"
+            f"- chitchat: {_persona_name}의 업무와 무관한 잡담. AI에게 개인 질문, 일상·계절 감상, 감탄, 소감.\n"
+            "  예) '꽃이 많이 폈더라고요', '오늘 날씨 참 좋네요', '기분이 좋네요', '춥네요' → 모두 chitchat\n"
+            f"- question: {_persona_name}의 업무 관련 정보 질문{_question_scope_hint}."
+            f"{_question_desc_hint}\n"
             "- search_query: 대명사를 구체 명사로, 구어체를 검색 적합 문장으로 변환\n\n"
             'JSON만 출력: {"intent": "...", "search_query": "..."}\n'
         )

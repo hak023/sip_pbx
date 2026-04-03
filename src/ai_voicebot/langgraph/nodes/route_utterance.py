@@ -2,10 +2,11 @@
 발화 레인 라우팅 (검색 전).
 
 chitchat·out_of_scope → RAG 생략·generate_response 직행.
-question → domain_question_signal 산출 (step_back·HITL 임계치용).
+question → domain_question_signal 산출 (HITL 억제 여부 결정).
 """
 
 import time
+from typing import Mapping, Any
 
 import structlog
 
@@ -15,25 +16,35 @@ from src.ai_voicebot.langgraph.state import ConversationState
 
 logger = structlog.get_logger(__name__)
 
-# adaptive_rag → step_back 분기: 도메인 질의는 기존에 가깝게, 비도메인 question은 완화
-STEP_BACK_THRESHOLD_DOMAIN_QUESTION = 0.40
-STEP_BACK_THRESHOLD_LIGHT_QUESTION = 0.22
-
 
 def compute_domain_question_signal(
-    intent: str, query: str, org_context: str
+    intent: str, query: str, org_context: str,
+    state: "Mapping[str, Any] | None" = None,
 ) -> bool:
     """
     업무·지식 답변이 기대되는 question 여부.
 
-    True: 엄격한 RAG/step_back·HITL 신뢰도 구간 적용.
-    False: 가벼운 question — step_back·저신뢰 HITL 완화.
+    True:  도메인 질문 → HITL 억제 없음 (RAG miss 시 HITL 발동)
+    False: 비도메인·가벼운 question → RAG miss여도 HITL 억제
+
+    판단 우선순위:
+    1. classify_intent에서 페르소나 scope_keywords 매칭 (_persona_scope_matched)
+       → 페르소나 업무 범위 내 질문임이 이미 확인됨 → True
+    2. should_treat_as_question_not_transfer 패턴
+    3. 범용 QUESTION_PATTERNS 키워드
+    4. org_context 기관명·식별 토큰 포함 여부
     """
     if intent != "question":
         return False
     q = (query or "").strip().lower()
     if not q:
         return False
+
+    # 1. 페르소나 scope_keywords 매칭 결과 재사용 (classify_intent에서 이미 판단)
+    #    → 추가 DB 조회 없이 O(1) 판단
+    if state and state.get("_persona_scope_matched"):
+        return True
+
     if should_treat_as_question_not_transfer(query):
         return True
     if any(p in q for p in QUESTION_PATTERNS):
@@ -108,13 +119,14 @@ async def route_utterance_node(state: ConversationState) -> dict:
             "rewritten_query": query,
         }
 
-    domain = compute_domain_question_signal(intent, query, org_context)
+    domain = compute_domain_question_signal(intent, query, org_context, state=state)
     elapsed = time.perf_counter() - _start
     logger.info(
         "route_utterance_knowledge",
         intent=intent,
         utterance_lane="knowledge",
         domain_question_signal=domain,
+        persona_scope_matched=bool(state.get("_persona_scope_matched")),
         elapsed_sec=round(elapsed, 4),
     )
     return {

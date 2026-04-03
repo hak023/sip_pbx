@@ -192,10 +192,15 @@ def get_call_debug_trace(
     call_id: str,
     limit: int = Query(800, ge=1, le=5000),
 ) -> Dict[str, Any]:
-    """통화별 call_data_record (대시보드 `call_debug_trace`와 동일 필드) 조회."""
-    if _find_call_dir(call_id) is None:
-        raise HTTPException(status_code=404, detail="call not found")
+    """통화별 call_data_record (대시보드 `call_debug_trace`와 동일 필드) 조회.
+
+    recordings 폴더 유무에 관계없이 CDR 로그에서 call_id를 검색한다.
+    recordings 폴더가 없거나 metadata.json이 없어도 CDR이 있으면 데이터를 반환한다.
+    CDR과 recordings 모두 없는 경우에만 404를 반환한다.
+    """
     items, truncated = _scan_call_data_record_for_call(call_id, limit)
+    if not items and _find_call_dir(call_id) is None:
+        raise HTTPException(status_code=404, detail="call not found")
     return {"call_id": call_id, "items": items, "truncated": truncated}
 
 

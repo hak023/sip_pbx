@@ -8,8 +8,14 @@ ConversationState를 공유하는 StateGraph 워크플로우.
   classify_intent → route_utterance
        → (rag_mode=skip: chitchat/out_of_scope) generate_response → hitl_alert → update_cache → update_state → END
        → (knowledge) check_cache ─(hit)─→ update_state → END
-                     (miss) → rewrite_query → adaptive_rag → (임계 분기) step_back → generate_response
+                     (miss) → rewrite_query → adaptive_rag → generate_response
                      → hitl_alert → update_cache → update_state → END
+
+[2026-04-03] step_back 제거:
+  - RAG 0건 → step_back(LLM+재검색, ~2.6s) → 결과 0건의 반복 패턴이 관측됨
+  - RAG_MIN_USEFUL_SCORE 필터와 이중 모순: 필터 통과 실패 문서를 동일 DB에서 재검색
+  - generate_response가 rag_results=[] 상태에서 LLM fallback 응답을 자체 생성
+  - 분석 리포트: docs/reports/2026-04/2026-04-03_1500_STEP_BACK_REMOVAL_ANALYSIS.md
 """
 
 import asyncio
@@ -21,16 +27,11 @@ import structlog
 
 from src.ai_voicebot.langgraph.state import ConversationState
 from src.ai_voicebot.langgraph.nodes.classify_intent import classify_intent_node
-from src.ai_voicebot.langgraph.nodes.route_utterance import (
-    route_utterance_node,
-    STEP_BACK_THRESHOLD_DOMAIN_QUESTION,
-    STEP_BACK_THRESHOLD_LIGHT_QUESTION,
-)
+from src.ai_voicebot.langgraph.nodes.route_utterance import route_utterance_node
 from src.ai_voicebot.langgraph.nodes.semantic_cache import check_cache_node, update_cache_node
 from src.ai_voicebot.langgraph.nodes.rewrite_query import rewrite_query_node
 from src.ai_voicebot.langgraph.nodes.adaptive_rag import adaptive_rag_node
 from src.ai_voicebot.langgraph.nodes.generate_response import generate_response_node
-from src.ai_voicebot.langgraph.nodes.step_back_prompt import step_back_node
 from src.ai_voicebot.langgraph.nodes.hitl_alert import hitl_alert_node
 from src.ai_voicebot.langgraph.nodes.update_state import update_state_node
 from src.ai_voicebot.langgraph.nodes.greeting_farewell_cache import check_greeting_farewell_cache_node
@@ -53,7 +54,6 @@ _LANGGRAPH_NODE_NAMES = frozenset(
         "check_cache",
         "rewrite_query",
         "adaptive_rag",
-        "step_back",
         "generate_response",
         "hitl_alert",
         "update_cache",
@@ -167,10 +167,12 @@ def _route_after_utterance(state: ConversationState) -> str:
 
 
 def _route_after_rag(state: ConversationState) -> str:
-    """RAG 결과가 0건일 때만 step_back 실행 (최적화: 이전 confidence 임계치 제거)."""
-    rag_results = state.get("rag_results") or []
-    if not rag_results:
-        return "step_back"
+    """adaptive_rag 이후 항상 generate_response로 진행.
+
+    [2026-04-03] step_back 제거: RAG 0건일 때 step_back(LLM+재검색, ~2.6s) 실행했으나
+    실제 관측에서 모두 재검색 0건 → generate_response fallback과 결과 동일.
+    generate_response가 rag_results=[] 상태에서 LLM fallback 응답을 직접 생성하므로 충분.
+    """
     return "generate_response"
 
 
@@ -196,7 +198,7 @@ def _route_after_classify(state: ConversationState) -> str:
 
 
 # 토폴로지 변경 시 버전 증가 → 기존 프로세스 내 캐시 무효화
-_LANGGRAPH_SCHEMA_VERSION = 4
+_LANGGRAPH_SCHEMA_VERSION = 5  # 2026-04-03: step_back 노드 제거
 _compiled_graph_entry = None  # (version, compiled_graph)
 
 
@@ -235,7 +237,6 @@ def build_conversation_graph():
     graph.add_node("check_cache", check_cache_node)
     graph.add_node("rewrite_query", rewrite_query_node)
     graph.add_node("adaptive_rag", adaptive_rag_node)
-    graph.add_node("step_back", step_back_node)
     graph.add_node("generate_response", generate_response_node)
     graph.add_node("hitl_alert", hitl_alert_node)
     graph.add_node("update_cache", update_cache_node)
@@ -305,18 +306,8 @@ def build_conversation_graph():
     # rewrite_query → adaptive_rag
     graph.add_edge("rewrite_query", "adaptive_rag")
 
-    # adaptive_rag → (low confidence → step_back, else → generate_response)
-    graph.add_conditional_edges(
-        "adaptive_rag",
-        _route_after_rag,
-        {
-            "step_back": "step_back",
-            "generate_response": "generate_response",
-        },
-    )
-
-    # step_back → generate_response
-    graph.add_edge("step_back", "generate_response")
+    # adaptive_rag → generate_response (step_back 제거: 2026-04-03)
+    graph.add_edge("adaptive_rag", "generate_response")
 
     # generate_response → hitl_alert
     graph.add_edge("generate_response", "hitl_alert")
@@ -448,6 +439,12 @@ class ConversationAgent:
                 "모든 정보를 확인하면 정중히 마무리하세요."
             )
 
+        # 페르소나 owner 결정:
+        #   inbound  → callee(착신번호) = self.owner  (KB 테넌트 ID와 동일)
+        #   outbound → callee(상대방번호)을 호출부에서 kwargs["callee"]로 전달해야 함.
+        #              미전달 시 self.owner(AI봇 발신번호)를 그대로 사용 (기존 동작 유지)
+        _persona_owner: str = kwargs.get("callee") or self.owner
+
         # 현재 상태 + 새 입력 병합
         invoke_state = {
             **self._state,
@@ -461,8 +458,9 @@ class ConversationAgent:
             "_embedder": self.embedder,
             "_vector_db": self.vector_db,
             "_org_manager": self.org_manager,
-            "_owner": self.owner,  # 착신번호 → RAG owner_filter
-            "_call_id": call_id or "",  # 통화 ID → RAG/로그 call 키
+            "_owner": self.owner,         # 테넌트 ID (RAG owner_filter, KB 격리)
+            "_persona_owner": _persona_owner,  # 페르소나 조회 owner (inbound=callee, outbound=상대방번호)
+            "_call_id": call_id or "",    # 통화 ID → RAG/로그 call 키
         }
         if is_outbound_session:
             invoke_state["outbound_purpose"] = outbound_purpose

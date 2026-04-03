@@ -316,6 +316,7 @@ class OutboundCallManager:
                     "purpose": record.purpose,
                     "questions": record.questions,
                     "caller_display_name": record.caller_display_name,
+                    "caller_number": record.caller_number,   # AI봇 발신번호 (owner/KB 기준)
                     "callee_number": record.callee_number,
                 }
             )

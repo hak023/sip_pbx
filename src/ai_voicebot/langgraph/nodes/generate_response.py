@@ -50,7 +50,7 @@ RESPONSE_QUESTION_NO_KNOWLEDGE = HITL_CUSTOMER_TTS_MESSAGE
 HISTORY_MAX_TURNS = 3
 
 RESPONSE_SYSTEM_PROMPT = """당신은 {org_name}의 AI 통화 비서입니다.
-
+{persona_context}
 기관 정보:
 {org_context}
 
@@ -63,7 +63,7 @@ RESPONSE_SYSTEM_PROMPT = """당신은 {org_name}의 AI 통화 비서입니다.
 
 응답 규칙:
 1. 한국어로 자연스럽게 대화하세요 (구어체).
-2. 검색된 참고 정보가 있으면 최대한 활용해서 답하세요. 참고 정보가 실시간 데이터 안내나 서비스 소개라면 그 내용을 바탕으로 방법·절차를 안내하세요.
+2. 검색된 참고 정보가 있으면 최대한 활용해서 답하세요. 참고 정보가 서비스·절차 안내라면 그 내용을 바탕으로 방법·절차를 안내하세요.
 3. 참고 정보와 전혀 관련 없는 내용이라 답변이 불가능할 때만 아래 문장을 사용하세요.
    "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요."
    참고 정보에 관련 내용이 조금이라도 있으면 그걸 바탕으로 안내하고 이 문장을 쓰지 마세요.
@@ -277,8 +277,29 @@ async def generate_response_node(state: ConversationState) -> dict:
             # 설계 §14.2: 대화 단계·요약을 프롬프트에 주입
             stage_and_summary = _format_stage_and_summary(state)
 
+            # 페르소나 description을 system_prompt에 주입 (업무 범위 명시 → LLM 응답 품질 향상)
+            persona_context = ""
+            _persona_owner_gr = state.get("_persona_owner") or state.get("_owner") or ""
+            if _persona_owner_gr:
+                try:
+                    from src.ai_voicebot.knowledge.persona_service import get_persona_service
+                    _ps = get_persona_service()
+                    if _ps:
+                        _p = await _ps.get_persona(_persona_owner_gr)
+                        if _p and _p.enabled and _p.description:
+                            persona_context = f"\n[업무 범위]\n{_p.description[:300]}\n"
+                            logger.debug(
+                                "generate_response_persona_injected",
+                                persona_owner=_persona_owner_gr,
+                                persona_name=_p.name,
+                                desc_len=len(_p.description),
+                            )
+                except Exception as _pe:
+                    logger.debug("generate_response_persona_load_skipped", error=str(_pe))
+
             system_prompt = RESPONSE_SYSTEM_PROMPT.format(
                 org_name=org_name,
+                persona_context=persona_context,
                 org_context=org_context,
                 stage_and_summary=stage_and_summary,
                 history=history,
@@ -360,6 +381,13 @@ async def generate_response_node(state: ConversationState) -> dict:
             )
 
         needs_follow_up = False
+
+        # 인바운드: LLM이 JSON/마크다운 블록을 섞어 응답한 경우 정제
+        # (아웃바운드는 _parse_outbound_llm_json에서 이미 처리됨)
+        if not _is_outbound and response:
+            response = _strip_json_and_markdown_for_tts(response)
+            chunks = _split_into_chunks(response) if response else []
+
         if not response or not response.strip():
             response = "죄송합니다. 답변을 생성하지 못했습니다. 다시 말씀해 주시겠어요?"
             chunks = [response]
@@ -476,6 +504,87 @@ async def generate_response_node(state: ConversationState) -> dict:
             "follow_up_user_query": user_query if _nfu and user_query else "",
             **_llm_exchange_rag_fields(state, rag_results, context_source="llm_generation_error"),
         }
+
+
+def _strip_json_and_markdown_for_tts(text: str) -> str:
+    """LLM 응답에서 TTS에 부적합한 JSON/마크다운 블록을 제거한다.
+
+    인바운드 generate_response 경로에서 LLM이 의도치 않게 JSON이나 코드블록을
+    응답 앞에 붙이는 경우를 방지한다. (로그 line 64: ```json{...}``` 포함 TTS 송출 사례)
+
+    처리 순서:
+    1. ```json ... ``` 또는 ``` ... ``` 마크다운 코드블록 제거
+    2. 응답 전체가 { } JSON 구조이면 → 내부 'response' 키 추출, 없으면 raw 반환
+    3. 응답 앞부분에만 JSON 블록이 붙은 경우 → 블록 이후 텍스트만 사용
+    """
+    if not text:
+        return text
+
+    # 1. 마크다운 코드블록 제거
+    cleaned = _re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+
+    # 2. JSON 블록이 앞에 있고 뒤에 일반 텍스트가 있는 경우 (ex: JSON\n실제응답)
+    brace_start = cleaned.find("{")
+    if brace_start != -1:
+        depth = 0
+        brace_end = -1
+        for i, ch in enumerate(cleaned[brace_start:], brace_start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    brace_end = i
+                    break
+
+        if brace_end != -1:
+            json_block = cleaned[brace_start: brace_end + 1]
+            after_json = cleaned[brace_end + 1:].strip()
+
+            # JSON 블록이 전체 텍스트인 경우 → 'response' 필드 추출 시도
+            if brace_start == 0 and not after_json:
+                try:
+                    data = _json.loads(json_block)
+                    if isinstance(data, dict):
+                        if data.get("response"):
+                            extracted = data["response"].strip()
+                            logger.info(
+                                "tts_response_json_extracted",
+                                original_len=len(text),
+                                extracted_len=len(extracted),
+                                note="LLM이 JSON 형식으로 응답 — response 필드 추출 후 TTS 사용",
+                            )
+                            return extracted
+                        # 'response' 키 없이 intent/search_query 등 메타 필드만 있는 JSON
+                        # (ex: {"intent":"chitchat","search_query":"..."}) → TTS 송출 차단
+                        _META_ONLY_KEYS = frozenset({
+                            "intent", "search_query", "query", "action",
+                            "category", "confidence", "slots", "rewritten_query",
+                        })
+                        data_keys = set(data.keys())
+                        if data_keys and data_keys.issubset(_META_ONLY_KEYS):
+                            logger.warning(
+                                "tts_response_meta_json_blocked",
+                                keys=sorted(data_keys),
+                                note="분류/검색용 메타 JSON이 응답으로 나옴 — TTS 차단, 빈 문자열 반환",
+                            )
+                            return ""  # 상위에서 fallback 멘트 처리
+                except (_json.JSONDecodeError, ValueError):
+                    pass
+                # JSON 파싱 실패 or 알 수 없는 구조 → 마크다운 제거 텍스트 그대로
+                return cleaned
+
+            # JSON 블록 앞에 텍스트 있거나, JSON 뒤에 실제 응답 있는 경우
+            if after_json:
+                logger.info(
+                    "tts_response_json_prefix_stripped",
+                    json_block_len=len(json_block),
+                    after_text_len=len(after_json),
+                    note="LLM 응답 앞 JSON 블록 제거 — 뒤 텍스트만 TTS 사용",
+                )
+                return after_json
+
+    return cleaned
 
 
 def _is_llm_error_fallback(text: str) -> bool:

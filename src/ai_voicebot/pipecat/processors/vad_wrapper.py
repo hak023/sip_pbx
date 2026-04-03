@@ -190,10 +190,6 @@ class VADWrapperProcessor(FrameProcessor):
                 await self._vad.process_frame(frame, direction)
             return
 
-        # VAD 프로세서로 전달 (Interruption* 제외)
-        if self._vad:
-            await self._vad.process_frame(frame, direction)
-
         # 음성 감지 시작
         if isinstance(frame, UserStartedSpeakingFrame):
             self._is_speaking = True
@@ -228,7 +224,7 @@ class VADWrapperProcessor(FrameProcessor):
             self._speech_start_time = None
             self._silence_count += 1
 
-        # 오디오 프레임 수신 — 워치독 기준 시각 갱신
+        # 오디오 프레임 수신
         elif isinstance(frame, InputAudioRawFrame):
             self._audio_frame_count += 1
             now_m = time.monotonic()
@@ -236,8 +232,9 @@ class VADWrapperProcessor(FrameProcessor):
                 self._first_audio_time = now_m
 
             # ── 아웃바운드 전용: TTS 재생 중 STT 입력 억제 ──
-            # tts_playing 플래그가 True이면 InputAudioRawFrame을 STT로 흘려보내지 않는다.
-            # VAD에는 이미 위에서 process_frame으로 전달됐으므로 VAD 상태는 유지된다.
+            # tts_playing 플래그가 True이면 VAD와 STT 모두에 오디오를 전달하지 않는다.
+            # VAD에 전달해도 UserStartedSpeakingFrame을 push하면 STT 세션 상태 불일치 발생하므로
+            # VAD 호출 자체를 억제한다.
             if self._suppress_stt_during_tts and self._tts_sync_context.get("tts_playing"):
                 self._stt_suppressed_frame_count += 1
                 if self._stt_suppressed_frame_count <= 3 or self._stt_suppressed_frame_count % 100 == 0:
@@ -245,18 +242,35 @@ class VADWrapperProcessor(FrameProcessor):
                         "vad_stt_suppressed_tts_playing",
                         call_id=self._call_id,
                         suppressed_count=self._stt_suppressed_frame_count,
-                        note="TTS 재생 중 STT 입력 억제 (에코 방지)",
+                        note="TTS 재생 중 VAD+STT 입력 억제 (에코 방지, UserStartedSpeaking 차단)",
                     )
-                return  # STT(하류)로 전달하지 않음
+                # 워치독 기준 시각을 현재로 갱신 — 억제 구간을 무음으로 오판하지 않도록
+                self._last_speech_event_time = now_m
+                return  # VAD 및 STT(하류) 모두 전달하지 않음
 
             if self._stt_suppressed_frame_count > 0:
                 logger.info(
                     "vad_stt_suppression_ended",
                     call_id=self._call_id,
                     total_suppressed=self._stt_suppressed_frame_count,
-                    note="TTS 재생 종료 → STT 입력 재개",
+                    note="TTS 재생 종료 → VAD+STT 입력 재개",
                 )
                 self._stt_suppressed_frame_count = 0
+                # 억제 구간 동안 내부 VAD가 오디오를 받지 못했으므로 VAD 상태가 불명확해질 수 있다.
+                # 억제 종료 직후 UserStoppedSpeakingFrame을 내부 VAD로 전달해 VAD를 "무음" 상태로 리셋,
+                # 다음 발화를 처음부터 새로 감지할 수 있게 한다.
+                if self._vad and self._is_speaking:
+                    try:
+                        await self._vad.process_frame(UserStoppedSpeakingFrame(), direction)
+                        self._is_speaking = False
+                        self._speech_start_time = None
+                        logger.debug(
+                            "vad_stt_suppression_vad_reset",
+                            call_id=self._call_id,
+                            note="억제 종료 후 VAD 상태 리셋 (UserStoppedSpeakingFrame 전달)",
+                        )
+                    except Exception:
+                        pass
 
             # 첫 10개 프레임만 디버그 로깅
             if self._speech_count + self._silence_count < 10:
@@ -264,6 +278,10 @@ class VADWrapperProcessor(FrameProcessor):
                              call_id=self._call_id,
                              audio_len=len(getattr(frame, 'audio', b'')),
                              is_speaking=self._is_speaking)
+
+        # VAD 프로세서로 전달 (Interruption* 제외, 억제 중 InputAudioRawFrame 제외)
+        if self._vad:
+            await self._vad.process_frame(frame, direction)
 
         # 프레임 전달
         await self.push_frame(frame, direction)

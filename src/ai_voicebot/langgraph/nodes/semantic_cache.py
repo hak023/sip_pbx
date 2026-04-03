@@ -19,11 +19,13 @@ from src.common.call_data_record_logger import log_call_data
 logger = structlog.get_logger(__name__)
 
 CACHE_COLLECTION = "qa_cache"
-SIMILARITY_THRESHOLD = 0.85  # 캐시 히트 임계치 완화 (0.92→0.85, 적중률 향상)
+SIMILARITY_THRESHOLD = 0.75  # 캐시 히트 임계치 (0.85→0.75, 적중률 향상)
 TTL_FAQ_SECONDS = 86400   # question/greeting: 24h (필요 시 43200으로 단축)
 TTL_OTHER_SECONDS = 3600  # 그 외: 1h
 MIN_CONFIDENCE_TO_CACHE = 0.6  # 이 값 미만이면 캐시 저장 스킵 (선택 적용)
 SEMANTIC_CACHE_TOP_K = 1
+# semantic cache 검색 전체에 적용할 타임아웃 (초). 초과 시 miss로 처리해 다음 노드 진행.
+CACHE_SEARCH_TIMEOUT_SEC = 1.5
 
 
 def _semantic_cache_criteria_ref(intent_filter: Optional[dict]) -> dict:
@@ -58,11 +60,47 @@ def _cache_entry_age_seconds(cached_at_str: str) -> Optional[float]:
 async def check_cache_node(state: ConversationState) -> dict:
     """
     Semantic Cache에서 유사 질문 검색.
-    
+
     히트 시: rag_cache_hit=True, response 설정
     미스 시: rag_cache_hit=False
+
+    CACHE_SEARCH_TIMEOUT_SEC 이내에 완료되지 않으면 타임아웃 miss 처리.
     """
     _start = time.time()
+    call_id = state.get("_call_id") or ""
+    try:
+        return await asyncio.wait_for(
+            _check_cache_inner(state, _start),
+            timeout=CACHE_SEARCH_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        elapsed = time.time() - _start
+        logger.warning(
+            "semantic_cache_timeout",
+            call_id=call_id,
+            elapsed_sec=round(elapsed, 3),
+            timeout_sec=CACHE_SEARCH_TIMEOUT_SEC,
+            note="캐시 검색 타임아웃 — miss 처리 후 다음 노드 진행",
+        )
+        log_call_data(
+            call_id,
+            "rag",
+            "semantic_cache_miss",
+            query=state.get("user_query", ""),
+            query_full=state.get("user_query", ""),
+            query_len=len(state.get("user_query", "") or ""),
+            intent=state.get("intent", ""),
+            elapsed_sec=round(elapsed, 3),
+            miss_reason="cache_search_timeout",
+            miss_detail={"timeout_sec": CACHE_SEARCH_TIMEOUT_SEC},
+            criteria=_semantic_cache_criteria_ref(None),
+            top_candidate=None,
+        )
+        return {"rag_cache_hit": False}
+
+
+async def _check_cache_inner(state: ConversationState, _start: float) -> dict:
+    """check_cache_node 실제 구현 (타임아웃 래퍼 분리)."""
     query = state.get("user_query", "")
     vector_db = state.get("_vector_db")
     embedder = state.get("_embedder")
@@ -134,11 +172,24 @@ async def check_cache_node(state: ConversationState) -> dict:
 
     try:
         # 쿼리 임베딩 (TextEmbedder는 embed_text 사용 — embed 메서드 없음)
+        # 동기 함수는 event loop 블로킹 → wait_for timeout 미동작 우회 방지:
+        # run_in_executor로 스레드풀에서 실행하여 블로킹 해제
+        import asyncio as _asyncio_cache
+        _embed_start = time.time()
         if hasattr(embedder, "embed_text"):
             fn = embedder.embed_text
-            query_embedding = await fn(query) if asyncio.iscoroutinefunction(fn) else fn(query)
+            if _asyncio_cache.iscoroutinefunction(fn):
+                query_embedding = await fn(query)
+            else:
+                loop = _asyncio_cache.get_event_loop()
+                query_embedding = await loop.run_in_executor(None, fn, query)
         elif hasattr(embedder, "embed"):
-            query_embedding = await embedder.embed(query)
+            fn_e = embedder.embed
+            if _asyncio_cache.iscoroutinefunction(fn_e):
+                query_embedding = await fn_e(query)
+            else:
+                loop = _asyncio_cache.get_event_loop()
+                query_embedding = await loop.run_in_executor(None, fn_e, query)
         else:
             elapsed = time.time() - _start
             logger.warning("semantic_cache_no_embedder", elapsed_sec=round(elapsed, 3))
@@ -146,6 +197,13 @@ async def check_cache_node(state: ConversationState) -> dict:
                 miss_reason="skipped_embedder_has_no_embed_method",
                 miss_detail={"embedder_type": type(embedder).__name__},
             )
+        _embed_elapsed = time.time() - _embed_start
+        logger.debug(
+            "semantic_cache_embed_done",
+            call_id=call_id,
+            embed_elapsed_ms=round(_embed_elapsed * 1000),
+            note="임베딩 완료 — 동기 함수는 executor로 실행하여 event loop 블로킹 방지",
+        )
 
         if not query_embedding:
             return _log_miss(
@@ -154,11 +212,20 @@ async def check_cache_node(state: ConversationState) -> dict:
             )
 
         # qa_cache 컬렉션에서 검색 (intent별 필터 — CHROMADB_CATEGORY_DESIGN §4.2)
+        _search_start = time.time()
         results = await vector_db.search_collection(
             collection_name=CACHE_COLLECTION,
             vector=query_embedding,
             top_k=SEMANTIC_CACHE_TOP_K,
             where=where_filter,
+        )
+        _search_elapsed = time.time() - _search_start
+        logger.debug(
+            "semantic_cache_chroma_search_done",
+            call_id=call_id,
+            search_elapsed_ms=round(_search_elapsed * 1000),
+            result_count=len(results) if results else 0,
+            note="ChromaDB qa_cache 검색 완료 — 느리면 콜드스타트(인덱스 초기화) 의심",
         )
 
         if not results:

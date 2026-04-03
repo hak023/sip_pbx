@@ -486,11 +486,14 @@ export function CallHistoryPanel({
   const dirLabel =
     directionFilter === "outbound" ? "발신" : directionFilter === "inbound" ? "수신" : "";
 
+  const isPage = variant === "page";
+
   return (
-    <div className={`space-y-6 ${className}`.trim()}>
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+    <div className={`${isPage ? "h-full flex flex-col" : "space-y-6"} ${className}`.trim()}>
+      {/* 헤더 영역 — 고정 높이 */}
+      <div className={`flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 ${isPage ? "shrink-0" : ""}`}>
         <div>
-          {variant === "page" ? (
+          {isPage ? (
             <>
               <h1 className="text-2xl font-semibold text-gray-900">통화 이력</h1>
               <p className="mt-1 text-sm text-gray-600">
@@ -536,7 +539,9 @@ export function CallHistoryPanel({
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+        <div className={`rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 ${isPage ? "shrink-0" : ""}`}>
+          {error}
+        </div>
       )}
 
       {loading && !rows.length ? (
@@ -550,17 +555,19 @@ export function CallHistoryPanel({
               : "최근 30일 이내 표시할 통화 이력이 없습니다."}
         </p>
       ) : (
-        <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
-          <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 text-xs text-gray-600 flex flex-wrap justify-between gap-2">
+        /* 테이블 카드: page 모드에서 남은 높이를 모두 차지하고 내부 스크롤 */
+        <div className={`rounded-lg border border-gray-200 bg-white shadow-sm ${isPage ? "flex-1 flex flex-col min-h-0" : ""}`}>
+          <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 text-xs text-gray-600 flex flex-wrap justify-between gap-2 shrink-0">
             <span>
               {dirLabel ? `${dirLabel} · ` : ""}최근 30일 총 {total}건
               {getTenantOwner() ? " (로그인 테넌트 기준 필터)" : ""}
               {totalPages > 1 && ` · ${page + 1} / ${totalPages} 페이지`}
             </span>
           </div>
-          <div className="overflow-x-auto">
+          {/* 테이블 스크롤 영역: flex-1로 남은 높이를 차지 */}
+          <div className={`overflow-auto ${isPage ? "flex-1 min-h-0" : ""}`}>
             <table className="min-w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-200 bg-gray-50/90">
                   <th className="px-3 py-2.5 w-10" aria-label="펼침" />
                   <th className="px-3 py-2.5">방향</th>
@@ -588,7 +595,7 @@ export function CallHistoryPanel({
 
           {/* 페이지네이션 */}
           {totalPages > 1 && (
-            <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex flex-wrap items-center justify-between gap-3">
+            <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex flex-wrap items-center justify-between gap-3 shrink-0">
               <span className="text-xs text-gray-500">
                 {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)}건 / 총 {total}건
               </span>
