@@ -249,31 +249,23 @@ AI 신뢰도(Confidence Score) < 0.3
 
 ### 4.1 전체 아키텍처 한눈에 보기
 
-```
-┌────────────────────────────────────────────────────────────┐
-│                   AI SIP PBX 통합 시스템                   │
-│                                                            │
-│  📞 전화 사용자                                           │
-│       │                                                    │
-│       ▼                                                    │
-│  ┌───────────────┐  ┌──────────────────┐  ┌─────────────┐  │
-│  │  SIP B2BUA    │◄►│  AI 파이프라인   │◄►│  ChromaDB   │  │
-│  │  (통화 제어)  │  │  (Pipecat +      │  │  (지식DB)   │  │
-│  │               │  │   LangGraph)     │  │             │  │
-│  └───────────────┘  └──────────────────┘  └─────────────┘  │
-│       │                      │                             │
-│       ▼                      ▼                             │
-│  ┌──────────────────────────────────────────────┐          │
-│  │              API & WebSocket                  │         │
-│  │   REST :8000        │   Socket.IO :8001       │         │
-│  └──────────────────────────┬─────────────────── ┘         │
-│                             │                              │
-│                    ┌────────▼─────────┐                    │
-│                    │  운영자 대시보드  │                   │
-│                    │  (Next.js 14)     │                   │
-│                    │  :3000            │                   │
-│                    └──────────────────┘                    │
-└────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Phone["📞 전화 사용자"] --> B2BUA
+
+    subgraph Core["AI SIP PBX 통합 시스템"]
+        B2BUA["SIP B2BUA\n(통화 제어)"]
+        AI["AI 파이프라인\n(Pipecat + LangGraph)"]
+        DB["ChromaDB\n(지식DB)"]
+        API["API & WebSocket\nREST :8000 / Socket.IO :8001"]
+        Dashboard["운영자 대시보드\n(Next.js 14) :3000"]
+
+        B2BUA <--> AI
+        AI <--> DB
+        B2BUA --> API
+        AI --> API
+        API --> Dashboard
+    end
 ```
 
 ---
@@ -282,161 +274,77 @@ AI 신뢰도(Confidence Score) < 0.3
 
 #### ① 전체 시스템 레이어 구성
 
+```mermaid
+flowchart TB
+    subgraph L0["LAYER 0 : 외부 네트워크"]
+        P1["📞 고객 전화기"]
+        P2["🌐 SIP Trunk / PSTN"]
+        P3["📱 모바일·소프트폰"]
+    end
+
+    subgraph L1["LAYER 1 : SIP B2BUA — Python / asyncio"]
+        SIP["SIP Proxy / B2BUA Engine\nsip_endpoint"]
+        CM["Call Manager\n(통화 상태 FSM)\ncall_manager"]
+        RTP["RTP Relay / Media Bridge\n(RTP ↔ PCM 변환)"]
+        SIP -->|"착신자 미응답 10s"| CM
+        CM -->|"AI 모드 전환"| RTP
+    end
+
+    subgraph L2["LAYER 2 : AI 음성 파이프라인 (Pipecat)"]
+        VAD["VAD\n(Silero)\n발화 시작/종료 감지\n바지인 처리"]
+        STT["Google STT v2\ntelephony model\n16kHz LINEAR16"]
+        PROC["RAGLLMProcessor\n(Supersede 메커니즘)"]
+        TTS["TTS\nGoogle Chirp3-HD-Kore\nko-KR · 스트리밍"]
+        WATCH["STT Watchdog\n30초 무응답 감지"]
+        VAD --> STT --> PROC --> TTS
+        STT -.-> WATCH
+    end
+
+    subgraph L3["LAYER 3 : LangGraph 에이전트"]
+        ROUTE["route_utterance\n키워드/LLM 하이브리드 분류\n17개 intent"]
+        CACHE["check_cache\nqa_cache 시맨틱 검색"]
+        RAG["adaptive_rag\n2-pass 벡터 검색\n+ Small-to-Big"]
+        GEN["generate_response\nRAG + LLM Gemini 2.5"]
+        HITL["hitl_alert\nconfidence < 0.3"]
+
+        ROUTE -->|"knowledge 레인"| CACHE
+        ROUTE -->|"즉시응답/소셜/greeting"| GEN
+        CACHE -->|"MISS"| RAG
+        CACHE -->|"HIT ~0.1s"| GEN
+        RAG --> GEN
+        GEN --> HITL
+    end
+
+    subgraph L4["LAYER 4 : 지식 저장소 (ChromaDB — 테넌트별 완전 격리)"]
+        KB["knowledge_{owner}\ncategory: question / greeting / farewell\ntransfer / complaint / contact / chitchat\nhit_count 추적"]
+        QC["qa_cache_{owner}\nintent=question/help/greeting/farewell\n시맨틱 유사도 검색 / TTL 7일\nKB 자동 구성 시 LLM 자동 구성(최대 5개)"]
+        PE["persona_{owner}\n역할·어투·페르소나\norg_name / greeting / farewell / context"]
+    end
+
+    subgraph L5["LAYER 5 : API 서버 + 운영자 대시보드"]
+        API["FastAPI REST :8000\nPOST /api/knowledge\nGET /api/calls/active\nGET /api/calls/history\nPOST /api/persona\nGET /api/hitl/pending"]
+        WS["Socket.IO :8001\nhitl_request\ncall_update\noperator_message"]
+        UI["Next.js 14 대시보드 :3000\n실시간 통화 모니터링 / HITL 패널\n지식베이스 관리 / 페르소나 설정"]
+        API --- WS --> UI
+    end
+
+    subgraph GCloud["외부 AI 서비스 (Google Cloud)"]
+        GSTT["Google STT v2\ntelephony / 16kHz gRPC"]
+        GTTS["Google TTS\nChirp3-HD-Kore / ko-KR"]
+        LLM["Gemini 2.5 Flash\nclassify_intent / rewrite_query\ngenerate_response / help 캐시 추출"]
+    end
+
+    L0 -->|"SIP INVITE"| L1
+    L1 -->|"PCM 오디오 스트림"| L2
+    L2 --> L3
+    L3 <--> L4
+    L3 --> L5
+    L2 <--> GSTT
+    L2 <--> GTTS
+    L3 <--> LLM
 ```
-╔══════════════════════════════════════════════════════════════════════════════════╗
-│                        AI SIP PBX  —  Full Architecture                          │
-╠══════════════════════════════════════════════════════════════════════════════════╣
-│                                                                                  │
-║  ┌─────────────────────────────────────────────────────────────────────────┐     ║
-║  │  LAYER 0 : 외부 네트워크                                                │     ║
-│  │                                                                         │     │
-│  │   📞 고객 전화기        🌐 SIP Trunk / PSTN        📱 모바일·소프트폰 │     │
-║  │         │                      │                         │              │     ║
-║  └─────────┼──────────────────────┼─────────────────────────┼──────────────┘     ║
-║            │    SIP INVITE        │                         │                    ║
-│            ▼                      ▼                         ▼                    │
-║  ┌─────────────────────────────────────────────────────────────────────────┐     ║
-║  │  LAYER 1 : SIP B2BUA (통화 제어 코어)                 Python / asyncio  │     ║
-║  │                                                                         │     ║
-║  │  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────────────┐  │     ║
-║  │  │  SIP Proxy /    │  │  Call Manager    │  │  RTP Relay / Media     │  │     ║
-║  │  │  B2BUA Engine   │─►│  (통화 상태 FSM) │─►│  Bridge                │  │     ║
-║  │  │  sip_endpoint   │  │  call_manager    │  │  (RTP ↔ PCM 변환)      │  │     ║
-║  │  └────────┬────────┘  └────────┬─────────┘  └────────────────────────┘  │     ║
-║  │           │                    │                         │              │     ║
-║  │    착신자 미응답          AI 모드 전환 트리거           PCM 오디오      │     ║
-║  │    (10초 타임아웃)                                      스트림          │     ║
-║  └───────────┼────────────────────┼─────────────────────────┼──────────────┘     ║
-║              │                    │                         │                    ║
-║              ▼                    ▼                         ▼                    ║
-║  ┌─────────────────────────────────────────────────────────────────────────┐     ║
-║  │  LAYER 2 : AI 음성 파이프라인 (Pipecat)                                 │     ║
-│  │                                                                         │     │
-│  │  PCM(8kHz/16kHz) ──► VAD ──► STT ──► RAGLLMProcessor ──► TTS ──► PCM    │     │
-│  │                                                                         │     │
-║  │  ┌───────────┐  ┌────────────┐  ┌──────────────────────────────────┐    │     ║
-║  │  │ VAD       │  │ Google     │  │  RAGLLMProcessor (핵심 처리기)   │    │     ║
-│  │  │ (Silero)  │  │ STT v2     │  │                                  │    │     │
-║  │  │           │  │ telephony  │  │  ┌──────────┐  ┌──────────────┐  │    │     ║
-║  │  │ 발화 시작 │  │ model      │  │  │Supersede │  │ LangGraph    │  │    │     ║
-║  │  │ /종료 감지│  │            │  │  │(STT 중복 │  │ Agent        │  │    │     ║
-║  │  │ 바지인처리│  │ 16kHz      │  │  │ 조합+취소│  │ (의도→RAG    │  │    │     ║
-║  │  └───────────┘  │ LINEAR16   │  │  └──────────┘  │  →LLM)       │  │    │     ║
-║  │                 └────────────┘  │                └──────┬───────┘  │    │     ║
-║  │                                 │                        ▼         │    │     ║
-║  │  ┌─────────────────────────┐    │  ┌──────────────────────────────┐│    │     ║
-║  │  │ STT Watchdog (감시)     │    │  │  TTS                         ││    │     ║
-║  │  │ - 30초 무응답 감지      │    │  │  Google TTS Chirp3-HD-Kore   ││    │     ║
-│  │  │ - 연속 바지인 카운팅    │    │  │  ko-KR · 스트리밍 청크 송출  ││    │     │
-║  │  └─────────────────────────┘    │  └──────────────────────────────┘│    │     ║
-║  │                                 └──────────────────────────────────┘    │     ║
-║  └─────────────────────────────────────────────────────────────────────────┘     ║
-║                              │                                                   ║
-║                              ▼                                                   ║
-║  ┌─────────────────────────────────────────────────────────────────────────┐     ║
-║  │  LAYER 3 : LangGraph 에이전트 (지식 추론 코어)                          │     ║
-│  │                                                                         │     │
-║  │  발화 텍스트 (STT 결과)                                                 │     ║
-║  │       │                                                                 │     ║
-│  │       ▼                                                                 │     │
-║  │  ┌─────────────────────────────────────────────────────────────────┐    │     ║
-║  │  │ route_utterance                                                 │    │     ║
-│  │  │ (키워드/LLM 하이브리드 분류, 17개 intent)                       │    │     │
-║  │  └──┬──────────┬─────────────┬─────────────────────────────────────┘    │     ║
-║  │     │          │             │                  │                       │     ║
-║  │     ▼          ▼             ▼                  ▼                       │     ║
-║  │  [즉시응답]  [소셜레인]  [greeting/        [knowledge 레인]              │    ║
-║  │  template/  chitchat/   farewell]                │                     │      ║
-║  │  repeat/    out_of_     KB 직접조회         check_cache                 │     ║
-║  │  clarifi-   scope                          (qa_cache 시맨틱 검색)        │    ║
-║  │  cation                                  ┌──────┴───────┐              │      ║
-║  │     │          │             │         HIT│              │MISS          │     ║
-║  │     │          │             │            ▼              ▼              │     ║
-║  │     │          │             │      즉시 응답       rewrite_query       │     ║
-║  │     │          │             │      (~0.1초)        (LLM 쿼리 재작성)    │    ║
-║  │     │          │             │                           │              │     ║
-║  │     │          │             │                      adaptive_rag        │     ║
-║  │     │          │             │                  (2-pass 벡터 검색       │     ║
-║  │     │          │             │                   + Small-to-Big)        │     ║
-║  │     │          │             │                  ┌────────┴───────┐      │     ║
-║  │     │          │             │               0건│                │N건    │    ║
-║  │     │          │             │                  ▼                ▼      │     ║
-║  │     │          │             │           step_back     generate_response│     ║
-║  │     │          │             │           (쿼리 일반화   (RAG + LLM      │     ║
-║  │     │          │             │            → 재검색)     Gemini 2.5)     │     ║
-║  │     │          │             │                  │            │          │     ║
-║  │     └──────────┴─────────────┴──────────────────┴────────────┘          │     ║
-║  │                                        │                                │     ║
-│  │                                        ▼                                  │   │
-│  │                               hitl_alert (조건부)                         │   │
-│  │                               confidence < 0.3 → 운영자 알림              │   │
-║  │                                        │                                │     ║
-│  │                               update_cache → update_state → END           │   │
-║  └─────────────────────────────────────────────────────────────────────────┘     ║
-║                              │                                                   ║
-║                              ▼                                                   ║
-║  ┌─────────────────────────────────────────────────────────────────────────┐     ║
-║  │  LAYER 4 : 지식 저장소 (ChromaDB — 테넌트별 완전 격리)                    │   ║
-│  │                                                                           │   │
-║  │  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────────────┐  │     ║
-║  │  │ knowledge_{owner}│  │ qa_cache_{owner} │  │ persona_{owner}       │  │     ║
-║  │  │                  │  │                  │  │                       │  │     ║
-│  │  │ category:        │  │ intent=question  │  │ 역할·어투·페르소나    │  │     │
-║  │  │  question        │  │ intent=help (≤5) │  │ org_name, greeting,   │  │     ║
-║  │  │  greeting_phase1 │  │ intent=greeting  │  │ farewell, context     │  │     ║
-║  │  │  greeting_phase2 │  │ intent=farewell  │  │                       │  │     ║
-║  │  │  farewell        │  │                  │  │                       │  │     ║
-│  │  │  transfer        │  │ 시맨틱 유사도검색│  │                       │  │     │
-│  │  │  complaint       │  │ TTL: 7일         │  │                       │  │     │
-║  │  │  contact         │  │                  │  │                       │  │     ║
-│  │  │  chitchat        │  │ ↑ KB 자동 구성   │  │                       │  │     │
-│  │  │                  │  │  시 LLM 자동 구성│  │                       │  │     │
-│  │  │ hit_count 추적   │  │  (최대 5개)      │  │                       │  │     │
-║  │  └──────────────────┘  └──────────────────┘  └───────────────────────┘  │     ║
-│  │                                                                           │   │
-│  │  all-MiniLM-L6-v2 (384차원) 임베딩 / 코사인 유사도 / 테넌트 owner 필터    │   │
-║  └─────────────────────────────────────────────────────────────────────────┘     ║
-║                              │                                                   ║
-║                              ▼                                                   ║
-║  ┌─────────────────────────────────────────────────────────────────────────┐     ║
-║  │  LAYER 5 : API 서버 + 운영자 대시보드                                   │     ║
-│  │                                                                         │     │
-║  │  ┌──────────────────────────────┐  ┌──────────────────────────────────┐ │     ║
-║  │  │  FastAPI (REST)  :8000       │  │  Socket.IO  :8001                │ │     ║
-║  │  │                              │  │                                  │ │     ║
-│  │  │  POST /api/knowledge         │  │  hitl_request  (운영자→AI 전달)  │ │     │
-│  │  │  GET  /api/knowledge         │  │  call_update   (실시간 통화 상태)│ │     │
-║  │  │  GET  /api/calls/active      │  │  operator_message (운영자 개입)  │ │     ║
-║  │  │  GET  /api/calls/history     │  │                                  │ │     ║
-║  │  │  POST /api/persona           │  │                                  │ │     ║
-║  │  │  GET  /api/hitl/pending      │  │                                  │ │     ║
-║  │  └──────────────────────────────┘  └──────────────────────────────────┘ │     ║
-│  │                                                                         │     │
-║  │  ┌─────────────────────────────────────────────────────────────────┐    │     ║
-║  │  │  Next.js 14 운영자 대시보드  :3000                              │    │     ║
-│  │  │                                                                 │    │     │
-║  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────┐  │    │     ║
-║  │  │  │ 실시간 통화 │  │ HITL 대화   │  │ 지식베이스  │  │페르소나│  │    │     ║
-│  │  │  │ 모니터링    │  │ 패널        │  │ 관리        │  │ 설정   │  │    │     │
-│  │  │  │LiveCallMonit│  │ HITLDialog  │  │ /knowledge  │  │/persona│  │    │     │
-║  │  │  └─────────────┘  └─────────────┘  └─────────────┘  └────────┘  │    │     ║
-║  │  └─────────────────────────────────────────────────────────────────┘    │     ║
-║  └─────────────────────────────────────────────────────────────────────────┘     ║
-║                                                                                  ║
-╠══════════════════════════════════════════════════════════════════════════════════╣
-║  외부 AI 서비스 (Google Cloud)                                                   ║
-║                                                                                  ║
-║  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐    ║
-║  │  Google STT v2       │  │  Google TTS          │  │ Gemini 2.5 Flash     │    ║
-║  │  telephony model     │  │  Chirp3-HD-Kore      │  │ (LLM)                │    ║
-║  │  16kHz / LINEAR16    │  │  ko-KR 스트리밍      │  │ - classify_intent    │    ║
-│  │  실시간 gRPC 스트림  │  │                      │  │ - rewrite_query      │    │
-║  └──────────────────────┘  └──────────────────────┘  │ - step_back          │    ║
-│  │ - generate_response                                                     │     │
-│  │ - help 캐시 제목추출                                                    │     │
-║                                                       └──────────────────────┘   ║
-╚══════════════════════════════════════════════════════════════════════════════════╝
-```
+
+**임베딩**: all-MiniLM-L6-v2 (384차원) / 코사인 유사도 / 테넌트 owner 필터
 
 ---
 
@@ -674,50 +582,33 @@ TXT 파일
 
 #### ⑤ 멀티 테넌트 완전 격리 구조
 
-```
-╔════════════════════════════════════════════════════════════════════════════╗
-                         │         멀티 테넌트 격리 (내선번호 = 테넌트 owner)│
-╠═══════════════════════════════════╦════════════════════════════════════════╣
-║  내선 1004 (기상청)                ║  내선 1005 (이탈리안 비스트로)        ║
-╠═══════════════════════════════════╬════════════════════════════════════════╣
-║                                   ║                                        ║
-║  ChromaDB Collections:            ║  ChromaDB Collections:                 ║
-║  ┌───────────────────────────┐    ║  ┌───────────────────────────┐         ║
-║  │ knowledge_1004            │    ║  │ knowledge_1005            │         ║
-│  │  - 기상특보 안내          │    │  │  - 메뉴 및 가격           │         │
-│  │  - 감정서 발급 절차       │    │  │  - 예약 방법              │         │
-│  │  - 찾아오는 길            │    │  │  - 영업시간·휴무일        │         │
-│  │  - 담당 부서 연락처       │    │  │  - 주차 안내              │         │
-║  └───────────────────────────┘    ║  └───────────────────────────┘         ║
-║  ┌───────────────────────────┐    ║  ┌───────────────────────────┐         ║
-║  │ qa_cache_1004             │    ║  │ qa_cache_1005             │         ║
-║  │  intent=question          │    ║  │  intent=question          │         ║
-║  │  intent=help (≤5)         │    ║  │  intent=help (≤5)         │         ║
-║  │  intent=greeting          │    ║  │  intent=greeting          │         ║
-║  └───────────────────────────┘    ║  └───────────────────────────┘         ║
-║  ┌───────────────────────────┐    ║  ┌───────────────────────────┐         ║
-║  │ persona_1004              │    ║  │ persona_1005              │         ║
-│  │  기상청 AI 봇             │    │  │  Sofia (이탈리안          │         │
-│  │  전문·친절 어투           │    │  │   비스트로 비서)          │         │
-║  └───────────────────────────┘    ║  └───────────────────────────┘         ║
-║                                   ║                                        ║
-║  RAG 검색 시:                      ║  RAG 검색 시:                         ║
-║  where={owner:"1004"}             ║  where={owner:"1005"}                  ║
-║  → 1005 데이터 절대 혼입 없음      ║  → 1004 데이터 절대 혼입 없음         ║
-╚═══════════════════════════════════╩════════════════════════════════════════╝
+SIP B2BUA가 착신 내선번호를 추출해 `owner`를 결정하고, 해당 owner의 ChromaDB 컬렉션만 전용으로 사용합니다.
 
-    SIP B2BUA → 착신 내선번호 추출 → owner="1004" or "1005"
-    → 해당 owner의 ChromaDB 컬렉션 전용 사용 (완전 격리)
+```mermaid
+flowchart TB
+    INVITE["SIP INVITE\n착신 내선번호 추출"] --> |"owner=1004"| T1
+    INVITE --> |"owner=1005"| T2
+
+    subgraph T1["내선 1004 (기상청)"]
+        K1["knowledge_1004\n- 기상특보 안내\n- 감정서 발급 절차\n- 찾아오는 길\n- 담당 부서 연락처"]
+        C1["qa_cache_1004\nintent=question/help/greeting"]
+        P1["persona_1004\n기상청 AI 봇\n전문·친절 어투"]
+        R1["RAG 검색:\nwhere={owner:'1004'}\n→ 1005 데이터 절대 혼입 없음"]
+    end
+
+    subgraph T2["내선 1005 (이탈리안 비스트로)"]
+        K2["knowledge_1005\n- 메뉴 및 가격\n- 예약 방법\n- 영업시간·휴무일\n- 주차 안내"]
+        C2["qa_cache_1005\nintent=question/help/greeting"]
+        P2["persona_1005\nSofia (이탈리안 비스트로 비서)"]
+        R2["RAG 검색:\nwhere={owner:'1005'}\n→ 1004 데이터 절대 혼입 없음"]
+    end
 ```
 
 ---
 
 #### ⑥ 아웃바운드 AI 발신 전체 흐름 (Flow Diagram)
 
-```
-╔═══════════════════════════════════════════════════════════════════════════╗
-                        │               아웃바운드 AI 발신 흐름 — End-to-End│
-╚═══════════════════════════════════════════════════════════════════════════╝
+**아웃바운드 AI 발신 흐름 — End-to-End**
 
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  [트리거] 운영자 대시보드 / REST API                                    │
@@ -936,15 +827,14 @@ TXT 파일
 
 지식베이스는 한 가지 방법에만 의존하지 않습니다. 4가지 경로가 **동시에** 작동하며 지식을 채웁니다.
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                     지식베이스 (ChromaDB)                        │
-│               knowledge_{owner} 컬렉션                           │
-└────────┬──────────────┬──────────────┬────────────────────────── ┘
-         │              │              │              │
-         ▼              ▼              ▼              ▼
-  ① 통화 자동 축적  ② TXT 업로드  ③ HITL 보정  ④ 대시보드 직접 입력
-  (Active RAG)    (매뉴얼 변환)  (운영자 답변)   (수동 등록)
+```mermaid
+flowchart LR
+    A["① 통화 자동 축적\n(Active RAG)"] --> KB
+    B["② TXT 업로드\n(매뉴얼 변환)"] --> KB
+    C["③ HITL 보정\n(운영자 답변)"] --> KB
+    D["④ 대시보드\n직접 입력\n(수동 등록)"] --> KB
+
+    KB[("지식베이스\n(ChromaDB)\nknowledge_{owner}")]
 ```
 
 ---
@@ -1181,57 +1071,34 @@ persona_1004                    persona_1005
 
 #### 전체 노드 라우팅 구조도
 
-```
-사용자 발화
-    │
-    ▼
-┌─────────────────────────────────┐
-│       classify_intent           │
-│  (키워드 → 규칙 → 페르소나      │
-│   → 폴백 → LLM 병합)            │
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│       route_utterance           │
-│  (레인 결정)                    │
-└──────┬──────────────┬───────────┘
-       │              │              │
-       ▼              ▼              ▼
- [소셜 레인]     [greeting/    [knowledge 레인]
- rag_mode=skip   farewell]           │
-       │              │         ┌────┴───────┐
-       │         greeting_      ▼            ▼
-       │        farewell_kb  [B그룹      check_cache
-       │         ChromaDB    템플릿]    (시맨틱 캐시)
-       │         직접 조회   template        │
-       │              │     랜덤 1문장   ┌───┴───┐
-       │              ▼                  ▼       ▼
-       │          END (즉시)         캐시 HIT  rewrite_query
-       │                             즉시 응답       │
-       │                             (~0.1초)   adaptive_rag
-       │                                       (2-pass 벡터검색
-       │                                        + Small-to-Big
-       │                                        + 압축)
-       │                                            │
-       │                                      ┌─────┴──────┐
-       │                                      ▼             ▼
-       │                                   RAG 0건        RAG N건
-       │                                      │             │
-       │                                  step_back    generate_response
-       │                                  (쿼리 일반화  (RAG 컨텍스트
-       │                                   → 재검색)    최대 3건 + LLM)
-       │                                      │             │
-       │                                 generate_response   │
-       │                                       └──────┬──────┘
-       ▼                                              ▼
- generate_response                              hitl_alert
- (RAG 없이 LLM,                           (confidence < 0.3
-  chitchat 규칙 주입)                      또는 needs_follow_up)
-       │                                              │
-       └─────────────────────┬────────────────────────┘
-                             ▼
-                   update_cache → update_state → END
+```mermaid
+flowchart TD
+    Input["사용자 발화"] --> CI
+
+    CI["classify_intent\n키워드 → 규칙 → 페르소나\n→ 폴백 → LLM 병합"]
+    CI --> RU["route_utterance\n레인 결정"]
+
+    RU -->|"소셜 레인\nrag_mode=skip"| GEN_SOCIAL["generate_response\nRAG 없이 LLM\nchitchat 규칙 주입"]
+    RU -->|"greeting / farewell"| GFB["greeting_farewell_kb\nChromaDB 직접 조회"]
+    RU -->|"B그룹 템플릿\naffirm/deny/repeat 등"| TMPL["template_response\n랜덤 1문장"]
+    RU -->|"knowledge 레인\nquestion/complaint/help"| CC
+
+    GFB --> END_IMM["END (즉시)"]
+    TMPL --> END_IMM
+
+    CC["check_cache\nqa_cache 시맨틱 검색\n유사도 ≥ 0.85"]
+    CC -->|"HIT ~0.1s"| GEN_HIT["generate_response\n캐시 즉시 응답"]
+    CC -->|"MISS"| RW["rewrite_query\n짧은 발화·대명사 포함 시\nLLM 쿼리 재작성"]
+
+    RW --> RAG["adaptive_rag\n2-pass 벡터 검색\n+ Small-to-Big + 압축"]
+    RAG -->|"RAG N건"| GEN["generate_response\nRAG 컨텍스트 최대 3건\n+ LLM Gemini 2.5"]
+    RAG -->|"RAG 0건"| GEN
+
+    GEN_SOCIAL --> HITL
+    GEN_HIT --> HITL
+    GEN --> HITL["hitl_alert\nconfidence < 0.3\nneeds_follow_up=True"]
+
+    HITL --> FIN["update_cache → update_state → END"]
 ```
 
 ---
