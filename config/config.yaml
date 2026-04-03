@@ -1,0 +1,495 @@
+# SIP PBX with Real-time Voice Analysis - Configuration File
+
+# SIP 서버 설정
+sip:
+  listen_ip: "0.0.0.0"
+  listen_port: 5060
+  transport: "udp"  # udp, tcp, tls
+  max_concurrent_calls: 100
+  
+  # B2BUA 외부 IP (SDP c= 라인에 사용)
+  # 0.0.0.0으로 바인딩하되, SDP에는 실제 접근 가능한 IP를 넣어야 함
+  # advertised_ip를 주석 처리하면 자동으로 감지됩니다 (테더링 환경에 최적)
+  # advertised_ip: "192.168.208.233"  # 수동 설정 (비활성화)
+  
+  # SIP 타이머 설정 (RFC 3261)
+  timers:
+    # 트랜잭션 타이머
+    t1: 0.5               # RTT Estimate (초) - UDP 재전송 기본 간격
+    t2: 4.0               # 최대 재전송 간격 (초)
+    t4: 5.0               # 최대 메시지 수명 (초)
+    
+    # 세션 타이머
+    invite_timeout: 30    # INVITE 응답 대기 시간 (초)
+    bye_timeout: 32       # BYE 응답 대기 시간 (초)
+    register_expires: 3600  # REGISTER 만료 시간 (초, 1시간)
+    
+    # Session-Expires (RFC 4028)
+    session_expires: 1800  # 세션 만료 시간 (초, 30분)
+    min_se: 90            # 최소 세션 갱신 간격 (초)
+    session_refresher: "uas"  # 세션 갱신 주체 (uac/uas)
+    
+    # 부재중 타임아웃 (AI 활성화)
+    no_answer_timeout: 10  # 착신자 무응답 시 AI 활성화 (초)
+
+# 미디어 처리 설정
+media:
+  mode: "bypass"  # direct | bypass | reflecting
+                  # - direct: SDP 수정하지 않음, 단말간 직접 RTP 통신 (테스트용)
+                  # - bypass: B2BUA가 RTP 중계 (녹음/분석 가능)
+                  # - reflecting: B2BUA가 RTP 중계 + AI 분석
+  
+  # RTP 소켓 bind IP
+  # - 특정 IP: 해당 IP에만 bind (보안 강화)
+  # - "0.0.0.0": 모든 인터페이스에서 수신 (호환성 최대화)
+  rtp_bind_ip: "0.0.0.0"  # 단말 네트워크 문제 시 0.0.0.0 권장
+  
+  port_pool:
+    start: 10000 
+    end: 10100    # 🧪 테스트: 충분한 포트 범위
+  rtp_timeout: 60  # seconds without RTP → auto-terminate
+  codec_priority:
+    - "opus"
+    - "pcmu"  # G.711 μ-law
+    - "pcma"  # G.711 A-law
+
+  # TTS→caller RTP 송신 TSV (logs/rtp_tx_<call_id>.tsv). 끄려면 false
+  rtp_tx_debug: true
+  # 장시간 무TTS 구간에 무음 RTP 주기 송신 (단말 무수신 끊김 완화). 끄려면 false
+  ai_rtp_silence_keepalive: true
+  ai_rtp_keepalive_interval_sec: 0.5  # 0.5초 권장 (재생 gap 최소화, 끊김 방지)
+  
+  # RTP 적응형 패킷 간격 (PCM 큐 백로그 기반 동적 조정)
+  # 백로그 발생 시 12~18ms 간격으로 단축하여 빠르게 소비, 백로그 해소 가속
+  # 환경변수 SIPPBX_RTP_ADAPTIVE_INTERVAL=0 으로 비활성화 가능
+  # 2026-03-29: 타이밍 계산 버그로 인한 817ms 갭·80% 손실 발생 → 비활성화 (버그 수정 완료, 테스트 후 재활성화 예정)
+  ai_rtp_adaptive_interval:
+    enabled: false  # 적응형 간격 비활성화 (타이밍 버그 수정 테스트 후 재활성화)
+    thresholds:
+      normal_max: 5      # 0~5개: 20ms (정상)
+      slight_max: 10     # 6~10개: 18ms (약간 빠름, 1.11x)
+      burst_max: 15      # 11~15개: 15ms (버스트, 1.33x)
+      emergency_min: 16  # 16개+: 12ms (긴급, 1.67x)
+
+# AI 분석 설정 (기존 - 통화 중 분석)
+ai:
+  enabled: true
+  
+  stt:
+    model: "faster-whisper-large-v3"
+    device: "cuda"  # cuda | cpu
+    language: "auto"  # auto, ko, en
+    beam_size: 5
+    vad_filter: true
+    
+  emotion:
+    model: "speechbrain/emotion-recognition"
+    device: "cuda"
+    threshold: 0.7  # 0.0 - 1.0
+    sample_rate: 16000
+    
+  text_classifier:
+    model_korean: "beomi/KcELECTRA-base"
+    model_english: "distilbert-base-uncased"
+    device: "cuda"
+    threshold: 0.8  # 0.0 - 1.0
+    
+  profanity_dict:
+    path: "config/profanity_dict.yaml"
+    enabled: true
+
+# =============================================================================
+# AI 보이스봇 설정 (신규 - 부재중 자동 응답)
+# =============================================================================
+ai_voicebot:
+  enabled: true  # AI 보이스봇 활성화 여부
+  
+  # 부재중 설정
+  no_answer_timeout: 10  # 초 (착신자가 이 시간 동안 응답 없으면 AI 활성화)
+  
+  # 고정 인사말
+  greeting_message: "안녕하세요, AI 비서입니다. 무엇을 도와드릴까요?"
+  
+  # ⭐ Google Cloud 설정 - 여기에 API 정보 입력! ⭐
+  google_cloud:
+    project_id: "sip-pbx-ai"  # ← Google Cloud 프로젝트 ID
+    credentials_path: "config/gcp-key.json"  # ← Service Account 키 파일 경로
+    
+    # Quota 관리
+    quota_management:
+      daily_request_limit: 1000  # 일일 요청 제한
+      cost_alert_threshold_usd: 50  # 비용 알람 임계값 (달러)
+      auto_throttle_enabled: true
+    
+    # STT (Speech-to-Text) 설정
+    stt:
+      model: "latest_long"  # telephony(한국어 형태소 분리 과다 공백) | latest_long(Conformer 기반, 한국어 형태소 통합 우수, Pipecat STT V2 기본값)
+      language_code: "ko-KR"  # ko-KR | en-US
+      sample_rate: 16000
+      enable_enhanced: true
+      enable_automatic_punctuation: true
+    
+    # TTS (Text-to-Speech) 설정
+    # ─────────────────────────────────────────────────────────────────────
+    # 🔊 TTS 모델 선택 방법
+    #
+    # [A] Chirp 3 HD (현재 기본값) — 고품질 한국어, 스트리밍 지원
+    #   voice_name: "ko-KR-Chirp3-HD-Kore"   # 여성 (기본)
+    #   voice_name: "ko-KR-Chirp3-HD-Charon" # 남성
+    #   speaking_rate: 1.05  # 약간 빠르게 → 고객 체감 응답 속도 향상
+    #
+    # [B] Gemini 2.5 Flash TTS — 스타일 프롬프트 가능, 빠른 레이턴시, 24kHz 출력
+    #       (RTPPacketBuilder가 자동으로 8kHz 리샘플링하므로 호환됨)
+    #   voice_name: "Kore"           # 여성, 차분
+    #   voice_name: "Aoede"          # 여성, 밝음
+    #   voice_name: "Charon"         # 남성, 안정적
+    #   gemini_tts:
+    #     model: "gemini-2.5-flash-tts"   # 또는 gemini-2.5-pro-tts (최고 품질)
+    #     style_prompt: "친절하고 차분하게 말하세요."  # 톤/스타일 지시 (선택)
+    # ─────────────────────────────────────────────────────────────────────
+    tts:
+      # --- Chirp 3 HD (현재 사용 중) ---
+      voice_name: "ko-KR-Chirp3-HD-Kore"  # Chirp3 HD 여성 목소리 (Streaming TTS 지원)
+      language_code: "ko-KR"  # 음성 언어 코드 (ko-KR | en-US)
+      speaking_rate: 1.05  # 1.0=보통 → 1.05: 약 5% 빠르게 (고객 체감 응답 속도 향상)
+      pitch: 0.0  # -20.0 - 20.0 (0 = 보통 음높이)
+
+      # --- Gemini TTS (전환 시 위 voice_name을 단순 이름으로 변경 후 아래 블록 주석 해제) ---
+      # voice_name: "Kore"
+      # gemini_tts:
+      #   model: "gemini-2.5-flash-tts"
+      #   style_prompt: "친절하고 차분하게 말하세요."
+    
+    # Gemini LLM 설정
+    gemini:
+      # 🚀 권장 모델 (2026년 1월 기준):
+      #   1. gemini-2.5-flash (최신 안정판, 가장 빠르고 저렴, 입력 100만 토큰)
+      #   2. gemini-flash-latest (항상 최신 Flash 버전으로 자동 업데이트)
+      #   3. gemini-2.0-flash (안정적)
+      #   4. gemini-2.5-flash-lite (더 빠르고 저렴, 경량 응답용)
+      # 
+      # 💰 비용 비교 (100만 토큰):
+      #   - Flash 2.5: $0.075 (입력) / $0.30 (출력) → 월 ~₩1,400 (100통 기준)
+      #   - Pro 2.5:   $1.25 (입력) / $5.00 (출력) → 월 ~₩23,400 (100통 기준)
+      # ⚡ 응답 속도:
+      #   - Flash 2.5: 300~600ms (짧은 답변, 최고 속도)
+      #   - Flash 2.0: 400~700ms (짧은 답변)
+      #   - Pro 2.5:   800~1200ms (짧은 답변)
+      # 📊 품질: 간단한 대화(1~2문장)에서는 Flash와 Pro 차이 미미
+      model: "gemini-2.5-flash"  # gemini-2.5-flash (최신) | gemini-flash-latest | gemini-2.0-flash | gemini-2.5-flash-lite
+      
+      # ⭐ Gemini API 키 (필수)
+      # 발급: https://aistudio.google.com/app/apikey
+      api_key: "AIzaSyCuegl5wPvzFwEXKtFJtJRJr4dUsfK4a8w"
+      
+      temperature: 0.5  # 0.0 - 1.0 (낮을수록 일관적이고 빠름, 0.5 권장)
+      max_output_tokens: 4096  # 대화 생성 등 기본 최대 출력 토큰 (gemini-2.5-flash thinking 모델은 thinking 토큰이 추가 소비되므로 충분히 설정)
+      # ⭐ Thinking 비활성화: 모든 LLM 호출에서 thinking_budget=0 고정 (llm_client.py LLMClient._thinking_off)
+      # Gemini 2.5 Flash는 기본 auto thinking으로 어떤 호출도 TTFT 3~6초 지연 발생
+      # 통화 응대·의도분류·쿼리변환·지식정제 등 어떤 작업도 내부 추론이 불필요 → 전체 비활성화
+      # 통화 지식 정제(judge_usefulness) JSON 출력용. 2.5 계열은 thinking·코드펜스가 출력 한도를 소비해 짧은 JSON도 MAX_TOKENS로 잘릴 수 있음 → 일반 대화용(위)보다 넉넉히
+      judgment_max_output_tokens: 8192
+      # 지식 정제 시 LLM에 넣는 전사 문자 상한 (긴 통화 처리). 설계서 2.2a
+      judgment_max_input_chars: 6000
+      
+      # 시스템 프롬프트 (간결한 응답 유도)
+      system_prompt: |
+        당신은 전화 응대 AI 비서입니다.
+        규칙:
+        1. 1~2문장으로 간결하게 답변하세요.
+        2. 불필요한 인사말이나 부연 설명을 생략하세요.
+        3. 질문의 핵심만 명확하게 전달하세요.
+        4. 모르는 내용은 솔직히 "잘 모르겠습니다"라고 답변하세요.
+  
+  # Resilience (재시도 및 Circuit Breaker)
+  resilience:
+    retry:
+      max_attempts: 3  # 최대 재시도 횟수
+      backoff_multiplier: 2  # 백오프 배율
+      min_wait_seconds: 2  # 최소 대기 시간
+      max_wait_seconds: 10  # 최대 대기 시간
+    
+    circuit_breaker:
+      failure_threshold: 5  # 실패 임계값 (5회 실패 시 open)
+      timeout_seconds: 60  # Open 상태 유지 시간
+      half_open_max_calls: 3  # Half-open 상태 테스트 호출 수
+
+  # HITL (Human-in-the-Loop) - RAG 부족 시 담당자 문의, timeout 시 안내 후 종료
+  hitl:
+    timeout_seconds: 15  # 담당자 응답 대기 시간 (초)
+    timeout_message: "확인이 지연되고 있습니다. 확인되는 대로 연락 드리겠습니다."  # timeout 시 고객에게 TTS 재생 후 통화 종료
+    away_message: "죄송합니다. 해당 부분은 잘 모르는 내용이라 확인 후 별도로 안내드리겠습니다."  # 운영자 부재중 시 fallback
+  
+  # Vector DB 설정
+  vector_db:
+    provider: "chromadb"  # chromadb | pinecone
+    
+    # ChromaDB (개발/로컬)
+    chromadb:
+      persist_directory: "./data/chromadb"
+    
+    # Pinecone (프로덕션) - 사용 시 주석 해제
+    # pinecone:
+    #   api_key: "${PINECONE_API_KEY}"  # 환경 변수에서 로드
+    #   environment: "us-west1-gcp"
+    #   index_name: "knowledge-base"
+    #   dimension: 768  # Sentence Transformers 차원
+  
+  # Embedding 설정
+  embedding:
+    model: "paraphrase-multilingual-mpnet-base-v2"  # Sentence Transformers 모델
+    dimension: 768
+    batch_size: 32
+  
+  # RAG 설정
+  rag:
+    top_k: 3  # 검색할 문서 수
+    similarity_threshold: 0.28  # 유사도 임계값 (0.0 - 1.0)
+    # [2026-04-03] 0.35 → 0.28 완화:
+    #   - ChromaDB 거리→유사도 변환(1/(1+d))에서 실제 관련 문서도 0.30~0.34 대에 분포
+    #   - 0.35 strict 컷이 너무 타이트해 soft_fallback 과다 발동 → 노이즈 문서 혼입
+    #   - 0.28: 진짜 관련 문서(≥0.30) strict 통과, 노이즈(0.12~0.16)는 여전히 soft_floor로 처리
+    #   - LLM이 최종 관련성 판단하므로 낮게 설정해 후보를 넉넉히 전달
+    reranking_enabled: false  # 재순위화 활성화
+  
+  # Knowledge Extraction 설정
+  knowledge_extractor:
+    min_text_length: 10  # 최소 텍스트 길이 (문자 수)
+    min_confidence: 0.7  # 최소 신뢰도 (LLM 판단)
+    chunk_size: 500  # 청크 크기
+    chunk_overlap: 50  # 청크 오버랩
+    # §7 PII 파이프라인: contains_pii인 항목을 VectorDB에 바로 넣지 않고 검토 대기열에 적재
+    pii_review_queue_enabled: false  # true 시 PII 포함 추출은 pending 검토 후 반영
+    extraction_pending_file: "data/extraction_pending_review.jsonl"  # 검토 대기열 파일 경로
+  
+  # 녹음 설정
+  recording:
+    enabled: true
+    output_dir: "./recordings"
+    format: "wav"
+    sample_rate: 16000
+    
+    # 후처리 STT (Speech-to-Text)
+    post_processing_stt:
+      enabled: true  # ✅ 활성화 (Google Cloud 인증 정보 설정 후)
+      language: "ko-KR"  # ko-KR | en-US | ja-JP 등
+      enable_diarization: true  # 화자 분리 (caller/callee)
+      model: "telephony"  # Google STT 모델 (전화 통화 최적화)
+      enable_automatic_punctuation: true  # 자동 구두점
+      enable_word_time_offsets: true  # 단어별 타임스탬프
+    
+    # 지식 추출
+    knowledge_extraction:
+      enabled: true
+      version: "v2"                    # v1 (기존 단일 LLM) | v2 (멀티스텝 파이프라인)
+      
+      # 추출 스텝 설정
+      steps:
+        summarize: true                # Step 1: 대화 요약
+        qa_extract: true               # Step 2: QA 쌍 추출
+        entity_extract: true           # Step 3: 엔티티 추출
+      
+      # 품질 검증
+      quality:
+        min_confidence: 0.7            # 최소 신뢰도
+        hallucination_check: true      # 환각 검증 활성화
+        deduplication: true            # 중복 검증 활성화
+        dedup_threshold: 0.92          # 중복 판정 코사인 유사도
+        near_dedup_threshold: 0.85     # 병합 후보 코사인 유사도
+      
+      # 전사 정규화 (초단문 턴 통화 환각 검증 완화)
+      transcript_normalization:
+        enabled: true                  # 정규화 활성화
+        collapse_short_turns: true     # 4자 이하 턴 제거
+        short_turn_max_chars: 4        # 짧은 턴 기준
+        syntactic_threshold_relaxed: 0.25  # 초단문 전사일 때 구문 임계값(기본 0.4 → 0.25)
+      
+      # 자동 승인
+      auto_approve:
+        enabled: true
+        min_confidence: 0.9            # 자동 승인 최소 신뢰도
+        require_hallucination_pass: true
+      
+      # 청킹
+      chunk_size: 500                  # 문자
+      chunk_overlap: 50                # 문자
+      min_text_length: 10
+      
+      # 비용 제어
+      max_llm_calls_per_extraction: 6  # 추출당 최대 LLM 호출 수
+      skip_short_calls_seconds: 30     # 30초 미만 통화 스킵
+  
+  # VAD (Voice Activity Detection)
+  vad:
+    enabled: true
+    mode: 3  # 0-3 (3이 가장 민감)
+    frame_duration_ms: 30  # 10 | 20 | 30
+  
+  # Barge-in 설정 (Phase 3: Smart Barge-in)
+  barge_in:
+    enabled: true
+    vad_threshold: 0.5  # 음성 감지 임계값
+    speech_frame_count: 3  # 연속 음성 프레임 수
+    min_words: 3  # LLM 판단 기준 최소 단어 수
+    # keywords: null  # 커스텀 즉시중단 키워드 (null이면 기본값 사용)
+  
+  # Streaming TTS 설정 (Phase 3)
+  streaming_tts:
+    enabled: true
+    min_chunk_chars: 15  # TTS 최소 전송 문자 수
+    max_buffer_chars: 200  # 강제 플러시 문자 수
+    flush_timeout: 1.0  # 무입력 시 플러시 타임아웃 (초)
+  
+  # Silero VAD (Pipecat 파이프라인 — 발화 시작/종료 감지)
+  # STT 단편화 방지: 발화자·수신자가 같은 공간이면 양쪽 음성이 한 스트림에 섞여,
+  # 침묵이 짧게 끊기므로 stop_secs를 넉넉히 주어 문장 단위로 인식되도록 함.
+  # 너무 짧으면 "마디마디마다 짧게 끊김"; 1.0~1.2초 권장.
+  silero_vad:
+    stop_secs: 1.0   # 침묵 이 길어져야 "발화 종료" (0.7→1.0: 문장 단위 유도, 1.2도 가능)
+    start_secs: 0.3  # 음성 시작으로 인정할 최소 구간 (0.25→0.3: 짧은 노이즈 억제)
+    confidence: 0.5   # 음성 판별 최소 신뢰도 (0.6→0.5: 양쪽 음성 혼합 시 단절 완화)
+    min_volume: 0.5   # 최소 볼륨 (0~1)
+  
+  # Smart Turn 설정 (발화 종료 감지)
+  # VAD 침묵 후 문법/억양으로 "진짜 끝"인지 판단. max_hold_secs를 늘리면 짧은 멈춤에서 덜 잘림.
+  smart_turn:
+    enabled: true  # Smart Turn v3.2 활성화 (false면 Silero VAD stop_secs 침묵만 사용)
+    # model_path: null  # 커스텀 ONNX 모델 경로 (null이면 Pipecat 번들 사용)
+    max_hold_secs: 2.5  # 발화 미완 판단 시 최대 대기 시간 (2.0→2.5: 문장 완성까지 대기)
+  
+  # STT 후처리 필터 (짧은/불완전/감탄만 발화는 LLM으로 넘기지 않음) — 설계: docs/design/STT_ADDITIONAL_CONSIDERATIONS.md §6
+  stt_post_filter:
+    enabled: true
+    min_chars: 2      # 이 글자 수(공백 제외) 미만이면 스킵
+    min_words: 1      # 이 단어 수 미만이면 스킵
+    skip_only_exclamations: true   # "와", "여기야" 등 감탄/단문만 있으면 스킵
+    # exclamation_patterns: []     # 비어 있으면 내장 목록 사용. 커스텀 시 문자열 목록 지정
+    reply_on_drop: false           # 스킵 시 "다시 말씀해 주시겠어요?" 재생 여부
+    reply_message: "다시 말씀해 주시겠어요?"
+  
+  # 호 전환(Transfer) 설정
+  transfer:
+    enabled: true
+    ring_timeout: 30              # 착신 대기 시간 (초)
+    announcement_mode: "template" # template | llm
+    announcement_template: >
+      {department}로 전화 연결하겠습니다.
+      연결되는 전화번호는 {phone}입니다.
+      연결되는 동안 잠시만 기다려주세요.
+    waiting_message: "연결 중입니다. 잠시만 기다려주세요."
+    retry_enabled: true
+    max_retries: 2
+    min_similarity_threshold: 0.75  # 전환 의도 감지 최소 유사도
+    hold_music_file: null           # null이면 TTS 대기 안내 사용
+  
+  # AI 아웃바운드 콜 설정
+  outbound:
+    enabled: true
+    # SIP Gateway 설정 (외부 발신용)
+    # 미설정 시 등록된 유저로만 발신 가능
+    # default_gateway: "sip:gateway.example.com:5060"
+    max_concurrent_calls: 5        # 동시 아웃바운드 콜 최대 수
+    ring_timeout: 30               # 링 타임아웃 (초)
+    max_call_duration: 300         # 최대 통화 시간 (초, 기본 5분)
+    retry:
+      enabled: true
+      max_retries: 2               # 최대 재시도 횟수
+      retry_interval: 300          # 재시도 간격 (초, 기본 5분)
+      retry_on:
+        - "no_answer"
+        - "busy"
+    ai:
+      greeting_template: >
+        안녕하세요, {display_name} AI 비서입니다.
+        {purpose} 관련하여 연락드렸습니다.
+      closing_template: "확인 감사합니다. 좋은 하루 되세요."
+      max_turns: 20                # 최대 대화 턴 수 (무한 루프 방지)
+      task_completion_check: true
+    result:
+      save_transcript: true
+      save_recording: true
+      generate_summary: true
+
+  # Pipeline Engine 설정 (Phase 1+)
+  # legacy: 기존 Orchestrator, pipecat: Pipecat 파이프라인
+  pipeline_engine: "pipecat"
+  
+  # 오디오 버퍼
+  audio_buffer:
+    jitter_buffer_ms: 60  # Jitter 버퍼 크기
+    max_buffer_size: 100  # 최대 패킷 수
+    target_sample_rate: 16000  # 목표 샘플레이트
+  
+  # 로깅
+  logging:
+    log_conversations: true  # 대화 내용 로깅
+    log_audio: true  # 오디오 데이터 로깅 (디버그용)
+    log_level: "INFO"  # DEBUG | INFO | WARNING | ERROR
+    # DB 로깅 (RAG/LLM/지식매칭): 설정 시 asyncpg로 해당 테이블에 INSERT. 미설정 시 스킵.
+    # db_url: "postgresql://user:pass@localhost:5432/your_db"  # docs/guides/AI_DB_LOGGING_SETUP.md
+
+# 이벤트 및 알림 설정
+events:
+  webhook_urls:
+    - "http://localhost:5000/webhook"
+  webhook_timeout: 10  # seconds
+  webhook_retries: 3
+  
+  thresholds:
+    profanity: 0.8
+    anger: 0.7
+    threatening: 0.75
+    combined_alert: true  # profanity + anger 동시 발생 시 높은 우선순위
+  
+  severity_levels:
+    low: 0.5
+    medium: 0.7
+    high: 0.85
+    critical: 0.95
+
+# CDR (Call Detail Record) 설정
+cdr:
+  enabled: true
+  output_dir: "/var/log/sip-pbx/cdr"
+  filename_pattern: "cdr-%Y-%m-%d.jsonl"
+  rotation: "daily"  # daily, hourly
+  retention_days: 90
+  # 디버깅용: true면 들여쓰기 JSON(가시성), false면 한 줄 한 레코드
+  pretty_json: false
+
+# 로깅 설정
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "json"  # json, text
+  output: "file"  # stdout, file
+  file_path: "logs/app.log"  # 상대 경로 (서버 실행 디렉토리 기준). /var/log/... 는 Linux 전용
+  max_bytes: 104857600  # 100MB
+  backup_count: 10
+
+# 모니터링 설정
+monitoring:
+  prometheus_port: 9090
+  prometheus_path: "/metrics"
+  health_check_port: 8080
+  health_check_interval: 10  # seconds
+
+# GPU 리소스 관리
+gpu:
+  device_id: 0  # CUDA device ID
+  memory_fraction: 0.9  # Max GPU memory to use (0.0 - 1.0)
+  batch_size:
+    stt: 4
+    emotion: 8
+    text_classifier: 16
+
+# 보안 설정
+security:
+  admin_api_key: "change-me-in-production"
+  webhook_secret: "change-me-in-production"
+  ip_whitelist:
+    enabled: false
+    allowed_ips:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+

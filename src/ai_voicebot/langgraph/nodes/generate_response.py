@@ -63,10 +63,12 @@ RESPONSE_SYSTEM_PROMPT = """당신은 {org_name}의 AI 통화 비서입니다.
 
 응답 규칙:
 1. 한국어로 자연스럽게 대화하세요 (구어체).
-2. 검색된 참고 정보가 있으면 최대한 활용해서 답하세요. 참고 정보가 서비스·절차 안내라면 그 내용을 바탕으로 방법·절차를 안내하세요.
-3. 참고 정보와 전혀 관련 없는 내용이라 답변이 불가능할 때만 아래 문장을 사용하세요.
+2. [최우선] 검색된 참고 정보가 있으면 반드시 그 내용을 바탕으로 답하세요.
+   - 참고 정보에 질문과 유사한 Q&A가 있으면 그 A를 활용해 안내하세요.
+   - 참고 정보가 서비스·절차 안내라면 방법·절차를 안내하세요.
+   - 이전 대화에서 "안내 불가"라고 했더라도 참고 정보가 있으면 그 정보로 답하세요.
+3. 참고 정보가 "(관련 정보 없음)"이거나 질문과 전혀 무관할 때만 아래 문장을 사용하세요.
    "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요."
-   참고 정보에 관련 내용이 조금이라도 있으면 그걸 바탕으로 안내하고 이 문장을 쓰지 마세요.
 4. 2~3문장 이내로 간결하게 답하세요 (통화이므로 길면 안 됩니다).
 5. 문장은 반드시 마침표(.) 또는 물음표(?)로 끝내세요. 중간에 끊기지 마세요.
 6. 고객이 불편을 호소하면 공감하고 해결 방안을 제시하세요.
@@ -621,23 +623,93 @@ def _is_unknown_content_response(text: str) -> bool:
 
 MAX_RAG_CONTEXT_FOR_LLM = 3
 
+# [B] 인사말/안내 카테고리 문서는 질문 응답 컨텍스트에 포함하면 LLM이 혼란을 일으킴
+# (예: "저는 날씨/태풍정보/기상감정서 발급…" 같은 greeting_phase2 문서가 섞이면
+#  LLM이 "날씨만 안내 가능" 패턴을 강화하여 실제 관련 지식을 무시하는 경향)
+_RAG_CONTEXT_EXCLUDED_CATEGORIES = frozenset({
+    "greeting_phase1",
+    "greeting_phase2",
+    "farewell",
+})
+
+
 def _format_rag_context(results: list) -> str:
     if not results:
         return ""
     lines = []
-    for i, doc in enumerate(results[:MAX_RAG_CONTEXT_FOR_LLM], 1):
-        text = doc.get("text", "") if isinstance(doc, dict) else str(doc)
+    excluded = 0
+    for doc in results:
+        if len(lines) >= MAX_RAG_CONTEXT_FOR_LLM:
+            break
+        if isinstance(doc, dict):
+            cat = doc.get("category", "") or ""
+            text = doc.get("text", "")
+        else:
+            cat = getattr(doc, "category", "") or ""
+            text = str(doc)
+        if cat in _RAG_CONTEXT_EXCLUDED_CATEGORIES:
+            excluded += 1
+            logger.debug(
+                "rag_context_category_excluded",
+                category=cat,
+                text_preview=(text or "")[:60],
+                note="인사말/작별 카테고리는 질문 응답 컨텍스트에서 제외",
+            )
+            continue
         if text:
-            lines.append(f"[{i}] {text}")
+            lines.append(f"[{len(lines)+1}] {text}")
+    if excluded:
+        logger.info(
+            "rag_context_excluded_count",
+            excluded=excluded,
+            kept=len(lines),
+            note="greeting/farewell 카테고리 문서 LLM 컨텍스트 제외",
+        )
     return "\n".join(lines)
+
+
+# [D] AI 히스토리에서 제외할 fallback/오류 응답 패턴
+# 이런 메시지가 히스토리에 남으면 LLM이 같은 방향으로 응답을 고수하는 경향 발생
+_HISTORY_FALLBACK_PATTERNS = (
+    "알지 못하는 내용",
+    "해당 내용은 제가",
+    "자세한 정보는 드리기 어렵",
+    "안내드리기 어렵",
+    "도움을 드리기 어렵",
+    "답변을 생성하지 못했",
+    "잠시 후 다시 시도",
+)
+
+
+def _is_ai_fallback_message(content: str) -> bool:
+    """AI 응답이 fallback/거부 멘트인지 판단."""
+    return any(p in content for p in _HISTORY_FALLBACK_PATTERNS)
 
 
 def _format_history(messages: list, max_turns: int = 6) -> str:
     recent = messages[-(max_turns * 2):]
     lines = []
+    fallback_filtered = 0
     for msg in recent:
-        role = "사용자" if msg.get("role") == "user" else "AI"
-        lines.append(f"{role}: {msg.get('content', '')}")
+        role_raw = msg.get("role", "")
+        content = msg.get("content", "")
+        role = "사용자" if role_raw == "user" else "AI"
+        # [D] AI의 fallback 멘트는 히스토리에서 제외 → LLM이 이전 거부 패턴을 반복하는 현상 방지
+        if role == "AI" and _is_ai_fallback_message(content):
+            fallback_filtered += 1
+            logger.debug(
+                "history_fallback_filtered",
+                content_preview=content[:60],
+                note="AI fallback 멘트 히스토리 제외 — LLM 거부 패턴 반복 방지",
+            )
+            continue
+        lines.append(f"{role}: {content}")
+    if fallback_filtered:
+        logger.info(
+            "history_fallback_filtered_count",
+            count=fallback_filtered,
+            note="이전 AI fallback 응답을 LLM 히스토리에서 제거",
+        )
     return "\n".join(lines) if lines else "(첫 대화)"
 
 

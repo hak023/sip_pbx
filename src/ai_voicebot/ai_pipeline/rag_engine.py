@@ -286,14 +286,17 @@ class RAGEngine:
                 strict_docs.sort(key=lambda d: d.score, reverse=True)
                 documents = list(strict_docs)
                 after_strict_threshold_count = len(documents)
-                # 하드 컷으로 0건이나 Chroma 상위 후보가 있으면 완화 후보 반환 (짧은 STT·거리 스코어 특성)
+                # [A] soft_fallback: strict 컷 0건일 때만 완화 후보 사용
+                # soft_floor = threshold * 0.6 (최소 0.16) → strict 미달이지만 어느 정도 관련성 있는 문서만 허용
+                # (기존 threshold * 0.5는 너무 낮아 인사말 등 노이즈 문서 혼입 → 0.6으로 상향)
                 if not documents and before_filter:
-                    soft_floor = max(0.16, min(self.similarity_threshold * 0.5, 0.36))
+                    soft_floor = max(0.16, self.similarity_threshold * 0.6)
                     soft_floor_used = round(float(soft_floor), 4)
                     soft = [d for d in before_filter if d.score >= soft_floor]
                     if not soft:
+                        # soft_floor로도 0건이면 상위 2개만 (과도한 노이즈 방지)
                         soft = sorted(before_filter, key=lambda d: d.score, reverse=True)[
-                            : min(4, len(before_filter))
+                            : min(2, len(before_filter))
                         ]
                     documents = soft
                     soft_fallback_applied = True
@@ -303,10 +306,11 @@ class RAGEngine:
                         soft_floor=round(soft_floor, 4),
                         returned=len(documents),
                         top_score=round(documents[0].score, 4) if documents else 0.0,
-                        note="임계값 미달 0건 → 완화 후보 사용 (config threshold 유지, 검색만 완화)",
+                        note="strict 임계값 미달 0건 → soft_fallback(threshold*0.6) 완화 후보 사용",
                     )
-                # 임계값 위 후보만으로 top_k가 안 차면, Chroma 풀에서 점수 순으로 보충(낮은 유사도도 허용)
-                if before_filter:
+                # [A] recall_backfill: strict 통과 문서가 있을 때만 부족분 보충
+                # strict 통과 문서가 없는 경우(soft_fallback) 추가 보충 생략 → 노이즈 누적 방지
+                if before_filter and documents and after_strict_threshold_count > 0:
                     seen_ids = {d.id for d in documents}
                     pool = sorted(before_filter, key=lambda d: d.score, reverse=True)
                     for d in pool:
@@ -314,6 +318,10 @@ class RAGEngine:
                             break
                         if d.id in seen_ids:
                             continue
+                        # backfill도 soft_floor 이상인 문서만 허용
+                        backfill_floor = max(0.16, self.similarity_threshold * 0.6)
+                        if d.score < backfill_floor:
+                            break
                         documents.append(d)
                         seen_ids.add(d.id)
                         recall_backfill_n += 1
@@ -325,7 +333,7 @@ class RAGEngine:
                         added=recall_backfill_n,
                         top_k_cap=effective_top_k,
                         lowest_score_in_bundle=round(documents[-1].score, 4) if documents else 0.0,
-                        note="임계값 미달 청크를 점수순으로 보충 — LLM이 관련성 판단",
+                        note="strict 통과 문서 부족 시 soft_floor 이상 청크로 보충 — LLM이 관련성 판단",
                     )
                 after_threshold_count = len(documents)
             logger.info("rag_search_debug",
