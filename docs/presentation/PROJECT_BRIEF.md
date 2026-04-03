@@ -610,169 +610,29 @@ flowchart TB
 
 **아웃바운드 AI 발신 흐름 — End-to-End**
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│  [트리거] 운영자 대시보드 / REST API                                    │
-│                                                                         │
-│  POST /api/outbound                                                     │
-│  { callee: "010-XXXX-XXXX",                                             │
-│    purpose: "만족도 조사",                                              │
-│    questions: ["서비스는 몇 점을 주시겠어요?"] }                        │
-└─────────────────────┬───────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  [SIP 발신] B2BUA (sip_endpoint.py)                                     │
-│                                                                         │
-│  SIP INVITE ──────────────────────────────────► 착신자 전화기           │
-│  (outbound-ob-{uuid} call_id 생성)                                      │
-│                                                                         │
-│  착신자 응답 200 OK ◄──────────────────────────── 수신                  │
-│                      │                                                  │
-│  ┌───────────────────▼─────────────────────────────────────────────┐    │
-│  │  _start_outbound_rtp_worker()                                   │    │
-│  │  - MediaSession 생성 (ai_mode=True)                             │    │
-│  │  - RTPRelayWorker.start()                                       │    │
-│  │  - sip_recorder.start_recording(direction="outbound")           │    │
-│  │    → recordings/YYYYMMDD_HHmmSS_ob_발신_to_착신/ 폴더 생성      │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-└─────────────────────┬───────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  [Pipecat Pipeline 기동] pipeline_builder.py — 아웃바운드 모드          │
-│                                                                         │
-│  transport.input()                                                      │
-│       │                                                                 │
-│       ▼                                                                 │
-│  VADWrapperProcessor                                                    │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │  tts_playing=True 구간 → STT 입력 프레임 억제 (RTP 에코 차단)   │    │
-│  │  (인바운드와의 핵심 차이: 아웃바운드는 STT suppression 활성화)  │    │
-│  │  tts_playing=False → 정상 STT 처리                              │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│       │                                                                 │
-│       ▼                                                                 │
-│  GoogleSTTService (telephony model, 16kHz)                              │
-│       │ TranscriptionFrame (최종 STT 결과)                              │
-│       │                                                                 │
-│       ▼                                                                 │
-│  RAGLLMProcessor ← 핵심 처리기                                          │
-│       │                                                                 │
-│       ▼  (asyncio.Task)                                                 │
-│  LangGraph Agent.process(text)                                          │
-│  → generate_response_node (아웃바운드 전용 시스템 프롬프트 + JSON 출력) │
-│       │                                                                 │
-│       ▼                                                                 │
-│  GoogleTTSService (Chirp3-HD-Kore, ko-KR, 스트리밍 청크)                │
-│       │                                                                 │
-│  TTSCompleteNotifier                                                    │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │  TTS 시작: tts_playing=True  → VADWrapper에 신호 전달            │   │
-│  │  TTS 종료: tts_playing=False → STT 입력 재개                     │   │
-│  │  TTS 종료 이벤트(asyncio.Event) → 미션 완료 판단 트리거          │   │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│       │                                                                 │
-│  transport.output() → RTP → 착신자 수화기                               │
-└─────────────────────┬───────────────────────────────────────────────────┘
-                      │
-                      │  [통화 연결 후 첫 실행]
-                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  [인사말 2단계 송출] send_greeting()                                    │
-│                                                                         │
-│  Phase 1 (즉시):                                                        │
-│    KB greeting_phase1 조회 (ChromaDB)                                   │
-│    없으면 → 기본값: "안녕하세요. AI 비서입니다."                        │
-│    → TTS 송출 → TTS 완료 대기                                           │
-│                                                                         │
-│  Phase 2 (Phase 1 완료 직후):                                           │
-│    purpose + 첫 번째 질문을 결합한 멘트 구성                            │
-│    예: "만족도 조사 차 연락드렸습니다.                                  │
-│        서비스는 몇 점을 주시겠어요?"                                    │
-│    → TTS 송출 → STT 대기 시작                                           │
-└─────────────────────┬───────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  [발화 처리 루프] — 착신자 응답 수신 시마다 반복                        │
-│                                                                         │
-│  착신자 발화 → VAD → STT → RAGLLMProcessor                              │
-│                                    │                                    │
-│                                    ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │  generate_response_node (LangGraph)                             │    │
-│  │                                                                 │    │
-│  │  아웃바운드 시스템 프롬프트 주입:                               │    │
-│  │   - purpose (미션 목적)                                         │    │
-│  │   - questions (질문 목록)                                       │    │
-│  │   - answered (지금까지 수집된 답변 현황)                        │    │
-│  │   - 답변이 아닌 경우(욕설, 거절, 감탄사 등) 응대 지침           │    │
-│  │                                                                 │    │
-│  │  LLM 단일 호출로 3가지를 동시에 결정:                           │    │
-│  │  ┌─────────────────────────────────────────────────────────┐   │     │
-│  │  │  JSON 출력 형식:                                         │   │    │
-│  │  │  {                                                       │   │    │
-│  │  │    "response": "고객에게 TTS로 전달할 텍스트",           │   │    │
-│  │  │    "answered": [                                         │   │    │
-│  │  │      {"question": "질문 원문", "answer": "수집된 답변"}  │   │    │
-│  │  │    ],                                                    │   │    │
-│  │  │    "is_answer": true/false                               │   │    │
-│  │  │  }                                                       │   │    │
-│  │  └─────────────────────────────────────────────────────────┘   │     │
-│  │                                                                 │    │
-│  │  _parse_outbound_llm_json() → response, answered, is_answer     │    │
-│  │  _split_into_chunks(response) → TTS용 청크 재생성 (garbage 방지)│    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                                    │                                    │
-│                                    ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │  RAGLLMProcessor — 미션 완료 판단                                │   │
-│  │                                                                  │   │
-│  │  outbound_answered (LLM 추출 답변) 처리:                         │   │
-│  │    ① LLM answered 결과를 _outbound_answers에 등록                │   │
-│  │    ② (fallback) answered 빈 배열이지만 is_answer=true이고        │   │
-│  │       미답변 질문이 1개이면 user_text를 직접 답변으로 등록       │   │
-│  │                                                                  │   │
-│  │  _check_outbound_mission_complete():                             │   │
-│  │    fast path: 모든 questions가 _outbound_answers에 있으면        │   │
-│  │               LLM 없이 즉시 미션 완료 처리                       │   │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                                    │                                    │
-│                       ┌────────────┴────────────┐                       │
-│                       ▼                         ▼                       │
-│                 [미션 미완료]              [미션 완료]                  │
-│                       │                         │                       │
-│              TTS 응답 송출 후            _trigger_mission_complete()    │
-│              다음 발화 대기                       │                     │
-│                                          ┌──────▼──────────────────┐    │
-│                       │ 1. KB farewell 조회     │                       │
-│                       │    → TTS 종료 멘트 송출 │                       │
-│                       │ 2. TTS 완료 이벤트 대기 │                       │
-│                       │    (asyncio.Event, 10초)│                       │
-│                       │ 3. send_outbound_bye()  │                       │
-│                       │    → sip_recorder       │                       │
-│                       │      .stop_recording()  │                       │
-│                       │    → SIP BYE 전송       │                       │
-│                                          └─────────────────────────┘    │
-└─────────────────────┬───────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  [통화 종료 처리]                                                       │
-│                                                                         │
-│  BYE 수신 또는 BYE 전송 시:                                             │
-│    sip_recorder.stop_recording()                                        │
-│    → caller.wav, callee.wav, mixed.wav 저장                             │
-│    → pipeline_transcript_buffer flush                                   │
-│       → transcript.txt (STT/TTS 대본)                                   │
-│    → metadata.json                                                      │
-│       { call_id, caller, callee, direction:"outbound",                  │
-│         duration, start_time, end_time,                                 │
-│         outbound_mission: {purpose, questions, answers} }               │
-│                                                                         │
-│  발신 이력: OutboundCall.status → "completed"                           │
-│  운영자 대시보드 통화이력: 아웃바운드 건으로 표시                       │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    TRIGGER["[트리거] 운영자 대시보드 / REST API\nPOST /api/outbound\n{ callee, purpose, questions }"]
+
+    SIP["[SIP 발신] B2BUA — sip_endpoint.py\nSIP INVITE → 착신자 전화기\n착신자 응답 200 OK 수신\n_start_outbound_rtp_worker()\n- MediaSession(ai_mode=True)\n- RTPRelayWorker.start()\n- sip_recorder.start_recording(outbound)"]
+
+    PIPE["[Pipecat Pipeline 기동] pipeline_builder.py\ntransport.input()\n→ VADWrapperProcessor\n   tts_playing=True → STT 프레임 억제(RTP 에코 차단)\n   tts_playing=False → 정상 STT 처리\n→ GoogleSTTService(telephony, 16kHz)\n→ RAGLLMProcessor\n→ LangGraph Agent.process(text)\n   generate_response_node(아웃바운드 전용 프롬프트+JSON)\n→ GoogleTTSService(Chirp3-HD-Kore, ko-KR, 스트리밍)\n→ TTSCompleteNotifier\n   TTS 시작: tts_playing=True → VADWrapper 신호\n   TTS 종료: tts_playing=False → STT 재개\n→ transport.output() → RTP → 착신자 수화기"]
+
+    GREET["[인사말 2단계 송출] send_greeting()\nPhase 1: KB greeting_phase1 조회 → TTS 송출 → 완료 대기\nPhase 2: purpose + 첫 질문 결합 → TTS 송출 → STT 대기 시작"]
+
+    LOOP["[발화 처리 루프] — 착신자 응답 수신 시마다 반복\n착신자 발화 → VAD → STT → RAGLLMProcessor\n→ generate_response_node(LangGraph)\n  - purpose / questions / answered 주입\n  - LLM 단일 호출로 동시 결정:\n    response(TTS 텍스트)\n    answered([{question, answer}])\n    is_answer(true/false)\n  - _parse_outbound_llm_json()\n  - _split_into_chunks() → TTS 청크"]
+
+    MISSION["미션 완료 판단 — _check_outbound_mission_complete()\n① LLM answered → _outbound_answers 등록\n② fallback: answered=[] & is_answer=true & 미답변 1개\n   → user_text 직접 답변으로 등록\nfast path: 모든 questions ⊆ _outbound_answers → 즉시 완료"]
+
+    INCOMPLETE["[미션 미완료]\nTTS 응답 송출\n→ 다음 발화 대기"]
+
+    COMPLETE["[미션 완료] _trigger_mission_complete()\n1. KB farewell 조회 → TTS 종료 멘트 송출\n2. TTS 완료 이벤트 대기(asyncio.Event, 10초)\n3. send_outbound_bye()\n   → sip_recorder.stop_recording()\n   → SIP BYE 전송"]
+
+    END_CALL["[통화 종료 처리]\nBYE 수신 또는 BYE 전송 시:\n- caller.wav / callee.wav / mixed.wav 저장\n- transcript.txt(STT/TTS 대본)\n- metadata.json\n  { call_id, caller, callee, direction:outbound,\n    duration, outbound_mission:{purpose,questions,answers} }\n- OutboundCall.status → completed"]
+
+    TRIGGER --> SIP --> PIPE --> GREET --> LOOP --> MISSION
+    MISSION -->|"미완료"| INCOMPLETE --> LOOP
+    MISSION -->|"완료"| COMPLETE --> END_CALL
 ```
 
 **아웃바운드 특이사항 — 인바운드와의 주요 차이점**
