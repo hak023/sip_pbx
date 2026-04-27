@@ -1,3 +1,8 @@
+# 01 논리 아키텍처 (§3.1)
+
+`SYSTEM_OVERVIEW`용. PNG는 [README](README.md)의 `mermaid-cli` 명령으로 생성한다.
+
+```mermaid
 %% AI SIP PBX — 3.1 논리 구성 (SYSTEM_OVERVIEW)
 flowchart TB
   subgraph ext [외부]
@@ -44,3 +49,4 @@ flowchart TB
   API --> SQL
   FE <--> API
   FE <--> WS
+```
