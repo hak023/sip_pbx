@@ -5,6 +5,8 @@ export interface DashboardMetrics {
   today_calls_count?: number;
   avg_response_time?: number;
   knowledge_base_size?: number;
+  /** 전체 통화이력 기준 미해결 건수 */
+  unresolved_calls_count?: number;
 }
 
 /** GET /api/calls/active 항목 (정규화 전) */
@@ -26,6 +28,10 @@ export interface AiUnhandledItem {
   ai_response_preview?: string;
   kind?: string;
   reason?: string;
+  /** 운영자가 입력한 답변 텍스트 */
+  reply_text?: string | null;
+  /** 답변 전송 시각 (ISO 8601) */
+  reply_sent_at?: string | null;
 }
 
 /** CDR / call_debug_trace 한 행 (`log_call_data` → `call_data_record_*.log` JSONL, 대시보드 WS와 동일) */
@@ -56,8 +62,6 @@ export interface CallHistoryRecordItem {
   has_recording_mixed?: boolean;
   has_recording_caller?: boolean;
   has_recording_callee?: boolean;
-  /** 착신자 관점 요약 (`call_insights.json`) */
-  callee_summary?: string | null;
   /** 통화 종료 후 LLM·폴백으로 생성한 한 줄형 통화 요약 */
   call_summary?: string | null;
   is_ai_handled_call?: boolean;
@@ -65,6 +69,33 @@ export interface CallHistoryRecordItem {
   ai_unhandled_count?: number;
   ai_unhandled_resolved_by_hitl_count?: number;
   ai_unhandled_total_recorded?: number;
+  /** 운영자 미해결 플래그: true이면 후속 대응 필요 */
+  is_unresolved?: boolean;
+  /** 통화에 연결된 예약 존재 여부 */
+  has_booking?: boolean;
+}
+
+/** GET /api/call-history/{call_id}/bookings — 통화에 연결된 예약 항목 */
+export interface CallBookingItem {
+  booking_id: string;
+  owner?: string;
+  slot_date?: string;
+  slot_time?: string;
+  customer_name?: string;
+  customer_phone?: string;
+  party_size?: number;
+  service_type?: string;
+  status?: string;
+  memo?: string;
+  call_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  extra_data?: Record<string, unknown>;
+}
+
+export interface CallBookingsResponse {
+  call_id: string;
+  items: CallBookingItem[];
 }
 
 export interface CallHistoryListResponse {

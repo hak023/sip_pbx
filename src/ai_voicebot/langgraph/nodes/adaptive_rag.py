@@ -10,6 +10,7 @@ Small-to-Big Retrieval + Contextual Compression:
 import structlog
 from typing import Dict, List
 from src.ai_voicebot.langgraph.state import ConversationState
+from src.ai_voicebot.langgraph.call_context import get_rag_engine
 from src.common.call_data_record_logger import log_call_data
 from src.common.rag_hit_serializer import build_rag_hits_llm_context, build_rag_hits_retrieval
 from src.common.sip_owner import normalize_owner_username
@@ -129,7 +130,7 @@ async def adaptive_rag_node(state: ConversationState) -> dict:
 
     base_q = state.get("rewritten_query") or state.get("user_query", "")
     query = _merge_dialog_context_for_rag(state, base_q)
-    rag_engine = state.get("_rag_engine")
+    rag_engine = get_rag_engine()
     owner = state.get("_owner")  # 착신번호 기반 테넌트 격리
     call_id = state.get("_call_id") or ""
     intent = state.get("intent")  # intent별 category 필터 (CHROMADB_CATEGORY_DESIGN)

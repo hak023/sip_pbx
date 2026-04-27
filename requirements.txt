@@ -14,6 +14,7 @@ PyYAML==6.0.1
 
 # Audio Processing
 opuslib==3.0.1  # Opus codec decoder
+pydub>=0.25.1   # MP3 디코드 + μ-law 변환 (ffmpeg 백엔드 필요, 통화 연결음)
 
 # Monitoring & Logging
 prometheus-client==0.19.0
@@ -42,6 +43,13 @@ httpx==0.25.2  # For testing HTTP endpoints
 # mypy==1.7.1
 # types-PyYAML==6.0.12.12
 # pip-audit==2.6.1
+
+# =============================================================================
+# Google Calendar 연동
+# =============================================================================
+google-auth>=2.0
+google-auth-oauthlib>=1.0
+google-api-python-client>=2.0
 
 # =============================================================================
 # AI Voice Assistant Extension

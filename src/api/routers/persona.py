@@ -20,12 +20,21 @@ router = APIRouter(prefix="/api/persona", tags=["persona"])
 
 
 class CreatePersonaRequest(BaseModel):
-    """Persona 생성 요청"""
+    """Persona 생성 요청.
+
+    ``sip_message_ai_reply_*`` 필드는 DB·API 호환용으로만 남아 있으며,
+    SIP MESSAGE AI 자동응답 ON/OFF·접두어는 **설정 → 채팅·SIP MESSAGE** ``PUT /api/chat/relay`` 의
+    ``message_ai_reply_enabled`` / ``message_ai_reply_prefix`` 만 적용된다.
+    """
     owner: str
     name: str
     description: str
     scope_keywords: Optional[List[str]] = None
     chitchat_response_template: Optional[str] = None
+    escalation_mode: str = "hitl"
+    transfer_extension: Optional[str] = None
+    sip_message_ai_reply_enabled: bool = False
+    sip_message_ai_reply_prefix: Optional[str] = None
 
 
 class UpdatePersonaRequest(BaseModel):
@@ -35,6 +44,17 @@ class UpdatePersonaRequest(BaseModel):
     scope_keywords: Optional[List[str]] = None
     chitchat_response_template: Optional[str] = None
     enabled: Optional[bool] = None
+    escalation_mode: Optional[str] = None
+    transfer_extension: Optional[str] = None
+    sip_message_ai_reply_enabled: Optional[bool] = None
+    sip_message_ai_reply_prefix: Optional[str] = None
+
+
+class EscalationOnlyUpdate(BaseModel):
+    """지식 베이스가 페르소나 문구를 담당할 때 — HITL/호전환 필드만 갱신."""
+
+    escalation_mode: str = "hitl"
+    transfer_extension: Optional[str] = None
 
 
 class PersonaResponse(BaseModel):
@@ -44,6 +64,10 @@ class PersonaResponse(BaseModel):
     description: str
     scope_keywords: List[str]
     chitchat_response_template: Optional[str]
+    escalation_mode: str = "hitl"
+    transfer_extension: Optional[str] = None
+    sip_message_ai_reply_enabled: bool = False
+    sip_message_ai_reply_prefix: Optional[str] = None
     enabled: bool
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -83,6 +107,10 @@ async def create_persona(req: CreatePersonaRequest):
         description=req.description,
         scope_keywords=req.scope_keywords or [],
         chitchat_response_template=req.chitchat_response_template,
+        escalation_mode=req.escalation_mode or "hitl",
+        transfer_extension=req.transfer_extension,
+        sip_message_ai_reply_enabled=bool(req.sip_message_ai_reply_enabled),
+        sip_message_ai_reply_prefix=req.sip_message_ai_reply_prefix,
         enabled=True,
         created_at=datetime.now().isoformat(),
     )
@@ -136,6 +164,12 @@ async def update_persona(owner: str, req: UpdatePersonaRequest):
             description=req.description,
             scope_keywords=req.scope_keywords or [],
             chitchat_response_template=req.chitchat_response_template,
+            escalation_mode=req.escalation_mode or "hitl",
+            transfer_extension=req.transfer_extension,
+            sip_message_ai_reply_enabled=bool(req.sip_message_ai_reply_enabled)
+            if req.sip_message_ai_reply_enabled is not None
+            else False,
+            sip_message_ai_reply_prefix=req.sip_message_ai_reply_prefix,
             enabled=req.enabled if req.enabled is not None else True,
             created_at=datetime.now().isoformat(),
             updated_at=datetime.now().isoformat(),
@@ -153,13 +187,78 @@ async def update_persona(owner: str, req: UpdatePersonaRequest):
             persona.chitchat_response_template = req.chitchat_response_template
         if req.enabled is not None:
             persona.enabled = req.enabled
-        
+        if req.escalation_mode is not None:
+            persona.escalation_mode = req.escalation_mode
+        if req.transfer_extension is not None:
+            persona.transfer_extension = req.transfer_extension
+        _fs = getattr(req, "model_fields_set", set()) or set()
+        if "sip_message_ai_reply_enabled" in _fs:
+            persona.sip_message_ai_reply_enabled = bool(req.sip_message_ai_reply_enabled)
+        if "sip_message_ai_reply_prefix" in _fs:
+            persona.sip_message_ai_reply_prefix = req.sip_message_ai_reply_prefix
+
         persona.updated_at = datetime.now().isoformat()
     
     success = await service.save_persona(persona)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save persona")
     
+    return PersonaResponse(**persona.dict())
+
+
+@router.put("/{owner}/escalation", response_model=PersonaResponse, summary="에스컬레이션만 저장")
+async def upsert_escalation_only(owner: str, req: EscalationOnlyUpdate):
+    """조직 설명·키워드는 지식 베이스에서 관리하고, AI 한계 시 동작만 저장한다.
+
+    기존 Persona가 없으면 플레이스홀더 name/description으로 한 건 생성한 뒤 에스컬레이션만 설정한다.
+    """
+    service = get_persona_service()
+    if not service:
+        raise HTTPException(status_code=503, detail="PersonaService not initialized")
+
+    mode = (req.escalation_mode or "hitl").strip().lower()
+    if mode not in ("hitl", "transfer", "none"):
+        raise HTTPException(
+            status_code=400,
+            detail="escalation_mode must be 'hitl', 'transfer', or 'none'",
+        )
+    ext = (req.transfer_extension or "").strip()
+
+    KB_PLACEHOLDER_NAME = "(지식 베이스)"
+    KB_PLACEHOLDER_DESC = (
+        "조직 성격·지식·키워드는 지식 베이스에서 관리합니다. "
+        "이 레코드는 AI가 답변 불가일 때의 동작(HITL / SIP 호전환)만 저장합니다."
+    )
+
+    persona = await service.get_persona(owner)
+    now = datetime.now().isoformat()
+
+    if not persona:
+        persona = OrganizationPersona(
+            owner=owner,
+            name=KB_PLACEHOLDER_NAME,
+            description=KB_PLACEHOLDER_DESC,
+            scope_keywords=[],
+            chitchat_response_template=None,
+            escalation_mode=mode,
+            transfer_extension=ext if ext and mode == "transfer" else None,
+            sip_message_ai_reply_enabled=False,
+            sip_message_ai_reply_prefix=None,
+            enabled=True,
+            created_at=now,
+            updated_at=now,
+        )
+        logger.info("persona_escalation_seed_created", owner=owner, escalation_mode=mode)
+    else:
+        persona.escalation_mode = mode
+        persona.transfer_extension = ext if ext and mode == "transfer" else None
+        persona.updated_at = now
+        logger.info("persona_escalation_updated", owner=owner, escalation_mode=mode)
+
+    success = await service.save_persona(persona)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save escalation settings")
+
     return PersonaResponse(**persona.dict())
 
 

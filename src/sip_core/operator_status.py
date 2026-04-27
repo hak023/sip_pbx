@@ -49,6 +49,7 @@ class OperatorStatusManager:
         self._status: Dict[str, OperatorStatus] = {}
         self._away_messages: Dict[str, str] = {}
         self._status_changed_at: Dict[str, datetime] = {}
+        self._fallback_modes: Dict[str, str] = {}  # "hitl" | "transfer"
         self._load()
         logger.info(
             "operator_status_manager_initialized",
@@ -76,6 +77,8 @@ class OperatorStatusManager:
                         self._status_changed_at[uid] = datetime.fromisoformat(
                             entry["status_changed_at"]
                         )
+                    if entry.get("ai_fallback_mode") in ("hitl", "transfer"):
+                        self._fallback_modes[uid] = entry["ai_fallback_mode"]
                 except (KeyError, ValueError):
                     logger.warning(
                         "operator_status_load_entry_skipped",
@@ -100,6 +103,8 @@ class OperatorStatusManager:
                     entry["away_message"] = self._away_messages[uid]
                 if uid in self._status_changed_at:
                     entry["status_changed_at"] = self._status_changed_at[uid].isoformat()
+                if uid in self._fallback_modes:
+                    entry["ai_fallback_mode"] = self._fallback_modes[uid]
                 data[uid] = entry
             tmp = self._status_file.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -152,6 +157,17 @@ class OperatorStatusManager:
             "죄송합니다. 현재 자리를 비웠습니다. AI 비서가 도와드리겠습니다.",
         )
 
+    def set_fallback_mode(self, user_id: str, mode: str) -> None:
+        """AI 폴백 모드 설정 (hitl | transfer)."""
+        with self._lock:
+            self._fallback_modes[user_id] = mode
+            self._save()
+        logger.info("operator_fallback_mode_updated", user_id=user_id, mode=mode)
+
+    def get_fallback_mode(self, user_id: str) -> str:
+        """AI 폴백 모드 조회 (기본값: hitl)."""
+        return self._fallback_modes.get(user_id, "hitl")
+
     def get_status_info(self, user_id: str) -> dict:
         """운영자 상태 상세 정보 조회."""
         status = self.get_status(user_id)
@@ -165,6 +181,7 @@ class OperatorStatusManager:
                 if user_id in self._status_changed_at
                 else None
             ),
+            "ai_fallback_mode": self.get_fallback_mode(user_id),
         }
 
     def clear_status(self, user_id: str) -> None:

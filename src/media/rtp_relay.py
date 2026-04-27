@@ -4,8 +4,11 @@ RTP/RTCP 패킷 relay (Bypass Mode)
 """
 
 import asyncio
+import audioop
+import math
 import os
 import queue
+import random
 import struct
 import sys
 import threading
@@ -69,6 +72,7 @@ class RelayMode:
     AI = "ai"                # 기존: Caller ↔ AI (TTS/STT)
     BRIDGE = "bridge"        # 신규: Caller ↔ Server ↔ New Callee (Transfer)
     HOLD = "hold"            # 신규: Caller에게 대기 안내/음악 재생
+    DOCK_HOLD = "dock_hold"  # Call Dock: 양측에 동일 대기음(로컬 생성 RTP) 송신, peer 음성 릴레이 차단
 
 
 class RTPRelayWorker:
@@ -162,6 +166,7 @@ class RTPRelayWorker:
         self._tts_last_rtp_seq_sent: Optional[int] = None
         self._tts_last_rtp_ts_sent: Optional[int] = None
         self._rtp_keepalive_logged: bool = False
+        self._ringback_early_tx_logged: bool = False
         self._rtp_keepalive_empty_streak: int = 0  # (레거시) 짧은 공백 로그 상관용; 킵얼라이브 간격은 INTERVAL_SEC
         # TTS RTP가 UDP 큐에 마지막으로 들어간 시각(perf_counter) — 묵음 킵얼라이브 8초 간격 계산
         self._tts_last_udp_enqueued_mono: float = 0.0
@@ -219,6 +224,10 @@ class RTPRelayWorker:
         self.bridge_callee_endpoint: Optional[RTPEndpoint] = None  # Bridge 대상 엔드포인트
         self.bridge_callee_transport: Optional[asyncio.DatagramTransport] = None  # Bridge용 소켓
         self._bridge_protocol = None  # Bridge callee RTP protocol
+
+        # Call Dock 통화대기: 양측 MOH 송신 태스크
+        self._dock_hold_task: Optional[asyncio.Task] = None
+        self._dock_hold_sample_index: int = 0
         
         # SIP 통화 녹음 지원 (신규)
         self.sip_recorder = sip_recorder
@@ -291,7 +300,7 @@ class RTPRelayWorker:
             getattr(self, "_tts_sender_thread", None) is not None
             and self._tts_sender_thread.is_alive()
         )
-        logger.info(
+        logger.debug(
             "rtp_health_snapshot",
             call_id=self.media_session.call_id,
             progress="rtp_debug",
@@ -717,28 +726,28 @@ class RTPRelayWorker:
                             and _pcm_q is not None
                             and _pcm_q.qsize() > 0
                         )
-                        logger.info("caller_rtp_to_stt_input",
-                                   call_id=self.media_session.call_id,
-                                   progress="stt_rtp",
-                                   packet_count=self._caller_rtp_received_count,
-                                   rtp_bytes=len(data),
-                                   pcm_bytes=len(pcm_data) if pcm_data else 0,
-                                   stt_queue_size=self._pipecat_audio_queue.qsize(),
-                                   tts_sending_active=is_tts_active,
-                                   tts_queue_size=self._pipecat_pcm_queue.qsize() if hasattr(self, "_pipecat_pcm_queue") and self._pipecat_pcm_queue else 0,
-                                   note="Caller RTP → STT 입력 (TTS 동시 송출 여부 확인)")
+                        logger.debug("caller_rtp_to_stt_input",
+                                    call_id=self.media_session.call_id,
+                                    progress="stt_rtp",
+                                    packet_count=self._caller_rtp_received_count,
+                                    rtp_bytes=len(data),
+                                    pcm_bytes=len(pcm_data) if pcm_data else 0,
+                                    stt_queue_size=self._pipecat_audio_queue.qsize(),
+                                    tts_sending_active=is_tts_active,
+                                    tts_queue_size=self._pipecat_pcm_queue.qsize() if hasattr(self, "_pipecat_pcm_queue") and self._pipecat_pcm_queue else 0,
+                                    note="Caller RTP → STT 입력 (TTS 동시 송출 여부 확인)")
                     # STT 경로 점검: 첫 패킷 시 한 번, 이후 200마다 (테스트 후 동작 여부 점검용)
                     if self._caller_rtp_received_count == 1:
-                        logger.info("stt_path_rtp_first",
-                                   call_id=self.media_session.call_id,
-                                   note="[STT 경로] RTP → 큐 첫 투입 (이 로그가 있어야 경로 시작)")
+                        logger.debug("stt_path_rtp_first",
+                                    call_id=self.media_session.call_id,
+                                    note="[STT 경로] RTP → 큐 첫 투입 (이 로그가 있어야 경로 시작)")
                     if self._caller_rtp_received_count > 0 and self._caller_rtp_received_count % 200 == 0:
-                        logger.info("stt_path_rtp_to_queue",
-                                   call_id=self.media_session.call_id,
-                                   packet_count=self._caller_rtp_received_count,
-                                   queue_size=self._pipecat_audio_queue.qsize(),
-                                   queue_max=self._pipecat_audio_queue.maxsize,
-                                   note="[STT 경로] RTP → STT 입력 큐 투입 누적")
+                        logger.debug("stt_path_rtp_to_queue",
+                                    call_id=self.media_session.call_id,
+                                    packet_count=self._caller_rtp_received_count,
+                                    queue_size=self._pipecat_audio_queue.qsize(),
+                                    queue_max=self._pipecat_audio_queue.maxsize,
+                                    note="[STT 경로] RTP → STT 입력 큐 투입 누적")
                     
                     if pcm_data:
                         if getattr(self, "_aec_processor", None):
@@ -776,11 +785,11 @@ class RTPRelayWorker:
                                     if not self._timing_first_caller_rtp_logged:
                                         self._timing_first_caller_rtp_logged = True
                                         from datetime import datetime
-                                        logger.info("timing_caller_rtp_first_to_pipeline",
-                                                   call_id=self.media_session.call_id,
-                                                   progress="timing",
-                                                   ts_iso=datetime.now().isoformat(timespec="milliseconds"),
-                                                   note="RTP→STT 구간 시작: caller 음성 첫 패킷이 파이프라인에 투입된 시점")
+                                        logger.debug("timing_caller_rtp_first_to_pipeline",
+                                                    call_id=self.media_session.call_id,
+                                                    progress="timing",
+                                                    ts_iso=datetime.now().isoformat(timespec="milliseconds"),
+                                                    note="RTP→STT 구간 시작: caller 음성 첫 패킷이 파이프라인에 투입된 시점")
                         else:
                             try:
                                 self._pipecat_audio_queue.put_nowait(pcm_data)
@@ -815,11 +824,11 @@ class RTPRelayWorker:
                                 if not self._timing_first_caller_rtp_logged:
                                     self._timing_first_caller_rtp_logged = True
                                     from datetime import datetime
-                                    logger.info("timing_caller_rtp_first_to_pipeline",
-                                               call_id=self.media_session.call_id,
-                                               progress="timing",
-                                               ts_iso=datetime.now().isoformat(timespec="milliseconds"),
-                                               note="RTP→STT 구간 시작: caller 음성 첫 패킷이 파이프라인에 투입된 시점")
+                                    logger.debug("timing_caller_rtp_first_to_pipeline",
+                                                call_id=self.media_session.call_id,
+                                                progress="timing",
+                                                ts_iso=datetime.now().isoformat(timespec="milliseconds"),
+                                                note="RTP→STT 구간 시작: caller 음성 첫 패킷이 파이프라인에 투입된 시점")
                             except asyncio.QueueFull:
                                 if not getattr(self, "_stt_queue_full_logged", False):
                                     self._stt_queue_full_logged = True
@@ -937,23 +946,32 @@ class RTPRelayWorker:
                    call_id=self.media_session.call_id,
                    ai_orchestrator=ai_orchestrator is not None)
     
-    def send_ai_audio(self, audio_data: bytes):
+    def send_ai_audio(self, audio_data: bytes, *, ringback_early_media: bool = False):
         """
         AI에서 생성한 오디오(TTS PCM)를 RTP 패킷으로 변환하여 Caller에게 전송.
-        
+
         Legacy Orchestrator 전용 메서드.
         TTS 출력(LINEAR16 16kHz PCM) → G.711 인코딩 → RTP 패킷화 → Caller로 전송.
-        
+
+        ``ringback_early_media=True`` 이면 ``ai_mode`` 가 꺼져 있어도 송신한다.
+        (B2BUA 착신 링 구간 — RingbackPlayer 가 200 OK 전까지 발신자에게 연결음·인사 TTS 전송)
+
         Args:
             audio_data: TTS가 생성한 PCM 오디오 데이터 (16-bit, 16kHz)
+            ringback_early_media: True면 링 단계 early media 용 송신(ai_mode 불필요)
         """
-        if not self.ai_mode:
+        if not self.ai_mode and not ringback_early_media:
             logger.warning("not_in_ai_mode",
                          call_id=self.media_session.call_id)
             return
         
-        # callee_audio_transport가 닫힌 경우 caller_audio_transport 로 폴백 (Windows ICMP 에러 대응)
-        transport = self.callee_audio_transport or self.caller_audio_transport
+        # 링 구간 early media: 발신자가 받는 SDP/포트는 caller leg — 반드시 caller 소켓에서 송신해야 한다.
+        # (callee 쪽 소켓이 먼저 잡히면 SDP의 m=audio 와 불일치해 단말이 무음 처리할 수 있음)
+        if ringback_early_media:
+            transport = self.caller_audio_transport or self.callee_audio_transport
+        else:
+            # callee_audio_transport가 닫힌 경우 caller_audio_transport 로 폴백 (Windows ICMP 에러 대응)
+            transport = self.callee_audio_transport or self.caller_audio_transport
         if not transport:
             logger.error("send_ai_audio_no_transport",
                         call_id=self.media_session.call_id,
@@ -971,6 +989,17 @@ class RTPRelayWorker:
             _tts_dest = self.tts_dest_endpoint or self.caller_endpoint
             dest_ip = str(_tts_dest.ip)
             dest_port = int(_tts_dest.port)
+
+            if ringback_early_media and not self._ringback_early_tx_logged:
+                self._ringback_early_tx_logged = True
+                logger.info(
+                    "ringback_early_media_first_pcm_send",
+                    call_id=self.media_session.call_id,
+                    dest=f"{dest_ip}:{dest_port}",
+                    pcm_bytes=len(audio_data),
+                    transport_is_caller_leg=transport is self.caller_audio_transport,
+                    note="발신 단말 묵음 시 SDP 180/183·caller leg 포트·ringback_settings 행을 함께 확인",
+                )
 
             # PCM(16kHz) → G.711 → RTP 패킷들로 변환
             rtp_packets = self._rtp_packet_builder.build_packets(audio_data, sample_rate=16000)
@@ -1182,7 +1211,7 @@ class RTPRelayWorker:
                 else None
             )
             if _trace_verbose or _sent_n <= 10 or _sent_n % 20 == 0:
-                logger.info(
+                logger.debug(
                     "tts_rtp_trace_udp_sent",
                     call_id=self.media_session.call_id,
                     progress="rtp_tts_trace",
@@ -1681,16 +1710,16 @@ class RTPRelayWorker:
                     if packets_sent < 30:
                         expected_from_base_ms = self._rtp_packets_sent_total * FIXED_INTERVAL_SEC * 1000
                         actual_from_base_ms = (now_after - self._rtp_base_time) * 1000
-                        logger.info("rtp_packet_timing_absolute",
-                                   call_id=self.media_session.call_id,
-                                   progress="rtp_timing",
-                                   packet_seq=packets_sent,
-                                   is_silence=pcm_is_silence,
-                                   expected_time_from_base_ms=round(expected_from_base_ms, 2),
-                                   actual_time_from_base_ms=round(actual_from_base_ms, 2),
-                                   timing_error_ms=round(actual_from_base_ms - expected_from_base_ms, 2),
-                                   interval_from_prev_ms=round(interval_from_prev_ms, 2),
-                                   note="절대 시간 기반 (20ms 격자, base_time 고정)")
+                        logger.debug("rtp_packet_timing_absolute",
+                                    call_id=self.media_session.call_id,
+                                    progress="rtp_timing",
+                                    packet_seq=packets_sent,
+                                    is_silence=pcm_is_silence,
+                                    expected_time_from_base_ms=round(expected_from_base_ms, 2),
+                                    actual_time_from_base_ms=round(actual_from_base_ms, 2),
+                                    timing_error_ms=round(actual_from_base_ms - expected_from_base_ms, 2),
+                                    interval_from_prev_ms=round(interval_from_prev_ms, 2),
+                                    note="절대 시간 기반 (20ms 격자, base_time 고정)")
 
                     # 타이밍 위반 추적
                     if self._rtp_packets_sent_total > 0:
@@ -1773,7 +1802,7 @@ class RTPRelayWorker:
                         bytes_sent_cumulative += len(frame_data)
                         if not _logged_3s and bytes_sent_cumulative >= 96000:
                             _logged_3s = True
-                            logger.info("rtp_sent_3s_equivalent",
+                            logger.debug("rtp_sent_3s_equivalent",
                                         call_id=self.media_session.call_id,
                                         progress="rtp_timing",
                                         bytes_sent_cumulative=bytes_sent_cumulative,
@@ -1791,7 +1820,7 @@ class RTPRelayWorker:
                         _out_q = getattr(self, "_tts_udp_out_queue", None)
                         _udp_stat = self.stats.get("rtp_tts_packets_sent", 0)
                         _out_sz = _out_q.qsize() if _out_q is not None else -1
-                        logger.info(
+                        logger.debug(
                             "rtp_tts_send_window_stats",
                             call_id=self.media_session.call_id,
                             progress="rtp_timing",
@@ -2179,7 +2208,7 @@ class RTPRelayWorker:
                 _expected_seg_ms = _seg_packets * self._RTP_PACKET_MS
                 _kw["expected_audio_ms_last_segment"] = round(_expected_seg_ms, 2)
                 _kw["last_segment_timing_error_ms"] = round(_wall_ms - _expected_seg_ms, 2)
-            logger.info("rtp_absolute_timing_summary", **_kw)
+            logger.debug("rtp_absolute_timing_summary", **_kw)
 
         self._aec_processor = None
         self._aec_near_buffer = b""
@@ -2247,6 +2276,7 @@ class RTPRelayWorker:
             callee_rtp_port: 새 착신자 RTP 포트
             bridge_rtp_port: 서버에서 사용할 Bridge 소켓 포트 (이미 할당됨)
         """
+        await self.stop_dock_hold_moh()
         self.bridge_callee_endpoint = RTPEndpoint(ip=callee_ip, port=callee_rtp_port)
         
         # AI 모드 끄기
@@ -2290,6 +2320,93 @@ class RTPRelayWorker:
         self.relay_mode = RelayMode.HOLD
         logger.info("hold_mode_activated",
                    call_id=self.media_session.call_id)
+
+    def _build_rtp_pcmu_packet(self, seq: int, ts: int, ssrc: int, payload: bytes) -> bytes:
+        v_p_x_cc = 0x80
+        m_pt = 0x00  # PT=0 PCMU
+        hdr = struct.pack("!BBHII", v_p_x_cc, m_pt, seq & 0xFFFF, ts & 0xFFFFFFFF, ssrc & 0xFFFFFFFF)
+        return hdr + payload
+
+    async def _dock_hold_send_rtp(self, socket_type: str, packet: bytes) -> None:
+        proto = self.protocols.get(socket_type)
+        if not proto or not proto.transport:
+            return
+        rep = getattr(proto, "remote_endpoint", None)
+        rp = getattr(proto, "remote_port", None)
+        if not rep or not rep.ip or rp is None or int(rp) <= 0:
+            return
+        addr = (str(rep.ip), int(rp))
+        try:
+            async with self._sendto_lock:
+                proto.transport.sendto(packet, addr)
+        except OSError as ose:
+            logger.debug(
+                "dock_hold_rtp_send_failed",
+                call_id=self.media_session.call_id,
+                socket_type=socket_type,
+                error=str(ose),
+            )
+
+    async def _dock_hold_moh_loop(self) -> None:
+        """8kHz PCMU 20ms 프레임을 양단에 동시 송신 (미국식 링백 유사 혼합톤)."""
+        seq_c = random.randint(0, 20000)
+        seq_e = random.randint(0, 20000)
+        ts_c = random.randint(0, 80000)
+        ts_e = random.randint(0, 80000)
+        ssrc_c = random.getrandbits(32) & 0xFFFFFFFF
+        ssrc_e = random.getrandbits(32) & 0xFFFFFFFF
+        while self.running and self.relay_mode == RelayMode.DOCK_HOLD:
+            pcm = bytearray()
+            base = self._dock_hold_sample_index
+            for k in range(160):
+                t = (base + k) / 8000.0
+                s = int(
+                    1100.0 * math.sin(2 * math.pi * 440.0 * t)
+                    + 700.0 * math.sin(2 * math.pi * 480.0 * t)
+                )
+                s = max(-32767, min(32767, s))
+                pcm.extend(struct.pack("<h", s))
+            self._dock_hold_sample_index = (self._dock_hold_sample_index + 160) % (8000 * 3600)
+            try:
+                ulaw = audioop.lin2ulaw(bytes(pcm), 2)
+            except Exception:
+                ulaw = b"\xff" * 160
+            pkt_c = self._build_rtp_pcmu_packet(seq_c, ts_c, ssrc_c, ulaw)
+            pkt_e = self._build_rtp_pcmu_packet(seq_e, ts_e, ssrc_e, ulaw)
+            seq_c = (seq_c + 1) & 0xFFFF
+            seq_e = (seq_e + 1) & 0xFFFF
+            ts_c = (ts_c + 160) & 0xFFFFFFFF
+            ts_e = (ts_e + 160) & 0xFFFFFFFF
+            await self._dock_hold_send_rtp("caller_audio_rtp", pkt_c)
+            await self._dock_hold_send_rtp("callee_audio_rtp", pkt_e)
+            await asyncio.sleep(0.02)
+
+    async def start_dock_hold_moh(self) -> None:
+        """통화대기 ON — peer 간 릴레이 대신 MOH."""
+        await self.stop_dock_hold_moh()
+        self.relay_mode = RelayMode.DOCK_HOLD
+        self._dock_hold_sample_index = 0
+        loop = asyncio.get_event_loop()
+        self._dock_hold_task = loop.create_task(self._dock_hold_moh_loop())
+        logger.info(
+            "dock_hold_moh_started",
+            call_id=self.media_session.call_id,
+            hypothesis="rtp_dock_hold_bilateral_tone",
+        )
+
+    async def stop_dock_hold_moh(self) -> None:
+        """통화대기 OFF."""
+        t = self._dock_hold_task
+        self._dock_hold_task = None
+        if t is not None and not t.done():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        if self.relay_mode == RelayMode.DOCK_HOLD:
+            self.relay_mode = RelayMode.BYPASS
+        logger.info("dock_hold_moh_stopped", call_id=self.media_session.call_id)
     
     def set_bypass_mode(self):
         """일반 Bypass 모드로 복귀"""
@@ -2420,10 +2537,10 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                 return
             else:
                 # 일반 모드: STUN을 relay (UAS에게 전달)
-                logger.info("stun_binding_request_relaying",
-                           call_id=self.relay_worker.media_session.call_id,
-                           socket_type=self.socket_type,
-                           from_addr=f"{addr[0]}:{addr[1]}")
+                logger.debug("stun_binding_request_relaying",
+                            call_id=self.relay_worker.media_session.call_id,
+                            socket_type=self.socket_type,
+                            from_addr=f"{addr[0]}:{addr[1]}")
                 # relay 로직은 아래 코드에서 처리됨 (그대로 remote_endpoint로 전달)
         
         # ✅ Symmetric RTP 학습: 실제 송신자 주소 확인
@@ -2506,6 +2623,12 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                                     error=str(ose),
                                     hypothesis="bridge_media_path_or_firewall",
                                 )
+                        self.relay_worker.on_packet_received(self.socket_type, data, addr)
+                        return
+
+                # ★ Dock Hold: 양측 peer 음성은 릴레이하지 않음 (STT 등 on_packet_received만)
+                if self.relay_worker.relay_mode == RelayMode.DOCK_HOLD:
+                    if self.socket_type in ("caller_audio_rtp", "callee_audio_rtp"):
                         self.relay_worker.on_packet_received(self.socket_type, data, addr)
                         return
                 
@@ -2615,7 +2738,7 @@ class RTPRelayProtocol(asyncio.DatagramProtocol):
                     or (inter_ms is not None and inter_ms > 55.0)
                     or (seq_gap is not None and seq_gap > 2)
                 ):
-                    logger.info(
+                    logger.debug(
                         "rtp_bypass_relay_sent",
                         call_id=self.relay_worker.media_session.call_id,
                         progress="rtp_debug",

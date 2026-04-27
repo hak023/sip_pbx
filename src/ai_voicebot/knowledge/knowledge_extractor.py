@@ -315,7 +315,7 @@ class KnowledgeExtractor:
                         "chroma_upsert_deferred",
                         reason="pii_review_queue",
                         owner_id=owner_id,
-                        category=store_category,
+                        storage_category=store_category,  # "category"는 log_call_data 위치 인자와 충돌
                         info_block_index=idx,
                         chunk_count=len(chunks),
                         **chroma_context_for_call_data(),
@@ -383,7 +383,7 @@ class KnowledgeExtractor:
                         "chroma_knowledge_upsert",
                         doc_id=doc_id,
                         owner_id=owner_id,
-                        category=store_category,
+                        storage_category=store_category,  # "category"는 log_call_data 위치 인자와 충돌
                         speaker=speaker,
                         chunk_index=chunk_idx,
                         info_block_index=idx,

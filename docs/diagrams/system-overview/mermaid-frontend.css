@@ -1,0 +1,34 @@
+/* Mermaid CLI 렌더 페이지 — 대시보드/카드형 가독성 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background: #e8edf3;
+  font-family: "Segoe UI", "Malgun Gothic", "Malgun Gothic UI", "Apple SD Gothic Neo",
+    system-ui, sans-serif;
+}
+
+/* 다이어그램 래퍼: 흰 카드 + 그림자 (CLI 템플릿에 맞게 복수 셀렉터) */
+#container .mermaid,
+#d .mermaid,
+.mermaid,
+body > .mermaid {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 12px rgba(15, 23, 42, 0.06);
+  padding: 28px 32px 32px 32px;
+  margin: 20px;
+}
+
+/* SVG 내부 cluster(서브그래프) 모서리 둥글게 — 지원 시 */
+.cluster rect,
+.g.cluster rect,
+.flowchart .cluster rect {
+  rx: 10px;
+  ry: 10px;
+}

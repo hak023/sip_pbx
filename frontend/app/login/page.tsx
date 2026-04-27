@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { getApiUrl } from '@/lib/api';
 
 interface Tenant {
   owner: string;
@@ -35,13 +36,13 @@ export default function LoginPage() {
   const [selectedTenant, setSelectedTenant] = useState<string | null>(null);
   const [error, setError] = useState('');
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const apiBase = getApiUrl();
 
   // 테넌트 목록 로드
   useEffect(() => {
     const fetchTenants = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/tenants`);
+        const res = await fetch(`${apiBase}/api/tenants`);
         if (res.ok) {
           const data = await res.json();
           setTenants(data.tenants || []);
@@ -56,14 +57,14 @@ export default function LoginPage() {
     };
 
     fetchTenants();
-  }, [API_URL]);
+  }, [apiBase]);
 
   const handleLogin = async (owner: string) => {
     setSelectedTenant(owner);
     setError('');
 
     try {
-      const res = await fetch(`${API_URL}/api/auth/login`, {
+      const res = await fetch(`${apiBase}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ extension: owner }),

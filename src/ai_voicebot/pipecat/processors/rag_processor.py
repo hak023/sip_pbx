@@ -13,6 +13,7 @@ import asyncio
 import os
 import re
 import time
+import weakref
 from datetime import datetime
 from typing import Any, Dict, Optional, List, Callable, Awaitable
 
@@ -20,6 +21,8 @@ import structlog
 
 from src.common.call_data_record_logger import log_call_data
 from src.common.rag_hit_serializer import build_rag_hits_llm_context, build_rag_hits_retrieval
+from src.common.tts_output_sanitize import sanitize_voice_assistant_text
+from src.common.tts_streaming_chunk_dedupe import dedupe_streaming_tts_chunks
 
 from pipecat.frames.frames import (
     EndFrame,
@@ -83,12 +86,17 @@ class RAGLLMProcessor(FrameProcessor):
         stt_post_filter_reply_on_drop: bool = False,
         stt_post_filter_reply_message: str = "다시 말씀해 주시겠어요?",
         stt_final_debounce_sec: float = 0.0,
+        rtp_worker: Optional[Any] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self._llm = llm_client
         self._tts_sync_context = tts_sync_context or {}
         self._call_id = call_id  # 통화 ID 저장
+        # STT 워치독·진단: Pipecat 입력과 RTP 릴레이 상태 상관 (weakref — 파이프라인 수명 ≤ 워커)
+        self._rtp_worker_ref: Optional[Callable[[], Any]] = (
+            weakref.ref(rtp_worker) if rtp_worker is not None else None
+        )
         # STT 후처리 필터 (짧은/불완전/감탄만 발화 스킵) — 설계: STT_ADDITIONAL_CONSIDERATIONS.md §6
         from src.ai_voicebot.pipecat.stt_post_filter import STTPostFilter
         self._stt_post_filter = STTPostFilter.from_config(stt_post_filter_config or {})
@@ -144,6 +152,10 @@ class RAGLLMProcessor(FrameProcessor):
         self._stt_transcript_watchdog_alerted = False
         # Pipecat: push_frame()은 StartFrame 처리 후에만 동작. 인사/HITL이 먼저 돌면 프레임이 드롭되어 TTS/RTP 없음.
         self._pipeline_start_event = asyncio.Event()
+
+        # 대기 안내 멘트 상태: 턴별 중복 발화 방지 + 멘트 순환 인덱스
+        self._waiting_phrase_active: bool = False
+        self._waiting_phrase_idx: int = 0
 
         # HITL Manager (Phase 3): on_alert 연결 시 프론트에 hitl_requested 발송
         self._hitl_manager = None
@@ -608,6 +620,42 @@ class RAGLLMProcessor(FrameProcessor):
 
         asyncio.create_task(_consume())
 
+    def _rtp_snapshot_for_stt_watchdog(self) -> Dict[str, Any]:
+        """STT 워치독과 RTP/브릿지 상태 상관용 스냅샷(알림 시점 값)."""
+        r = self._rtp_worker_ref
+        if not r:
+            return {}
+        rw = r()
+        if rw is None:
+            return {"rtp_worker_ref_dead": True}
+        snap: Dict[str, Any] = {"rtp_worker_ref_dead": False}
+        ms = getattr(rw, "media_session", None)
+        if ms is not None:
+            snap["ms_call_id"] = getattr(ms, "call_id", None)
+            snap["ms_callee"] = getattr(ms, "callee", None)
+            snap["ms_codec"] = getattr(ms, "codec", None)
+        snap["relay_mode"] = getattr(rw, "relay_mode", None)
+        snap["ai_mode"] = getattr(rw, "ai_mode", None)
+        snap["pipecat_mode"] = getattr(rw, "_pipecat_mode", None)
+        st = getattr(rw, "stats", None) or {}
+        snap["stat_bypass_relay_sent"] = st.get("bypass_relay_sent")
+        snap["stat_bypass_relay_send_failed"] = st.get("bypass_relay_send_failed")
+        snap["stat_caller_audio_packets"] = st.get("caller_audio_packets")
+        snap["stat_callee_audio_packets"] = st.get("callee_audio_packets")
+        _pq = getattr(rw, "_pipecat_audio_queue", None)
+        if _pq is not None:
+            try:
+                snap["pipecat_stt_input_queue_size"] = _pq.qsize()
+            except Exception:
+                snap["pipecat_stt_input_queue_size"] = None
+        _pcm = getattr(rw, "_pipecat_pcm_queue", None)
+        if _pcm is not None:
+            try:
+                snap["pipecat_tts_pcm_queue_size"] = _pcm.qsize()
+            except Exception:
+                snap["pipecat_tts_pcm_queue_size"] = None
+        return snap
+
     async def _stt_transcript_watchdog(self) -> None:
         """STT TranscriptionFrame 무응답 워치독.
 
@@ -642,6 +690,7 @@ class RAGLLMProcessor(FrameProcessor):
 
                 if elapsed >= _STT_TRANSCRIPT_WATCHDOG_SEC:
                     self._stt_transcript_watchdog_alerted = True
+                    _rtp_snap = self._rtp_snapshot_for_stt_watchdog()
                     logger.error(
                         "stt_transcript_watchdog_alert",
                         call_id=self._call_id or "",
@@ -649,11 +698,13 @@ class RAGLLMProcessor(FrameProcessor):
                         category="stt",
                         elapsed_sec=round(elapsed, 1),
                         transcription_count=self._transcription_frame_count,
+                        rtp_snapshot=_rtp_snap,
                         note=(
                             f"[STT 동결 확인] {elapsed:.0f}s 동안 TranscriptionFrame 없음 — "
                             "Pipecat GoogleSTTService 스트리밍 세션이 조용히 종료됐을 가능성. "
                             "pipecat_stt_error_frame 로그 또는 vad_consecutive_bargein_alert 확인. "
-                            "서버 재시작 권장."
+                            "rtp_snapshot(relay_mode·pipecat_mode·큐·bypass 패킷)으로 "
+                            "착신/바이패스 경로와의 상관을 함께 본다. 서버 재시작은 최후 수단."
                         ),
                     )
         except asyncio.CancelledError:
@@ -1057,6 +1108,9 @@ class RAGLLMProcessor(FrameProcessor):
         import asyncio  # 로컬 참조 보장 (다른 모듈/스레드에서 shadow 시 UnboundLocalError 방지)
         pipeline_start = time.time()
 
+        # 새 발화 턴 시작: 대기 안내 멘트 상태 초기화
+        self._waiting_phrase_active = False
+
         # 시간 정규화 전 STT 원문 — RAG 이중 검색(adaptive_rag)에 전달
         stt_query_raw = (user_text or "").strip()
 
@@ -1133,11 +1187,21 @@ class RAGLLMProcessor(FrameProcessor):
             )
             
             if contact:
-                logger.info("transfer_contact_found",
-                           call_id=self._call_id or "",
-                           department=contact.get('department'),
-                           phone_number=contact.get('phone_number'))
-                
+                _announce_ctx = (
+                    (contact.get("transfer_label") or contact.get("department") or "")
+                    .strip()
+                )
+                _pn = (contact.get("phone_number") or "").strip()
+                _phone_for_prompt = _pn
+                if _pn.lower().startswith("fwd:"):
+                    _phone_for_prompt = "착신 전환에 등록된 대상(내선 자동 선택)"
+                logger.info(
+                    "transfer_contact_found",
+                    call_id=self._call_id or "",
+                    announce_ctx_preview=_announce_ctx[:40] if _announce_ctx else "",
+                    phone_meta_preview=_pn[:24] if _pn else "",
+                )
+
                 # 호 전환 안내 멘트 생성
                 from ..intents import (
                     build_transfer_announcement_prompt,
@@ -1145,14 +1209,14 @@ class RAGLLMProcessor(FrameProcessor):
                     default_transfer_announcement,
                 )
                 prompt = build_transfer_announcement_prompt(
-                    department=contact['department'],
-                    phone_number=contact['phone_number']
+                    department=_announce_ctx,
+                    phone_number=_phone_for_prompt,
                 )
-                
+
                 try:
                     _raw_announcement = await self._llm.generate_simple(prompt, max_tokens=150)
                     announcement = choose_transfer_announcement(
-                        _raw_announcement, contact["department"]
+                        _raw_announcement, _announce_ctx
                     )
                     _raw_s = (_raw_announcement or "").strip()
                     if _raw_s and _raw_s != announcement:
@@ -1165,7 +1229,7 @@ class RAGLLMProcessor(FrameProcessor):
                         )
                 except Exception as e:
                     logger.warning("transfer_announcement_generation_failed", error=str(e))
-                    announcement = default_transfer_announcement(contact["department"])
+                    announcement = default_transfer_announcement(_announce_ctx)
                 
                 # TTS로 안내 멘트 출력
                 await self.push_frame(LLMFullResponseStartFrame())
@@ -1180,7 +1244,7 @@ class RAGLLMProcessor(FrameProcessor):
                     self._call_id or "",
                     "call_event",
                     "transfer_announcement_sent",
-                    department=contact.get("department"),
+                    department=_announce_ctx or contact.get("department"),
                     text=announcement,
                 )
                 # WebSocket: 호 전환 이벤트 발송 (실제 구현)
@@ -1190,7 +1254,7 @@ class RAGLLMProcessor(FrameProcessor):
                         await emit_transfer_initiated(
                             call_id=self._call_id,
                             target_number=contact['phone_number'],
-                            department=contact['department']
+                            department=_announce_ctx or contact.get("department"),
                         )
                     except Exception as e:
                         logger.warning("transfer_event_emit_failed", error=str(e))
@@ -1201,8 +1265,8 @@ class RAGLLMProcessor(FrameProcessor):
                     transfer_success = await initiate_call_transfer(
                         call_id=self._call_id or "",
                         target_number=contact['phone_number'],
-                        department=contact['department'],
-                        phone_display=contact.get('phone_number'),
+                        department=_announce_ctx or None,
+                        phone_display=_announce_ctx or contact.get("phone_number"),
                         user_request_text=user_text
                     )
                     
@@ -1210,12 +1274,12 @@ class RAGLLMProcessor(FrameProcessor):
                         logger.info("call_transfer_initiated_successfully",
                                    call_id=self._call_id or "",
                                    target=contact['phone_number'],
-                                   department=contact['department'])
+                                   department=_announce_ctx or contact.get("department"))
                         log_call_data(
                             self._call_id or "",
                             "call_event",
                             "call_transfer_initiated",
-                            department=contact.get("department"),
+                            department=_announce_ctx or contact.get("department"),
                             target=contact.get("phone_number"),
                             success=True,
                         )
@@ -1246,15 +1310,63 @@ class RAGLLMProcessor(FrameProcessor):
                 logger.info("transfer_contact_not_found",
                            call_id=self._call_id or "",
                            query=user_text,
-                           note="연락처를 찾지 못함 → 일반 상담원 연결 안내")
+                           note="연락처를 찾지 못함 → 착신 규칙 폴백 또는 일반 안내")
                 log_call_data(
                     self._call_id or "",
                     "call_event",
                     "transfer_contact_not_found",
                     query=user_text,
                 )
-                
-                # 연락처를 찾지 못한 경우 일반 응답
+                # 지식 연락처 없음 → 착신 규칙(call-control)으로 전환 대상 시도
+                try:
+                    from src.call_control.escalation_transfer import (
+                        build_escalation_sip_context,
+                        resolve_escalation_transfer_extension,
+                    )
+                    from src.call_transfer import initiate_call_transfer
+
+                    reg, busy = build_escalation_sip_context()
+                    ext, cc_reason = resolve_escalation_transfer_extension(
+                        (self._owner or "").strip(),
+                        (getattr(self, "_caller_id", None) or "").strip() or None,
+                        registered_extensions=reg,
+                        is_extension_busy=busy,
+                    )
+                    if ext:
+                        logger.info(
+                            "transfer_call_control_fallback",
+                            call_id=self._call_id or "",
+                            extension=ext,
+                            reason=cc_reason,
+                        )
+                        announcement = (
+                            "잠시만요. 담당 상담원에게 연결해 드리겠습니다. 잠시 기다려 주세요."
+                        )
+                        await self.push_frame(LLMFullResponseStartFrame())
+                        await self.push_frame(TextFrame(text=announcement))
+                        await self.push_frame(LLMFullResponseEndFrame())
+                        self._pipeline_tx_callee(self._call_id or "", announcement)
+                        ok = await initiate_call_transfer(
+                            call_id=self._call_id or "",
+                            target_number=ext,
+                            department="착신 규칙",
+                            phone_display=ext,
+                            user_request_text=user_text,
+                        )
+                        if ok:
+                            log_call_data(
+                                self._call_id or "",
+                                "call_event",
+                                "call_transfer_initiated",
+                                target=ext,
+                                success=True,
+                                source="call_control",
+                            )
+                            return
+                except Exception as e:
+                    logger.warning("transfer_call_control_fallback_failed", error=str(e))
+
+                # 연락처·착신 규칙 모두 실패 시 일반 응답
                 response = "죄송합니다. 해당 부서의 연락처를 찾지 못했습니다. 일반 상담원으로 연결해 드리겠습니다."
                 await self.push_frame(LLMFullResponseStartFrame())
                 await self.push_frame(TextFrame(text=response))
@@ -1276,71 +1388,157 @@ class RAGLLMProcessor(FrameProcessor):
         # 발신자 맥락: Agent가 caller_context 인자를 지원하면 전달 (설계: CALLER_MEMORY_DESIGN.md)
         caller_context = self._get_caller_context_sync()
         
-        # LLM 대기 안내: 너무 이르면 HITL/이전 턴 TTS와 겹침 → 12초 후 1회만 짧게 안내
-        # 아웃바운드: "잠시만 기다려 주세요" 류 안내가 어색하고 TTS 완료 대기가 응답을 오히려 지연시킴
-        _LLM_WAIT_NOTIFY_SEC = 12.0
+        # ── LLM 대기 안내 멘트: LLM 질의 시작 직전에 즉시 발화 ──
+        # - 아웃바운드: 어색하므로 스킵
+        # - 복수 LLM 호출(booking_agent 내부 tool loop 등) 시 중복 발화 방지:
+        #   인스턴스 레벨 _waiting_phrase_idx / _waiting_phrase_active 로 1턴에 1회만 발화
         _is_outbound_call = bool(self._outbound_purpose or self._outbound_questions)
         notify_task = None
         done = asyncio.Event()
-        
-        async def wait_and_notify():
-            """장시간 LLM 처리 시에만 중간 안내 (짧은 구간과의 TTS 겹침 완화).
 
-            한 개의 TextFrame + 단일 EndFrame이면 TTS가 문장 경계에서 내부 분할할 때
-            Notifier/Output 프레임 수 불일치(tts_rtp_duration_mismatch)가 나기 쉬움.
-            본 응답(llm_response_sent)과 같이 문장별 Start/Text/End + 짧은 간격으로 정렬한다.
+        async def send_waiting_phrase_now():
+            """LLM 질의 시작과 동시에 KB 대기 안내 멘트를 즉시 발화.
+
+            복수 호출 시에도 해당 턴(done 이벤트 기준)에서 1회만 발화한다.
+            멘트가 여러 개면 호출 순서대로 순환하여 다음 번 멘트를 사용한다.
             """
-            _wait_parts = ("정보를 확인 중입니다.", "잠시만 기다려 주세요.")
-            _wait_full = " ".join(_wait_parts)
+            _DEFAULT_WAITING_PHRASES = ["잠시만 기다려 주세요.", "정보를 확인하고 있습니다."]
+
             try:
-                await asyncio.sleep(_LLM_WAIT_NOTIFY_SEC)
-                if not done.is_set():
-                    logger.info(
-                        "llm_processing_notification",
-                        call_id=self._call_id or "",
-                        wait_sec=_LLM_WAIT_NOTIFY_SEC,
-                        note="LLM 처리 장시간 경과 → 대기 안내 TTS 1회 (문장별 LLM 구간 정렬)",
-                    )
-                    for i, part in enumerate(_wait_parts):
-                        # ✅ TTS 완료 이벤트를 EndFrame 전에 설정 (Notifier가 event.set() 가능하도록)
-                        event = asyncio.Event()
-                        self._tts_sync_context["on_tts_complete"] = event
-                        
-                        await self.push_frame(LLMFullResponseStartFrame())
-                        await self.push_frame(TextFrame(text=part))
-                        await self.push_frame(LLMFullResponseEndFrame())
-                        
-                        # ✅ TTS 완료 대기 (오디오 생성 확인)
-                        estimated_sec = len(part) / 5.5
-                        wait_timeout = max(estimated_sec * 3.5, 10.0)
-                        try:
-                            await asyncio.wait_for(event.wait(), timeout=wait_timeout)
-                            logger.info("llm_wait_notify_tts_complete_ok",
-                                       call_id=self._call_id or "",
-                                       part_idx=i,
-                                       note="대기 안내 TTS 완료 확인됨")
-                        except asyncio.TimeoutError:
-                            logger.warning("llm_wait_notify_tts_timeout",
-                                          call_id=self._call_id or "",
-                                          part_idx=i,
-                                          timeout=wait_timeout,
-                                          note="대기 안내 TTS 완료 이벤트 타임아웃")
-                        
-                        if i < len(_wait_parts) - 1:
-                            await asyncio.sleep(0.05)
-                    self._pipeline_tx_callee(self._call_id or "", _wait_full)
+                # KB에서 waiting_phrase 카테고리 문서를 직접 조회
+                # 1순위: 파이프라인 rag_engine (이미 초기화된 인스턴스 재사용)
+                # 2순위: VectorDB 직접 조회
+                # fallback: 기본 멘트
+                phrases: list = []
+                owner = self._owner or ""
+                try:
+                    rag_engine = getattr(self, "_rag_engine", None)
+                    if rag_engine is not None:
+                        def _query_rag():
+                            results = rag_engine.search(
+                                "대기 안내",
+                                owner_filter=owner,
+                                n_results=10,
+                                category_filter="waiting_phrase",
+                            )
+                            return [r["content"] for r in results if r.get("content", "").strip()]
+                        phrases = await asyncio.get_event_loop().run_in_executor(None, _query_rag)
+                        logger.debug("waiting_phrase_rag_engine_hit",
+                                     call_id=self._call_id or "",
+                                     count=len(phrases))
+                    if not phrases:
+                        def _query_vectordb():
+                            from src.ai_voicebot.knowledge.vector_db import VectorDB
+                            vdb = VectorDB(owner=owner)
+                            results = vdb.search(
+                                query_embedding=None,
+                                query_text="대기 안내",
+                                n_results=10,
+                                where={"category": "waiting_phrase"},
+                            )
+                            return [r.get("text", "").strip() for r in results if r.get("text", "").strip()]
+                        phrases = await asyncio.get_event_loop().run_in_executor(None, _query_vectordb)
+                        logger.debug("waiting_phrase_vectordb_hit",
+                                     call_id=self._call_id or "",
+                                     count=len(phrases))
+                except Exception as e:
+                    logger.debug("waiting_phrase_kb_load_failed",
+                                 call_id=self._call_id or "", error=str(e))
+
+                if not phrases:
+                    phrases = _DEFAULT_WAITING_PHRASES
+                    logger.debug("waiting_phrase_using_default",
+                                 call_id=self._call_id or "")
+
+                if not phrases:
+                    return
+
+                # 이번 턴에 발화할 멘트 인덱스 (순환)
+                idx = getattr(self, "_waiting_phrase_idx", 0) % len(phrases)
+                phrase = phrases[idx].strip()
+                self._waiting_phrase_idx = (idx + 1) % len(phrases)
+
+                if not phrase:
+                    return
+
+                logger.info(
+                    "llm_waiting_phrase_sending",
+                    call_id=self._call_id or "",
+                    phrase_idx=idx,
+                    phrase_preview=phrase[:30],
+                    note="LLM 질의 시작 — 대기 안내 멘트 즉시 발화",
+                )
+
+                event = asyncio.Event()
+                self._tts_sync_context["on_tts_complete"] = event
+
+                await self.push_frame(LLMFullResponseStartFrame())
+                await self.push_frame(TextFrame(text=phrase))
+                await self.push_frame(LLMFullResponseEndFrame())
+
+                # TTS 완료 대기 (완료 후 LLM 응답 TTS와의 겹침 방지)
+                estimated_sec = len(phrase) / 5.5
+                wait_timeout = max(estimated_sec * 3.5, 8.0)
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=wait_timeout)
+                    logger.info("llm_waiting_phrase_tts_ok",
+                                call_id=self._call_id or "",
+                                note="대기 안내 TTS 완료 확인됨")
+                except asyncio.TimeoutError:
+                    logger.warning("llm_waiting_phrase_tts_timeout",
+                                   call_id=self._call_id or "",
+                                   timeout=wait_timeout,
+                                   note="대기 안내 TTS 완료 이벤트 타임아웃")
+
+                self._pipeline_tx_callee(self._call_id or "", phrase)
+
             except asyncio.CancelledError:
                 pass
-        
+            finally:
+                self._waiting_phrase_active = False
+
+        # TTS RTP 전송 중 여부 확인: 이미 다른 응답이 재생 중이면 대기 안내 멘트 불필요
+        # _tts_active: LLMFullResponseEndFrame 이전까지 True (TTS 프레임 처리 중)
+        # _tts_pending_pcm_bytes: EndFrame 시 0 초기화되지만 PCM 큐에 잔량이 남을 수 있음
+        # _rtp_worker_ref._pipecat_pcm_queue: RTP 송신 스레드가 소비하는 실제 PCM 큐
+        _tts_ctx = self._tts_sync_context or {}
+        _tts_currently_active = bool(_tts_ctx.get("_tts_active", False))
+        _tts_pending_bytes = int(_tts_ctx.get("_tts_pending_pcm_bytes", 0) or 0)
+        # PCM 큐 잔량도 확인 (EndFrame 이후 아직 RTP로 나가지 않은 오디오)
+        _pcm_queue_size = 0
+        try:
+            _rtp_worker = _tts_ctx.get("_rtp_worker_ref")
+            if _rtp_worker is not None:
+                _pcm_q = getattr(_rtp_worker, "_pipecat_pcm_queue", None)
+                if _pcm_q is not None:
+                    _pcm_queue_size = _pcm_q.qsize()
+        except Exception:
+            pass
+        _tts_rtp_busy = _tts_currently_active or _tts_pending_bytes > 0 or _pcm_queue_size > 3
+
         if _is_outbound_call:
-            # 아웃바운드: 짧은 답변("5점이요" 등)에 대기 안내 TTS는 어색하고
-            # TTS 완료 await가 LLM 응답 지연을 유발하므로 notify 태스크를 생성하지 않음
-            logger.info("llm_wait_notify_skip_outbound",
+            logger.info("llm_waiting_phrase_skip_outbound",
                         call_id=self._call_id or "",
-                        note="아웃바운드 모드 — 대기 안내 TTS 스킵")
+                        note="아웃바운드 모드 — 대기 안내 멘트 스킵")
+            notify_task = None
+        elif getattr(self, "_waiting_phrase_active", False):
+            # 이미 이번 턴에 대기 멘트가 발화 중(또는 완료) → 중복 방지
+            logger.info("llm_waiting_phrase_skip_duplicate",
+                        call_id=self._call_id or "",
+                        note="이번 턴 대기 멘트 이미 발화됨 — 중복 스킵")
+            notify_task = None
+        elif _tts_rtp_busy:
+            # TTS RTP가 이미 전송 중 — 고객이 이미 다른 응답을 듣는 중이므로 대기 안내 불필요
+            logger.info("llm_waiting_phrase_skip_tts_busy",
+                        call_id=self._call_id or "",
+                        tts_active=_tts_currently_active,
+                        tts_pending_bytes=_tts_pending_bytes,
+                        pcm_queue_size=_pcm_queue_size,
+                        note="TTS RTP 전송 중 — 대기 안내 멘트 스킵 (중복 재생 방지)")
             notify_task = None
         else:
-            notify_task = asyncio.create_task(wait_and_notify())
+            self._waiting_phrase_active = True
+            notify_task = asyncio.create_task(send_waiting_phrase_now())
         
         result: Optional[Dict[str, Any]] = None
         agent_elapsed = 0.0
@@ -1353,7 +1551,8 @@ class RAGLLMProcessor(FrameProcessor):
             # - 개선: asyncio.gather()로 병렬 실행 → max(3.5, 5.2) = 5.2초
             # - 예상 효과: -3.5초 단축 (전체 LLM 처리 14초 → 10.5초)
             
-            # 아웃바운드 컨텍스트: purpose/questions/hangup_callback을 LangGraph state에 주입
+            # 아웃바운드 컨텍스트: purpose/questions를 LangGraph state에 주입
+            # _hangup_callback은 직렬화 불가 객체 → call_context ContextVar로 전달 (agent.py에서 처리)
             outbound_extra: dict = {}
             if self._outbound_purpose or self._outbound_questions:
                 outbound_extra = {
@@ -1361,8 +1560,11 @@ class RAGLLMProcessor(FrameProcessor):
                     "outbound_questions": list(self._outbound_questions),
                     "outbound_answers": dict(self._outbound_answers),
                     "outbound_mission_done": self._outbound_mission_done,
-                    "_hangup_callback": self._hangup_callback,
+                    "_hangup_callback": self._hangup_callback,  # agent.py에서 call_context로 이동 처리
                 }
+
+            # 발신자 전화번호 — rag_processor의 _caller_id를 LangGraph _caller_number로 주입
+            caller_number_for_agent = getattr(self, "_caller_id", None) or ""
 
             if caller_context:
                 try:
@@ -1370,17 +1572,22 @@ class RAGLLMProcessor(FrameProcessor):
                         user_text,
                         call_id=self._call_id or "",
                         caller_context=caller_context,
+                        caller_number=caller_number_for_agent,
                         user_query_raw=stt_query_raw,
                         **outbound_extra,
                     )
                 except TypeError:
                     result = await self._agent.process_utterance(
-                        user_text, call_id=self._call_id or "", user_query_raw=stt_query_raw,
+                        user_text, call_id=self._call_id or "",
+                        caller_number=caller_number_for_agent,
+                        user_query_raw=stt_query_raw,
                         **outbound_extra,
                     )
             else:
                 result = await self._agent.process_utterance(
-                    user_text, call_id=self._call_id or "", user_query_raw=stt_query_raw,
+                    user_text, call_id=self._call_id or "",
+                    caller_number=caller_number_for_agent,
+                    user_query_raw=stt_query_raw,
                     **outbound_extra,
                 )
             agent_elapsed = time.time() - agent_start
@@ -1531,6 +1738,8 @@ class RAGLLMProcessor(FrameProcessor):
             if needs_human:
                 hitl_reason = result.get("hitl_reason", "")
                 needs_follow_up = result.get("needs_follow_up", False)
+                needs_transfer = result.get("needs_transfer", False)
+                transfer_extension = result.get("transfer_extension") or None
                 if self._hitl_manager:
                     hitl_message = await self._hitl_manager.handle_hitl_result(
                         call_id=self._call_id or "",
@@ -1539,18 +1748,24 @@ class RAGLLMProcessor(FrameProcessor):
                         intent=intent,
                         confidence=confidence,
                         user_text=user_text,
+                        needs_transfer=needs_transfer,
+                        transfer_extension=transfer_extension,
                     )
                     if hitl_message:
-                        # 모르는 내용(needs_follow_up) 등: LLM 구멘트와 무관하게 고객 TTS는 HITL 고정 멘트로 통일
-                        if needs_follow_up:
+                        # transfer 모드 또는 모르는 내용(needs_follow_up): 고객 TTS를 고정 멘트로 통일
+                        if needs_transfer or needs_follow_up:
                             response = hitl_message
                         elif not (response or "").strip():
                             response = hitl_message
                 else:
                     logger.warning("hitl_alert_from_agent",
-                                 reason=hitl_reason)
+                                 reason=hitl_reason,
+                                 needs_transfer=needs_transfer)
                     if not response:
-                        response = "담당자에게 연결해 드리겠습니다. 잠시만 기다려 주세요."
+                        if needs_transfer:
+                            response = "담당 상담원에게 연결해 드리겠습니다. 잠시만 기다려 주세요."
+                        else:
+                            response = "담당자에게 연결해 드리겠습니다. 잠시만 기다려 주세요."
 
                 log_call_data(
                     self._call_id or "",
@@ -1696,7 +1911,24 @@ class RAGLLMProcessor(FrameProcessor):
                         call_id=self._call_id,
                         error=str(e),
                     )
-            
+
+            # LLM 구조화 출력 조각(```json, tool_ 등)이 그대로 TTS로 나가지 않도록 정화
+            if (response or "").strip():
+                _san, _tts_frag_reason = sanitize_voice_assistant_text(
+                    response, intent=str(intent or "")
+                )
+                if _tts_frag_reason:
+                    logger.warning(
+                        "tts_output_sanitized_llm_fragment",
+                        call_id=self._call_id or "",
+                        intent=intent,
+                        reason=_tts_frag_reason,
+                        response_len_before=len(response or ""),
+                        original_preview=(response or "")[:160],
+                    )
+                    response = _san
+                    chunks = []
+
             if response:
                 if intent == "farewell":
                     logger.info("farewell_closing_pushed",
@@ -1783,10 +2015,11 @@ class RAGLLMProcessor(FrameProcessor):
                 # 스트리밍 TTS: response_chunks가 있으면 문장 단위로 TTS 전송 (체감 지연 감소)
                 # 없으면 전체 텍스트를 한 번에 전송 (기존 동작)
                 if chunks and len(chunks) > 1:
+                    chunks = dedupe_streaming_tts_chunks(chunks)
                     logger.info("rag_streaming_tts_chunks",
                                call_id=self._call_id or "",
                                chunk_count=len(chunks),
-                               note="스트리밍 LLM → 문장 단위 TTS 전달")
+                               note="스트리밍 LLM → 문장 단위 TTS 전달(선행 프리픽스 턴당 1회 dedupe 적용)")
                     for chunk_text in chunks:
                         if chunk_text.strip():
                             await self.push_frame(TextFrame(text=chunk_text.strip()))
@@ -2406,6 +2639,56 @@ class RAGLLMProcessor(FrameProcessor):
             self._messages = []
         logger.info("rag_llm_processor_reset")
 
+    async def send_end_call_summary_sms_async(self) -> None:
+        """통화 종료 시 SIP MESSAGE(RCS) 요약 — LangGraph ``booking_context``·assistant 발화 반영."""
+        caller = (self._caller_id or "").strip()
+        if not caller:
+            logger.debug("pipecat_end_call_sms_skip_no_caller", call_id=self._call_id or "")
+            return
+        if self._transcription_frame_count < 1:
+            logger.debug(
+                "pipecat_end_call_sms_skip_no_user_turns",
+                call_id=self._call_id or "",
+                transcription_count=self._transcription_frame_count,
+            )
+            return
+
+        snippets: list[str] = []
+        booking_ctx = None
+        if self._agent_available and self._agent is not None:
+            st = getattr(self._agent, "_state", None) or {}
+            for m in st.get("messages") or []:
+                if isinstance(m, dict) and m.get("role") == "assistant":
+                    c = (m.get("content") or "").strip()
+                    if c:
+                        snippets.append(c)
+            bc = st.get("booking_context")
+            if isinstance(bc, dict):
+                booking_ctx = bc
+
+        if not snippets:
+            logger.debug("pipecat_end_call_sms_skip_no_assistant", call_id=self._call_id or "")
+            return
+
+        try:
+            from src.services.end_call_sms_service import send_end_call_summary_sms
+
+            await send_end_call_summary_sms(
+                call_id=self._call_id or "",
+                caller=caller,
+                owner=(self._owner or "").strip(),
+                llm_client=self._llm,
+                assistant_snippets=snippets,
+                booking_context=booking_ctx,
+            )
+        except Exception as e:
+            logger.warning(
+                "pipecat_end_call_sms_failed",
+                call_id=self._call_id or "",
+                error=str(e),
+                exc_info=True,
+            )
+
     async def cleanup(self):
         """파이프라인 종료 시 실행 — dangling task 방지."""
         # _user_message_worker 취소
@@ -2601,7 +2884,20 @@ class RAGLLMProcessor(FrameProcessor):
             conversation_history = self._format_history()
             
             response = await self._call_llm(system_prompt, conversation_history, user_text)
-            
+
+            if (response or "").strip():
+                _san_l, _tts_legacy_reason = sanitize_voice_assistant_text(response, intent="")
+                if _tts_legacy_reason:
+                    logger.warning(
+                        "tts_output_sanitized_llm_fragment",
+                        call_id=self._call_id or "",
+                        intent="legacy_llm",
+                        reason=_tts_legacy_reason,
+                        response_len_before=len(response or ""),
+                        original_preview=(response or "")[:160],
+                    )
+                    response = _san_l
+
             if response:
                 logger.info("llm_legacy_response",
                            call=True,

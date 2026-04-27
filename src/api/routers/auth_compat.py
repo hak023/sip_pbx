@@ -63,7 +63,9 @@ def auth_login(body: LoginBody) -> Dict[str, Any]:
     match = next((r for r in rows if str(r.get("owner", "")).strip() == want), None)
     if not match:
         raise HTTPException(status_code=400, detail="등록되지 않은 착신번호입니다.")
-    token = secrets.token_urlsafe(32)
+    # 프론트 useWebSocket.isAcceptableWebSocketToken: JWT(.) 또는 tok_* 만 허용.
+    # (token_urlsafe 단독은 거부되어 곧바로 localStorage에서 삭제됨 → 콜도크 미구독)
+    token = f"tok_{secrets.token_urlsafe(32)}"
     owner = str(match["owner"])
     tenant = {
         "owner": owner,

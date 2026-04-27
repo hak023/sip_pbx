@@ -40,10 +40,10 @@ class HallucinationResult:
 class HallucinationChecker:
     """3중 환각 검증기"""
 
-    # 임계값 (기본)
-    SYNTACTIC_THRESHOLD = 0.4     # 핵심 키워드 40%+ 매칭
-    SEMANTIC_THRESHOLD = 0.75     # 코사인 유사도 0.75+
-    
+    # 코드 기본값 (config `quality.hallucination_*` 미지정 시)
+    DEFAULT_SYNTACTIC_THRESHOLD = 0.3
+    DEFAULT_SEMANTIC_THRESHOLD = 0.62
+
     def __init__(self, embedder=None, llm_client=None, config: Optional[Dict] = None):
         """
         Args:
@@ -54,19 +54,38 @@ class HallucinationChecker:
         self.embedder = embedder
         self.llm = llm_client
         self.config = config or {}
+        qc: Dict = {}
+        if isinstance(self.config, dict):
+            raw_q = self.config.get("quality")
+            if isinstance(raw_q, dict):
+                qc = raw_q
+        self.syntactic_threshold_default = float(
+            qc.get("hallucination_syntactic_threshold", self.DEFAULT_SYNTACTIC_THRESHOLD)
+        )
+        self.semantic_threshold = float(
+            qc.get("hallucination_semantic_threshold", self.DEFAULT_SEMANTIC_THRESHOLD)
+        )
         # 전사 정규화(초단문 턴 통화·환각 검증 완화)
-        tn_cfg = self.config.get("transcript_normalization", {})
+        tn_cfg = self.config.get("transcript_normalization", {}) if isinstance(self.config, dict) else {}
+        if not isinstance(tn_cfg, dict):
+            tn_cfg = {}
         self._normalize_for_hallucination = tn_cfg.get("enabled", True)
         self._collapse_short_turns = tn_cfg.get("collapse_short_turns", True)
-        self._syntactic_threshold_relaxed = tn_cfg.get(
-            "syntactic_threshold_relaxed", 0.25
+        # 초단문 전사: quality에서 지정 시 우선, 아니면 transcript_normalization
+        self._syntactic_threshold_relaxed = float(
+            qc.get(
+                "hallucination_syntactic_threshold_short_turn",
+                tn_cfg.get("syntactic_threshold_relaxed", 0.18),
+            )
         )
         self._short_turn_max_chars = tn_cfg.get("short_turn_max_chars", 4)
         logger.info(
             "hallucination_checker_init",
             normalize_enabled=self._normalize_for_hallucination,
             collapse_short_turns=self._collapse_short_turns,
-            syntactic_relaxed=self._syntactic_threshold_relaxed,
+            syntactic_default=self.syntactic_threshold_default,
+            syntactic_short_turn=self._syntactic_threshold_relaxed,
+            semantic_threshold=self.semantic_threshold,
         )
 
     async def check(
@@ -97,7 +116,7 @@ class HallucinationChecker:
         syntactic_threshold = (
             self._syntactic_threshold_relaxed
             if is_short_turn_transcript
-            else self.SYNTACTIC_THRESHOLD
+            else self.syntactic_threshold_default
         )
         syntactic_score = self._syntactic_check(extracted_text, transcript_for_check)
         if syntactic_score < syntactic_threshold:
@@ -122,14 +141,14 @@ class HallucinationChecker:
         semantic_score = 0.0
         if self.embedder:
             semantic_score = await self._semantic_check(extracted_text, transcript_for_check)
-            if semantic_score < self.SEMANTIC_THRESHOLD:
+            if semantic_score < self.semantic_threshold:
                 return HallucinationResult(
                     passed=False,
                     syntactic_score=syntactic_score,
                     semantic_score=semantic_score,
                     entailment_result=None,
                     failed_at="semantic",
-                    details=f"의미 유사도 {semantic_score:.3f} < {self.SEMANTIC_THRESHOLD}",
+                    details=f"의미 유사도 {semantic_score:.3f} < {self.semantic_threshold}",
                 )
         else:
             semantic_score = 1.0  # embedder 없으면 스킵 (통과 처리)

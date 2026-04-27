@@ -44,8 +44,22 @@ class TextEmbedder:
         name = name or _DEFAULT_MODEL
         try:
             from sentence_transformers import SentenceTransformer
-            # dimension 인자 제거 — SentenceTransformer()는 dimension을 받지 않음
-            self._model = SentenceTransformer(name)
+
+            # 로컬 캐시 우선 로드: HuggingFace에 버전 확인 요청(HEAD)을 보내지 않음.
+            # 캐시에 없을 때만 온라인으로 fallback하여 불필요한 503 재시도를 방지.
+            try:
+                self._model = SentenceTransformer(name, local_files_only=True)
+                logger.info(
+                    "TextEmbedder model loaded from local cache",
+                    extra={"model_name": name},
+                )
+            except Exception:
+                logger.info(
+                    "TextEmbedder local cache miss — downloading from HuggingFace",
+                    extra={"model_name": name},
+                )
+                self._model = SentenceTransformer(name)
+
             self._dimension = getattr(
                 self._model,
                 "get_sentence_embedding_dimension",

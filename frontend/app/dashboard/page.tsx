@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { apiJson } from "@/lib/api";
+import { computeIsUnresolved } from "@/lib/callHistoryUnresolved";
 import { getTenantOwner } from "@/lib/tenant";
 import type { ActiveCallRestRaw, DashboardMetrics, CallHistoryRecordItem } from "@/types/api";
 import {
@@ -11,18 +12,15 @@ import {
   type DashboardActiveCall,
 } from "@/lib/normalizeActiveCall";
 import { RagSearchDoneDetail, stripRagHitsFromRow } from "@/components/RagSearchDoneDetail";
-
-/** 실시간 STT/TTS 한 줄 */
-interface LiveFeedLine {
-  id: string;
-  ts: string;
-  kind: "stt" | "tts" | "greeting" | "hitl_request" | "hitl_response";
-  /** 발신자 음성 STT | 착신자 음성 STT | AI TTS */
-  speakerLabel: string;
-  text: string;
-  isFinal?: boolean;
-  source?: string;
-}
+import { CallDetailPanel } from "@/components/call-history/CallHistoryPanel";
+import {
+  appendLiveFeedLines,
+  LIVE_FEED_DASHBOARD_MAX,
+  parseSttIsFinal,
+  pickInterimSttDisplay,
+  sttSpeakerLabel,
+  type LiveFeedLine,
+} from "@/lib/liveFeedMerge";
 
 interface HITLRequest {
   call_id: string;
@@ -94,34 +92,6 @@ const DEBUG_CATEGORIES = [
   "hitl",
 ] as const;
 
-/**
- * 스트리밍 STT 중간 결과: API가 "현재. 현재 발. 발효…" 처럼 **구분자로 이어 붙인 누적 가설**을
- * 한 문자열로 보낼 때, UI에는 **마지막 조각**(현재 가설)만 보이게 한다.
- *
- * 주의: Google/Pipecat 경로에서 마침표가 **U+FF0E(．) 전각 점** 등으로 올 수 있어,
- * ASCII `.` / `。` 만 쓰면 split 이 1덩어리로 남아 화면에 전체 누적이 그대로 붙어 보였음.
- * 확정(is_final) 텍스트에는 적용하지 않는다.
- */
-const INTERIM_STT_SEGMENT_SEP =
-  /[\u002E\u3002\uFF0E\uFF61\uFE52]\s*|[,，]\s+|[·•]\s*/u;
-
-function pickInterimSttDisplay(raw: string): string {
-  const t = raw.trim().replace(/\s+/g, " ");
-  if (!t) return t;
-  const parts = t
-    .split(INTERIM_STT_SEGMENT_SEP)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  if (parts.length <= 1) return t;
-  const last = parts[parts.length - 1]!;
-  if (last.length >= 2) return last;
-  if (parts.length >= 2) {
-    const prev = parts[parts.length - 2]!;
-    return `${prev}${last}`.trim();
-  }
-  return t;
-}
-
 function categoryBadgeClass(cat: string): string {
   switch (cat) {
     case "stt":
@@ -178,75 +148,31 @@ export default function Dashboard() {
   const [callHistory, setCallHistory] = useState<CallHistoryRecordItem[]>([]);
   const [callHistoryLoading, setCallHistoryLoading] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({});
+
+  const toggleHistoryRow = (id: string) => {
+    setExpandedHistory((prev) => {
+      const isOpen = !!prev[id];
+      return isOpen ? {} : { [id]: true };
+    });
+  };
+
+  const handleHistoryResolveToggle = (callId: string, newValue: boolean) => {
+    setCallHistory((prev) =>
+      prev.map((r) => r.call_id === callId ? { ...r, is_unresolved: newValue } : r)
+    );
+    // metrics 카드(미해결 통화 건수)를 최신 값으로 갱신
+    if (currentTenantId) fetchMetrics(currentTenantId);
+  };
   const liveFeedScrollRef = useRef<HTMLDivElement | null>(null);
   const debugLogScrollRef = useRef<HTMLDivElement | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const appendLiveFeed = useCallback(
     (callId: string, line: Omit<LiveFeedLine, "id" | "ts"> & { id?: string; ts?: string }) => {
-      const id = line.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-      const ts = line.ts ?? new Date().toISOString();
-      const isFinalBool = line.isFinal === true;
-      const full: LiveFeedLine = {
-        id,
-        ts,
-        kind: line.kind,
-        speakerLabel: line.speakerLabel,
-        text: line.text,
-        isFinal: isFinalBool,
-        source: line.source,
-      };
       setLiveFeedByCall((prev) => {
         const cur = prev[callId] ? [...prev[callId]] : [];
-
-        // STT 확정: 같은 화자의 '인식 중' 줄이 있으면 그 줄을 확정 텍스트로 교체(중복 카드 제거)
-        if (line.kind === "stt" && isFinalBool) {
-          for (let i = cur.length - 1; i >= 0; i--) {
-            const row = cur[i];
-            if (
-              row.kind === "stt" &&
-              row.speakerLabel === line.speakerLabel &&
-              row.isFinal !== true
-            ) {
-              cur[i] = {
-                ...row,
-                text: line.text,
-                isFinal: true,
-                ts,
-                source: line.source ?? row.source,
-              };
-              const max = 200;
-              if (cur.length > max) cur.splice(0, cur.length - max);
-              return { ...prev, [callId]: cur };
-            }
-          }
-        }
-
-        // STT 중간 결과: 맨 끝의 같은 화자·미확정 줄만 갱신 (isFinal 미설정(undefined)도 임시로 간주).
-        // 수신 text는 그대로 두되, 핸들러에서 pickInterimSttDisplay로 마침표 누적 가설을 정리한다.
-        if (line.kind === "stt" && !isFinalBool && cur.length > 0) {
-          const last = cur[cur.length - 1];
-          if (
-            last.kind === "stt" &&
-            last.speakerLabel === line.speakerLabel &&
-            last.isFinal !== true
-          ) {
-            cur[cur.length - 1] = {
-              ...last,
-              text: line.text,
-              ts,
-              isFinal: false,
-            };
-            const max = 200;
-            if (cur.length > max) cur.splice(0, cur.length - max);
-            return { ...prev, [callId]: cur };
-          }
-        }
-
-        cur.push(full);
-        const max = 200;
-        if (cur.length > max) cur.splice(0, cur.length - max);
-        return { ...prev, [callId]: cur };
+        const next = appendLiveFeedLines(cur, line, LIVE_FEED_DASHBOARD_MAX);
+        return { ...prev, [callId]: next };
       });
     },
     []
@@ -480,13 +406,8 @@ export default function Dashboard() {
       if (!id || !text) return;
       setSelectedFeedCallId((prev) => prev || id);
       const sp = String(data.speaker || data.channel || "caller");
-      const label =
-        sp === "callee" ? "착신 STT" : sp === "caller" ? "발신 STT" : `STT(${sp})`;
-      const isFinal =
-        data.is_final === true ||
-        data.is_final === "true" ||
-        data.isFinal === true ||
-        data.isFinal === "true";
+      const label = sttSpeakerLabel(sp);
+      const isFinal = parseSttIsFinal(data);
       if (!isFinal) {
         text = pickInterimSttDisplay(text);
         if (!text) return;
@@ -592,10 +513,15 @@ export default function Dashboard() {
     };
   }, [appendDebugTrace, appendLiveFeed, fetchActiveFromRest, fetchMetrics]);
 
-  /** 활성 통화 목록이 바뀌면 대화창에 표시할 call_id 동기화 */
+  /** 활성 통화 목록이 바뀌면 대화창에 표시할 call_id 동기화 (`?call_id=` 우선) */
   useEffect(() => {
     setSelectedFeedCallId((prev) => {
-      if (activeCalls.length === 0) return "";
+      let urlId = "";
+      if (typeof window !== "undefined") {
+        urlId = new URLSearchParams(window.location.search).get("call_id")?.trim() || "";
+      }
+      if (urlId && activeCalls.some((c) => c.call_id === urlId)) return urlId;
+      if (activeCalls.length === 0) return prev || "";
       if (prev && activeCalls.some((c) => c.call_id === prev)) return prev;
       return activeCalls[0].call_id;
     });
@@ -741,23 +667,27 @@ export default function Dashboard() {
           {
             label: "오늘 통화",
             value: metricsLoading ? "…" : (metrics?.today_calls_count !== undefined ? metrics.today_calls_count : "—"),
+            highlight: false,
           },
           {
             label: "HITL 대기",
             value: metricsLoading ? "…" : (metrics?.hitl_queue_size !== undefined ? metrics.hitl_queue_size : "—"),
+            highlight: false,
           },
           {
-            label: "평균 AI 신뢰도",
-            value: metricsLoading ? "…" : formatMetricConfidence(metrics?.avg_ai_confidence),
+            label: "미해결 통화",
+            value: metricsLoading ? "…" : (metrics?.unresolved_calls_count ?? 0),
+            highlight: true,
           },
           {
             label: "지식베이스 크기",
             value: metricsLoading ? "…" : (metrics?.knowledge_base_size !== undefined ? metrics.knowledge_base_size : "—"),
+            highlight: false,
           },
         ].map((c) => (
-          <div key={c.label} className="bg-white rounded-lg shadow p-4">
-            <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">{c.label}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{c.value}</p>
+          <div key={c.label} className={`rounded-lg shadow p-4 ${c.highlight && Number(c.value) > 0 ? "bg-orange-50 border border-orange-200" : "bg-white"}`}>
+            <p className={`text-xs uppercase tracking-wide font-medium ${c.highlight && Number(c.value) > 0 ? "text-orange-600" : "text-gray-500"}`}>{c.label}</p>
+            <p className={`text-2xl font-bold mt-1 ${c.highlight && Number(c.value) > 0 ? "text-orange-700" : "text-gray-900"}`}>{c.value}</p>
           </div>
         ))}
       </div>
@@ -1141,77 +1071,89 @@ export default function Dashboard() {
                 {callHistory.map((row) => {
                   const open = !!expandedHistory[row.call_id];
                   const nUnhandled = row.ai_unhandled_count ?? (row.ai_unhandled_items?.length || 0);
+                  const isUnresolved = computeIsUnresolved(row, nUnhandled);
                   return (
-                    <tr key={row.call_id} className="hover:bg-indigo-50/40 align-top">
-                      <td className="px-3 py-2.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedHistory((prev) => ({ ...prev, [row.call_id]: !prev[row.call_id] }))
-                          }
-                          className="text-indigo-600 hover:text-indigo-800 font-medium text-xs whitespace-nowrap"
-                          aria-expanded={open}
-                        >
-                          {open ? "접기" : "펼치기"}
-                        </button>
-                      </td>
-                      <td className="px-3 py-2.5 whitespace-nowrap">
-                        {row.direction === "outbound" ? (
-                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium bg-sky-100 text-sky-800">↑ 발신</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">↓ 수신</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-800 whitespace-nowrap">{formatWhen(row.start_time)}</td>
-                      <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.caller_id || ""}>
-                        {row.caller_id || "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.callee_id || ""}>
-                        {row.callee_id || "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-700 max-w-xs align-top">
-                        {row.call_summary ? (
-                          <div className="group relative z-0 max-w-full">
-                            <p className="line-clamp-2 text-xs leading-snug text-gray-900 cursor-default">
-                              {row.call_summary}
-                            </p>
-                            <div className="absolute left-0 top-full z-[199] h-2 w-full max-w-[min(22rem,calc(100vw-2rem))]" aria-hidden />
-                            <div
-                              role="tooltip"
-                              className="pointer-events-none invisible absolute left-0 top-[calc(100%+0.5rem)] z-[200] max-h-72 min-w-[10rem] max-w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs leading-snug text-gray-900 shadow-xl whitespace-pre-wrap break-words transition-opacity duration-100 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100"
-                              style={{ opacity: 0 }}
-                            >
-                              {row.call_summary}
+                    <Fragment key={row.call_id}>
+                      <tr
+                        className="hover:bg-indigo-50/40 align-top cursor-pointer select-none"
+                        onClick={() => toggleHistoryRow(row.call_id)}
+                        aria-expanded={open}
+                      >
+                        <td className="px-3 py-2.5">
+                          <span className="text-indigo-600 font-medium text-xs whitespace-nowrap">
+                            {open ? "▲ 접기" : "▼ 펼치기"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          {row.direction === "outbound" ? (
+                            <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium bg-sky-100 text-sky-800">↑ 발신</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">↓ 수신</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-gray-800 whitespace-nowrap">{formatWhen(row.start_time)}</td>
+                        <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.caller_id || ""}>
+                          {row.caller_id || "—"}
+                        </td>
+                        <td className="px-3 py-2.5 text-gray-800 max-w-[10rem] truncate" title={row.callee_id || ""}>
+                          {row.callee_id || "—"}
+                        </td>
+                        <td className="px-3 py-2.5 text-gray-700 max-w-xs align-top">
+                          {row.call_summary ? (
+                            <div className="group relative z-0 max-w-full">
+                              <p className="line-clamp-2 text-xs leading-snug text-gray-900 cursor-default">
+                                {row.call_summary}
+                              </p>
+                              <div className="absolute left-0 top-full z-[199] h-2 w-full max-w-[min(22rem,calc(100vw-2rem))]" aria-hidden />
+                              <div
+                                role="tooltip"
+                                className="pointer-events-none invisible absolute left-0 top-[calc(100%+0.5rem)] z-[200] max-h-72 min-w-[10rem] max-w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs leading-snug text-gray-900 shadow-xl whitespace-pre-wrap break-words transition-opacity duration-100 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100"
+                                style={{ opacity: 0 }}
+                              >
+                                {row.call_summary}
+                              </div>
                             </div>
+                          ) : (
+                            <span className="text-gray-400 text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {row.is_ai_handled_call ? (
+                            <span className="inline-flex text-xs px-2 py-0.5 rounded bg-violet-100 text-violet-800">AI</span>
+                          ) : (
+                            <span className="inline-flex text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">일반</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{formatDuration(row.duration)}</td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {row.has_recording_mixed && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-100 text-teal-900">녹음</span>
+                            )}
+                            {row.has_transcript && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-900">대본</span>
+                            )}
+                            {isUnresolved && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-900">
+                                미해결 {nUnhandled > 0 ? nUnhandled : ""}
+                              </span>
+                            )}
+                            <DashboardResolveButton
+                              callId={row.call_id}
+                              isUnresolved={isUnresolved}
+                              onToggle={handleHistoryResolveToggle}
+                            />
                           </div>
-                        ) : (
-                          <span className="text-gray-400 text-xs">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {row.is_ai_handled_call ? (
-                          <span className="inline-flex text-xs px-2 py-0.5 rounded bg-violet-100 text-violet-800">AI</span>
-                        ) : (
-                          <span className="inline-flex text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">일반</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{formatDuration(row.duration)}</td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex flex-wrap gap-1">
-                          {row.has_recording_mixed && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-100 text-teal-900">녹음</span>
-                          )}
-                          {row.has_transcript && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-900">대본</span>
-                          )}
-                          {nUnhandled > 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-900">
-                              미해결 {nUnhandled}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {open ? (
+                        <tr className="bg-gray-50/50">
+                          <td colSpan={9} className="p-0" onClick={(e) => e.stopPropagation()}>
+                            <CallDetailPanel row={row} open={open} />
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -1220,6 +1162,51 @@ export default function Dashboard() {
         )}
       </section>
     </div>
+  );
+}
+
+function DashboardResolveButton({
+  callId,
+  isUnresolved,
+  onToggle,
+}: {
+  callId: string;
+  isUnresolved: boolean;
+  onToggle: (callId: string, newValue: boolean) => void;
+}) {
+  const [resolving, setResolving] = useState(false);
+
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (resolving) return;
+    setResolving(true);
+    const next = !isUnresolved;
+    try {
+      const res = await apiJson<{ ok: boolean }>(
+        `/api/call-history/${encodeURIComponent(callId)}/resolve`,
+        { method: "PATCH", body: { is_unresolved: next } },
+      );
+      if (res.ok) {
+        onToggle(callId, next);
+      }
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={resolving}
+      className={`text-[10px] px-2 py-0.5 rounded border font-medium transition-colors disabled:opacity-50 ${
+        isUnresolved
+          ? "border-orange-300 text-orange-700 hover:bg-orange-50"
+          : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+      }`}
+    >
+      {resolving ? "…" : isUnresolved ? "미해결" : "해결"}
+    </button>
   );
 }
 

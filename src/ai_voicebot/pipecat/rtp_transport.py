@@ -211,21 +211,21 @@ class SIPPBXInputTransport(FrameProcessor):
                     
                     # STT 경로 디버깅: 첫 프레임 시 한 번 (테스트 후 동작 여부 점검용)
                     if frame_count == 1:
-                        logger.info("stt_path_input_first",
-                                   call_id=self._rtp_worker.media_session.call_id,
-                                   note="[STT 경로] Input → 파이프라인 첫 프레임 (큐 소비 시작)")
+                        logger.debug("stt_path_input_first",
+                                    call_id=self._rtp_worker.media_session.call_id,
+                                    note="[STT 경로] Input → 파이프라인 첫 프레임 (큐 소비 시작)")
                     # STT 디버깅: 첫 10개 프레임과 100개마다 로깅
                     if frame_count <= 10 or frame_count % 100 == 0:
-                        logger.info("input_audio_frame_to_pipeline",
-                                   call_id=self._rtp_worker.media_session.call_id,
-                                   frame_count=frame_count,
-                                   audio_len=len(pcm_data),
-                                   note="Input Transport → Pipeline (VAD → STT)")
+                        logger.debug("input_audio_frame_to_pipeline",
+                                    call_id=self._rtp_worker.media_session.call_id,
+                                    frame_count=frame_count,
+                                    audio_len=len(pcm_data),
+                                    note="Input Transport → Pipeline (VAD → STT)")
                     if frame_count > 0 and frame_count % 200 == 0:
-                        logger.info("stt_path_input_to_pipeline",
-                                   call_id=self._rtp_worker.media_session.call_id,
-                                   frame_count=frame_count,
-                                   note="[STT 경로] Input Transport → 파이프라인(VAD→STT) 누적")
+                        logger.debug("stt_path_input_to_pipeline",
+                                    call_id=self._rtp_worker.media_session.call_id,
+                                    frame_count=frame_count,
+                                    note="[STT 경로] Input Transport → 파이프라인(VAD→STT) 누적")
                     await self.push_frame(frame)
         except asyncio.CancelledError:
             pass
@@ -261,6 +261,9 @@ class SIPPBXOutputTransport(FrameProcessor):
         self._first_response_endframe_logged = True  # Phase1(첫 응답) EndFrame 시 phase1_rtp_summary 1회 로깅용
         self._response_bytes = 0  # 현재 응답(Phase) 단위 RTP 전송 바이트 (Phase1 잘림 디버깅)
         self._response_duration_sec = 0.0  # 프레임 sample_rate 기준 누적 재생 길이(초) — Notifier와 일치용
+        # PCM 큐 참조를 tts_sync_context에 등록: rag_processor에서 실시간 큐 잔량 확인 가능
+        # rtp_worker._pipecat_pcm_queue는 enable_pipecat_mode() 이후에 생성되므로 지연 조회
+        self._tts_sync_context["_rtp_worker_ref"] = rtp_worker
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -392,14 +395,14 @@ class SIPPBXOutputTransport(FrameProcessor):
             if not hasattr(self, "_output_all_audio_frames_count"):
                 self._output_all_audio_frames_count = 0
             self._output_all_audio_frames_count += 1
-            logger.info("output_audio_frame_received",
-                       call_id=self._rtp_worker.media_session.call_id,
-                       progress="tts",
-                       frame_index=self._output_all_audio_frames_count,
-                       frame_type=type(frame).__name__,
-                       audio_len=len(audio_data),
-                       is_caller_audio=is_caller_audio,
-                       note="Output이 받은 오디오 프레임 (caller 음성 포함, 유실 추적용)")
+            logger.debug("output_audio_frame_received",
+                        call_id=self._rtp_worker.media_session.call_id,
+                        progress="tts",
+                        frame_index=self._output_all_audio_frames_count,
+                        frame_type=type(frame).__name__,
+                        audio_len=len(audio_data),
+                        is_caller_audio=is_caller_audio,
+                        note="Output이 받은 오디오 프레임 (caller 음성 포함, 유실 추적용)")
         
         # ✅ Notifier와 동일 로직: audio 속성이 있는 모든 프레임 카운트 (InputAudioRawFrame 제외)
         # Google TTS는 TTSAudioRawFrame 외에도 다른 오디오 프레임 타입을 생성할 수 있음
@@ -449,7 +452,7 @@ class SIPPBXOutputTransport(FrameProcessor):
             
             # 주요 체크포인트는 info로 기록
             if fc in (10, 30, 50) or (fc > 0 and fc % 20 == 0):
-                logger.info("tts_response_audio_chunk",
+                logger.debug("tts_response_audio_chunk",
                             call_id=self._rtp_worker.media_session.call_id,
                             frame_index=fc,
                             response_bytes_so_far=self._response_bytes,
@@ -469,13 +472,13 @@ class SIPPBXOutputTransport(FrameProcessor):
                            note="Output Transport가 PCM 큐에 넣기 직전 (send_audio_to_caller 호출 전)")
             
             # ✅ 모든 send_audio_to_caller() 호출 로깅 (유실 추적용)
-            logger.info("output_sending_audio_to_caller",
-                       call_id=self._rtp_worker.media_session.call_id,
-                       progress="tts",
-                       frame_index=fc,
-                       audio_len=len(audio_data),
-                       response_bytes_cumulative=self._response_bytes,
-                       note="Output → send_audio_to_caller() 호출 (PCM 큐 투입)")
+            logger.debug("output_sending_audio_to_caller",
+                        call_id=self._rtp_worker.media_session.call_id,
+                        progress="tts",
+                        frame_index=fc,
+                        audio_len=len(audio_data),
+                        response_bytes_cumulative=self._response_bytes,
+                        note="Output → send_audio_to_caller() 호출 (PCM 큐 투입)")
             
             try:
                 self._rtp_worker.send_audio_to_caller(

@@ -18,6 +18,9 @@ from src.config.models import OrganizationPersona
 
 logger = structlog.get_logger(__name__)
 
+# 질의 vs 페르소나 description 임베딩 유사도 하한 (cosine distance → 1/(1+d) 스케일)
+DEFAULT_PERSONA_SIMILARITY_THRESHOLD: float = 0.6
+
 
 class PersonaService:
     """조직 페르소나 관리 서비스"""
@@ -75,6 +78,14 @@ class PersonaService:
                 "scope_keywords": ",".join(persona.scope_keywords) if persona.scope_keywords else "",
                 "chitchat_template": persona.chitchat_response_template or "",
                 "enabled": persona.enabled,
+                "escalation_mode": getattr(persona, "escalation_mode", None) or "hitl",
+                "transfer_extension": (getattr(persona, "transfer_extension", None) or "") or "",
+                "sip_message_ai_reply_enabled": bool(
+                    getattr(persona, "sip_message_ai_reply_enabled", False)
+                ),
+                "sip_message_ai_reply_prefix": (
+                    getattr(persona, "sip_message_ai_reply_prefix", None) or ""
+                ),
                 "created_at": persona.created_at or datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat(),
             }
@@ -136,14 +147,31 @@ class PersonaService:
             
             metadata = result["metadatas"][0]
             description = result["documents"][0]
-            
+
+            def _meta_bool(key: str, default: bool = False) -> bool:
+                v = metadata.get(key, default)
+                if isinstance(v, bool):
+                    return v
+                if isinstance(v, (int, float)):
+                    return bool(v)
+                s = str(v).strip().lower()
+                return s in ("true", "1", "yes", "on")
+
+            _sip_pref = metadata.get("sip_message_ai_reply_prefix")
+            if isinstance(_sip_pref, str) and not _sip_pref.strip():
+                _sip_pref = None
+
             persona = OrganizationPersona(
                 owner=owner,
                 name=metadata["name"],
                 description=description,
                 scope_keywords=metadata.get("scope_keywords", "").split(",") if metadata.get("scope_keywords") else [],
                 chitchat_response_template=metadata.get("chitchat_template") or None,
+                escalation_mode=str(metadata.get("escalation_mode") or "hitl").strip() or "hitl",
+                transfer_extension=(str(metadata.get("transfer_extension") or "").strip() or None),
                 enabled=metadata.get("enabled", True),
+                sip_message_ai_reply_enabled=_meta_bool("sip_message_ai_reply_enabled", False),
+                sip_message_ai_reply_prefix=_sip_pref,
                 created_at=metadata.get("created_at"),
                 updated_at=metadata.get("updated_at"),
             )
@@ -182,7 +210,7 @@ class PersonaService:
         self, 
         query: str, 
         owner: str,
-        similarity_threshold: float = 0.6
+        similarity_threshold: float = DEFAULT_PERSONA_SIMILARITY_THRESHOLD,
     ) -> Dict[str, Any]:
         """
         Query가 조직 페르소나와 관련되는지 확인
@@ -280,14 +308,20 @@ class PersonaService:
             personas = []
             for i, doc_id in enumerate(result["ids"]):
                 metadata = result["metadatas"][i]
+                md = metadata
                 personas.append({
-                    "owner": metadata["owner"],
-                    "name": metadata["name"],
+                    "owner": md["owner"],
+                    "name": md["name"],
                     "description": result["documents"][i],
-                    "scope_keywords": metadata.get("scope_keywords", "").split(",") if metadata.get("scope_keywords") else [],
-                    "enabled": metadata.get("enabled", True),
-                    "created_at": metadata.get("created_at"),
-                    "updated_at": metadata.get("updated_at"),
+                    "scope_keywords": md.get("scope_keywords", "").split(",") if md.get("scope_keywords") else [],
+                    "enabled": md.get("enabled", True),
+                    "escalation_mode": str(md.get("escalation_mode") or "hitl"),
+                    "transfer_extension": (str(md.get("transfer_extension") or "").strip() or None),
+                    "sip_message_ai_reply_enabled": str(md.get("sip_message_ai_reply_enabled", "")).lower()
+                    in ("true", "1", "yes"),
+                    "sip_message_ai_reply_prefix": (md.get("sip_message_ai_reply_prefix") or None) or None,
+                    "created_at": md.get("created_at"),
+                    "updated_at": md.get("updated_at"),
                 })
             
             return personas
@@ -304,6 +338,31 @@ _persona_service: Optional[PersonaService] = None
 def get_persona_service() -> Optional[PersonaService]:
     """PersonaService 싱글톤 인스턴스 반환"""
     return _persona_service
+
+
+async def ensure_persona_service() -> Optional[PersonaService]:
+    """PersonaService가 없으면 KnowledgeService의 vector_db·embedder로 지연 초기화한다.
+
+    API 앱에서 lifespan으로 persona를 올리지 않은 경우에도, 가사 생성 등에서
+    `/api/persona`와 동일한 Chroma `persona` 컬렉션을 읽을 수 있게 한다.
+    """
+    global _persona_service
+    if _persona_service is not None:
+        return _persona_service
+    try:
+        from src.services.knowledge_service import get_knowledge_service
+
+        ks = get_knowledge_service()
+        if not ks:
+            logger.debug("ensure_persona_service_no_knowledge_service")
+            return None
+        _persona_service = PersonaService(ks.vector_db, ks.embedder)
+        await _persona_service.initialize()
+        logger.info("persona_service_lazy_initialized")
+        return _persona_service
+    except Exception as e:
+        logger.warning("persona_service_lazy_init_failed", error=str(e))
+        return None
 
 
 async def initialize_persona_service(chroma_client, embedder) -> PersonaService:

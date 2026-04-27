@@ -494,6 +494,13 @@ class CallManager:
                     call_id=call_session.call_id,
                     caller_sdp=sdp,
                 )
+                try:
+                    from src.sip_core.sip_identity_parse import parse_sip_identity_from_header_value
+
+                    media_session.caller_identity = parse_sip_identity_from_header_value(from_uri)
+                    media_session.callee_identity = parse_sip_identity_from_header_value(to_uri)
+                except Exception:
+                    pass
                 logger.info("media_session_created_for_invite",
                            progress="call",
                            call_id=call_session.call_id,
@@ -717,13 +724,15 @@ class CallManager:
     async def handle_no_answer_timeout(
         self,
         call_id: str,
-        callee_username: str
+        callee_username: str,
+        greeting_override: str | None = None,
     ) -> None:
         """부재중 타임아웃 처리 (AI 응대 모드 전환)
-        
+
         Args:
             call_id: 호 ID
             callee_username: 착신자 사용자명
+            greeting_override: Call Control 안내멘트 텍스트 (None이면 기본 인사말 사용)
         """
         import asyncio
         # 4.1 중복 방지: 동일 call_id로 이미 처리 시작됐으면 한 번만 실행
@@ -932,6 +941,7 @@ class CallManager:
                             hitl_on_alert=_hitl_on_alert,
                             embedder=getattr(_rag, 'embedder', None) if _rag else None,
                             vector_db=getattr(_rag, 'vector_db', None) if _rag else None,
+                            greeting_override=greeting_override,
                         )
                         pipeline_task = asyncio.create_task(_coro)
                         self._pipecat_tasks[call_id] = pipeline_task
@@ -1608,6 +1618,7 @@ class CallManager:
                     from src.common.knowledge_call_data_helpers import chroma_context_for_call_data
 
                     if hasattr(res, "stored_count"):
+                        _stored = int(getattr(res, "stored_count", 0))
                         log_call_data(
                             call_id,
                             "knowledge",
@@ -1615,7 +1626,8 @@ class CallManager:
                             path="trigger_knowledge_extraction",
                             pipeline_version=getattr(res, "pipeline_version", "v2"),
                             success=bool(getattr(res, "success", False)),
-                            stored_count=int(getattr(res, "stored_count", 0)),
+                            stored_count=_stored,
+                            kb_reflected=_stored > 0,
                             skipped_duplicate=int(getattr(res, "skipped_duplicate", 0)),
                             skipped_quality=int(getattr(res, "skipped_quality", 0)),
                             skipped_hallucination=int(getattr(res, "skipped_hallucination", 0)),

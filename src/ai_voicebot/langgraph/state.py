@@ -48,6 +48,8 @@ class ConversationState(TypedDict, total=False):
     # ── HITL ──
     needs_human: bool             # 운영자 개입 필요 여부
     hitl_reason: str              # HITL 사유
+    needs_transfer: bool          # True면 HITL 대신 SIP 호전환 트리거 (escalation_mode=transfer)
+    transfer_extension: str       # 호전환 대상 내선번호 (escalation_mode=transfer 시 Persona에서 읽음)
 
     # ── 후처리(확인 필요) ──
     needs_follow_up: bool         # 모르는 내용 응답 시, 나중에 확인·연락 필요
@@ -62,14 +64,16 @@ class ConversationState(TypedDict, total=False):
     outbound_answered: list                # LLM이 추출한 {question, answer} 목록 (generate_response_node 출력)
     outbound_is_answer: bool               # 이번 발화가 유효한 답변인지 (LLM 판단)
 
-    # ── 내부 참조 (노드 간 공유) ──
-    _llm_client: object           # LLM 클라이언트 참조
-    _rag_engine: object           # RAG 엔진 참조
-    _embedder: object             # Embedder 참조
-    _vector_db: object            # VectorDB 참조
-    _org_manager: object          # 기관 정보 관리자 참조
+    # ── 예약 에이전트 ──
+    booking_context: dict         # 예약 진행 중 수집된 슬롯 정보 (날짜, 시간, 인원 등)
+
+    # ── 내부 참조 (직렬화 가능 값만 — 객체 참조는 call_context.py ContextVar 사용) ──
+    # 직렬화 불가 객체(_llm_client, _rag_engine, _embedder, _vector_db, _org_manager,
+    # _hangup_callback)는 call_context.py의 ContextVar로 이동.
+    # checkpointer(SqliteSaver/MemorySaver)의 msgpack 직렬화 오류 방지.
     _owner: str                    # 테넌트 ID (inbound=callee, outbound=caller)
+    _caller_number: str            # 발신자 전화번호 (inbound=caller 번호, SMS 수신·예약 검색용)
     _persona_owner: str            # 페르소나 조회용 owner: inbound=callee(_owner), outbound=callee(상대방번호)
     _persona_scope_matched: bool   # classify_intent에서 페르소나 scope_keywords 매칭된 경우 True (domain_question_signal 산출용)
     _call_id: Optional[str]        # 통화 ID (로그/DB 연계용)
-    _hangup_callback: object       # 미션 완료 시 BYE 전송 콜백 (아웃바운드 전용)
+    _chitchat_template: str        # chitchat 즉시응답 템플릿 (classify_intent → generate_response)

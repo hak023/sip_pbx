@@ -1,0 +1,11 @@
+%% 4.7 SIP MESSAGE → Text Agent
+sequenceDiagram
+  participant Peer as 상대 단말
+  participant P as B2BUA
+  participant A as Text Agent
+  participant S as Settings DB
+  Peer->>P: SIP MESSAGE
+  P->>S: relay / AI on?
+  S-->>A: owner thread
+  A-->>P: 200 + MESSAGE body
+  Note over A: RAG/Intent = 음성과 동일 그래프

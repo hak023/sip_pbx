@@ -20,6 +20,17 @@ class KnowledgeCreateBody(BaseModel):
     category: str
     doc_type: str = "knowledge"
     source: str = "api"
+    # contact 카테고리 전용 필드 (category="contact"일 때 사용)
+    department: str = Field(
+        default="",
+        description="레거시·비권장. TTS 맥락은 transfer_label 권장.",
+    )
+    phone_number: str = ""  # 내선 또는 Call Control 참조 `fwd:<uuid>`
+    name: str = Field(default="", description="레거시·비권장.")
+    transfer_label: str = Field(
+        default="",
+        description="contact: 착신 전환 대상 표시명 등 TTS 안내 맥락(자동·선택)",
+    )
 
 
 class ManualUploadResponse(BaseModel):
@@ -112,6 +123,15 @@ async def knowledge_create(body: KnowledgeCreateBody) -> Dict[str, Any]:
         "doc_type": (body.doc_type or "knowledge").strip(),
         "source": (body.source or "api").strip(),
     }
+    # contact 등: department / phone_number / name / transfer_label 메타데이터
+    if body.department:
+        meta["department"] = body.department.strip()
+    if body.phone_number:
+        meta["phone_number"] = body.phone_number.strip()
+    if body.name:
+        meta["name"] = body.name.strip()
+    if body.transfer_label and str(body.transfer_label).strip():
+        meta["transfer_label"] = body.transfer_label.strip()
     try:
         result = await ks.add_knowledge(
             text=body.text.strip(),

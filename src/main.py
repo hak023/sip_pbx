@@ -6,7 +6,9 @@
 import sys
 import argparse
 import asyncio
+import threading
 from pathlib import Path
+from typing import Optional
 import io
 import os
 import ssl
@@ -309,6 +311,37 @@ Configuration:
     print_immediate(banner)
 
 
+def _sip_pbx_embedded_http_ws() -> bool:
+    """True: FastAPI·Socket.IO를 메인 asyncio 루프에서 기동(기본). False: 레거시 전용 스레드."""
+    raw = (os.environ.get("SIP_PBX_EMBEDDED_API") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off", "legacy")
+
+
+def _log_asyncio_grpc_baseline() -> None:
+    """grpc 다중 루프 이슈 대응용: 메인 루프·grpcio 버전 계측."""
+    global logger
+    if not logger:
+        return
+    import threading
+
+    loop = asyncio.get_running_loop()
+    gv = None
+    try:
+        import grpc
+
+        gv = getattr(grpc, "__version__", None)
+    except Exception:
+        pass
+    logger.info(
+        "asyncio_main_loop_baseline",
+        loop_id=id(loop),
+        loop_class=type(loop).__name__,
+        thread_name=threading.current_thread().name,
+        grpcio_version=gv,
+        sip_pbx_embedded_http_ws=_sip_pbx_embedded_http_ws(),
+    )
+
+
 async def run_server(config: Config) -> int:
     """서버 실행
     
@@ -326,6 +359,7 @@ async def run_server(config: Config) -> int:
     # ✅ 비동기 로그 워커 시작 (이벤트 루프 내에서만 create_task 가능)
     # initialize_logging()은 동기 컨텍스트에서 호출되므로 여기서 시작합니다.
     start_async_logging(queue_size=1000)
+    _log_asyncio_grpc_baseline()
 
     start_time = time.time()
     
@@ -335,6 +369,10 @@ async def run_server(config: Config) -> int:
     ai_ready = False  # AI 준비 상태
     ai_voicebot_config = getattr(config, 'ai_voicebot', None)  # ⭐ 외부 스코프로 이동
     ai_voicebot_enabled = False  # SIP 바인딩 전에 AI 필수 초기화 여부 (배너·종료 코드용)
+
+    uvicorn_server = None
+    api_serve_task: Optional[asyncio.Task] = None
+    ws_serve_task: Optional[asyncio.Task] = None
     
     # 백그라운드 AI Voicebot 초기화
     async def initialize_ai_in_background():
@@ -495,7 +533,25 @@ async def run_server(config: Config) -> int:
             config._ai_orchestrator = ai_orchestrator
         
         sip_endpoint = create_sip_endpoint(config)
-        
+
+        # API 라우터(messages.py)에서 접근할 수 있도록 모듈 레벨에 노출
+        import src.main as _self
+        _self._sip_endpoint = sip_endpoint
+
+        try:
+            from src.sip_core.sip_runtime import set_sip_endpoint_global
+
+            set_sip_endpoint_global(sip_endpoint)
+        except Exception as _sr:
+            logger.warning("sip_runtime_global_set_failed", error=str(_sr))
+
+        try:
+            from src.sip_core.sip_internal_http import start_sip_internal_http_server_in_thread
+
+            start_sip_internal_http_server_in_thread()
+        except Exception as _ih:
+            logger.warning("sip_internal_http_start_failed", error=str(_ih))
+
         sip_elapsed = time.time() - sip_start
         logger.info("sip_endpoint_created",
                    elapsed=f"{sip_elapsed:.3f}s",
@@ -596,10 +652,8 @@ async def run_server(config: Config) -> int:
                 exc_info=True,
             )
             print_immediate(f"❌ CallManager 주입 실패: {e} — SIP를 중지하고 종료합니다.", file=sys.stderr)
-            try:
-                sip_endpoint.stop()
-            except Exception:
-                pass
+            # SIP·로깅 정리는 함수 말미 finally 한 경로에서만 수행 (shutdown_async 이중 호출 시
+            # 두 번째는 idempotent no-op이라 sip_shutdown_phase_complete 등 관측이 어색해짐)
             return 1
 
         # HITL: timeout 시 AI가 다시 연결받아 안내 메시지 전달 (통화 종료하지 않음)
@@ -668,10 +722,6 @@ async def run_server(config: Config) -> int:
                         exc_info=True,
                     )
                     print_immediate(f"❌ Knowledge embedder 설정 실패: {emb_err}", file=sys.stderr)
-                    try:
-                        sip_endpoint.stop()
-                    except Exception:
-                        pass
                     return 1
                 logger.warning(
                     "knowledge_embedder_config_failed",
@@ -679,14 +729,53 @@ async def run_server(config: Config) -> int:
                     message="AI 비활성 — embedder 없이 계속. 지식 API는 동작하지 않을 수 있음.",
                 )
 
-            import threading
-            def _run_api_server():
+            if _sip_pbx_embedded_http_ws():
                 import uvicorn
-                from src.api.main import app
-                uvicorn.run(app, host="0.0.0.0", port=_api_port, log_level="info")
-            _api_thread = threading.Thread(target=_run_api_server, daemon=True)
-            _api_thread.start()
-            logger.info("api_server_started_in_process", port=_api_port)
+                from src.api.main import app as fastapi_app
+
+                # uvicorn<0.29: Config 에 handle_signals 없음 — 임베디드 시 메인 루프가 시그널 담당
+                # timeout_graceful_shutdown=None 이면 wait_for(…, None)에 가까워
+                # keep-alive·폴링 클라이언트가 있을 때 종료가 과도하게 길어질 수 있다.
+                _gsec = (os.environ.get("UVICORN_GRACEFUL_SHUTDOWN_SEC") or "10").strip()
+                try:
+                    _grace_shutdown = max(1, min(120, int(_gsec)))
+                except ValueError:
+                    _grace_shutdown = 10
+                _use_colors = os.environ.get("NO_COLOR", "").strip() == ""
+                uvicorn_config = uvicorn.Config(
+                    fastapi_app,
+                    host="0.0.0.0",
+                    port=_api_port,
+                    log_level="info",
+                    loop="asyncio",
+                    timeout_graceful_shutdown=_grace_shutdown,
+                    use_colors=_use_colors,
+                )
+                uvicorn_server = uvicorn.Server(uvicorn_config)
+                # 임베디드: serve() 기본 동작이 SIGINT/SIGTERM 핸들러를 등록한다(Windows는 signal.signal).
+                # 그러면 Ctrl+C 가 uvicorn만 종료시키고 SIP 메인 루프는 while sip_endpoint.is_running() 에
+                # 남아 프로세스가 끝나지 않는다. 종료는 KeyboardInterrupt → finally 경로로만 통일한다.
+                uvicorn_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+                api_serve_task = asyncio.create_task(
+                    uvicorn_server.serve(),
+                    name="uvicorn-api-embedded",
+                )
+                logger.info(
+                    "api_server_embedded_task_started",
+                    port=_api_port,
+                    timeout_graceful_shutdown=_grace_shutdown,
+                    note="메인 SelectorEventLoop에서 serve — grpc aio 단일 루프",
+                )
+            else:
+                def _run_api_server() -> None:
+                    import uvicorn
+                    from src.api.main import app
+
+                    uvicorn.run(app, host="0.0.0.0", port=_api_port, log_level="info")
+
+                _api_thread = threading.Thread(target=_run_api_server, daemon=True)
+                _api_thread.start()
+                logger.info("api_server_started_in_thread_legacy", port=_api_port)
             print_immediate(f"  • API Gateway: http://0.0.0.0:{_api_port} (대시보드 활성 통화 연동)")
         except Exception as e:
             logger.error(
@@ -698,10 +787,6 @@ async def run_server(config: Config) -> int:
                 exc_info=True,
             )
             print_immediate(f"❌ API Gateway 스레드 시작 실패 ({e}) — SIP를 중지하고 종료합니다.", file=sys.stderr)
-            try:
-                sip_endpoint.stop()
-            except Exception:
-                pass
             return 1
 
         # help 캐시 자동 구성 — 서버 기동 직후 비동기 태스크로 스케줄
@@ -719,7 +804,29 @@ async def run_server(config: Config) -> int:
                 _help_llm = None
                 try:
                     from src.ai_voicebot.ai_pipeline.llm_client import LLMClient
-                    _help_llm = LLMClient()
+                    from src.common.gemini_api_key import resolve_gemini_api_key
+
+                    _hk = resolve_gemini_api_key()
+                    if _hk:
+                        _gvc = getattr(getattr(config, "ai_voicebot", None), "google_cloud", None)
+                        _gem = getattr(_gvc, "gemini", None) if _gvc else None
+                        if isinstance(_gem, dict):
+                            _get = _gem.get
+                        elif _gem is not None:
+                            _get = lambda k, d=None: getattr(_gem, k, d)
+                        else:
+                            _get = lambda k, d=None: d
+                        _help_gemini_dict = {
+                            "model": _get("model", "gemini-2.5-flash-lite"),
+                            "temperature": _get("temperature", 0.5),
+                            "max_tokens": _get("max_output_tokens", 512),
+                            "max_output_tokens": _get("max_output_tokens", 512),
+                            "judgment_max_output_tokens": _get("judgment_max_output_tokens", 2048),
+                            "judgment_max_input_chars": _get("judgment_max_input_chars", 6000),
+                            "top_p": _get("top_p", 1.0),
+                            "top_k": _get("top_k", 1),
+                        }
+                        _help_llm = LLMClient(config=_help_gemini_dict, api_key=_hk)
                 except Exception:
                     pass
 
@@ -774,22 +881,39 @@ async def run_server(config: Config) -> int:
             except Exception as _he:
                 logger.warning("help_cache_startup_schedule_failed", error=str(_he))
 
-        # WebSocket 서버 기동 (실시간 대화 STT/TTS 표시용) — 별도 스레드에서 실행해 메인 루프와 태스크 생명주기 분리 (destroyed but pending 방지)
+        # WebSocket 서버 기동 (실시간 대화 STT/TTS 표시용)
+        # 기본: 메인 루프 태스크(옵션 A). SIP_PBX_EMBEDDED_API=0 이면 레거시 전용 스레드.
         _ws_port = 8001
         try:
-            import threading
-            def _run_websocket_server():
-                import asyncio
-                from src.websocket.server import start_server
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(start_server())
-                finally:
-                    loop.close()
-            _ws_thread = threading.Thread(target=_run_websocket_server, daemon=True)
-            _ws_thread.start()
-            logger.info("websocket_server_started_in_process", port=_ws_port)
+            if _sip_pbx_embedded_http_ws():
+                from src.websocket.server import start_server as ws_start_server
+
+                ws_serve_task = asyncio.create_task(
+                    ws_start_server(),
+                    name="socketio-ws-embedded",
+                )
+                logger.info(
+                    "websocket_embedded_task_started",
+                    port=_ws_port,
+                    note="메인 루프에서 aiohttp Socket.IO",
+                )
+            else:
+
+                def _run_websocket_server() -> None:
+                    import asyncio as _asyncio
+
+                    from src.websocket.server import start_server
+
+                    loop = _asyncio.new_event_loop()
+                    _asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(start_server())
+                    finally:
+                        loop.close()
+
+                _ws_thread = threading.Thread(target=_run_websocket_server, daemon=True)
+                _ws_thread.start()
+                logger.info("websocket_server_started_in_thread_legacy", port=_ws_port)
             print_immediate(f"  • WebSocket: http://0.0.0.0:{_ws_port} (실시간 대화 연동)")
         except Exception as e:
             logger.error(
@@ -804,10 +928,6 @@ async def run_server(config: Config) -> int:
                 f"❌ WebSocket 서버 시작 실패 ({e}) — SIP/API를 중지하고 종료합니다.",
                 file=sys.stderr,
             )
-            try:
-                sip_endpoint.stop()
-            except Exception:
-                pass
             return 1
 
         total_elapsed = time.time() - start_time
@@ -865,20 +985,94 @@ async def run_server(config: Config) -> int:
         return 1
         
     finally:
-        # 정리
-        if sip_endpoint and sip_endpoint.is_running():
-            logger.info("stopping_server", message="Stopping SIP server")
+        # 임베디드 FastAPI·Socket.IO를 먼저 내린 뒤 SIP 종료.
+        # Ctrl+C가 wait_for 구간에서 다시 들어와도 SIP·로깅 정리가 빠지지 않도록 분리한다.
+        try:
+            if uvicorn_server is not None:
+                uvicorn_server.should_exit = True
+            if api_serve_task is not None and not api_serve_task.done():
+                logger.info("embedded_uvicorn_shutdown_wait_begin", timeout_sec=45.0)
+                try:
+                    await asyncio.wait_for(api_serve_task, timeout=45.0)
+                    logger.info("embedded_uvicorn_shutdown_wait_done")
+                except Exception as ue:
+                    logger.warning(
+                        "embedded_uvicorn_shutdown_wait",
+                        error=str(ue),
+                        error_type=type(ue).__name__,
+                    )
+                    api_serve_task.cancel()
+                    try:
+                        await api_serve_task
+                    except asyncio.CancelledError:
+                        pass
+            _ws_wait_raw = (os.environ.get("EMBEDDED_WS_SHUTDOWN_WAIT_SEC") or "35").strip()
             try:
-                sip_endpoint.stop()
-            except Exception as e:
-                logger.error("stop_failed", error=str(e))
-        
+                _ws_wait = float(max(5.0, min(120.0, float(_ws_wait_raw))))
+            except ValueError:
+                _ws_wait = 35.0
+            if ws_serve_task is not None and not ws_serve_task.done():
+                logger.info("embedded_ws_shutdown_cancel_begin", wait_timeout_sec=_ws_wait)
+                ws_serve_task.cancel()
+                try:
+                    await asyncio.wait_for(ws_serve_task, timeout=_ws_wait)
+                    logger.info(
+                        "embedded_ws_shutdown_join_done",
+                        reason="task_returned",
+                        message="Socket.IO start_server 코루틴 정상 종료",
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "embedded_ws_shutdown_join_timeout",
+                        timeout_sec=_ws_wait,
+                        message="Socket.IO start_server join 초과 — runner 정리를 한 번 더 시도",
+                    )
+                    try:
+                        from src.websocket.server import stop_websocket_server
+
+                        await asyncio.wait_for(stop_websocket_server(), timeout=20.0)
+                        logger.info("embedded_ws_force_cleanup_done")
+                    except Exception as _w2:
+                        logger.warning(
+                            "embedded_ws_force_cleanup_failed",
+                            error=str(_w2),
+                            error_type=type(_w2).__name__,
+                        )
+                except asyncio.CancelledError:
+                    # cancel() 후 start_server 가 finally 에서 stop_websocket_server() 하고
+                    # CancelledError 를 재전파하면 wait_for 가 이 예외를 그대로 올린다.
+                    # join 성공과 동일하게 관측 가능하도록 한 줄 남김.
+                    logger.info(
+                        "embedded_ws_shutdown_join_done",
+                        reason="task_cancelled",
+                        message="Socket.IO 태스크 cancel·runner 정리 완료 (CancelledError)",
+                    )
+                except Exception as we:
+                    logger.warning("embedded_ws_task_join", error=str(we))
+        except BaseException as shutdown_ex:
+            logger.warning(
+                "embedded_http_ws_shutdown_error",
+                error=str(shutdown_ex),
+                exc_type=type(shutdown_ex).__name__,
+            )
+        finally:
+            if sip_endpoint:
+                logger.info("stopping_server", message="Stopping SIP server")
+                try:
+                    await sip_endpoint.shutdown_async()
+                    logger.info(
+                        "sip_shutdown_phase_complete",
+                        message="SIP listen join·UDP close·트래픽 로그 닫기 완료 — async logging 정지로 진행",
+                    )
+                except Exception as e:
+                    logger.error("sip_shutdown_async_failed", error=str(e))
+
         # 비동기 로깅 중지
         try:
             await stop_async_logging()
         except Exception as e:
             print_immediate(f"Warning: Failed to stop async logging: {e}", file=sys.stderr)
-        
+
         logger.info("server_stopped", message="SIP PBX stopped")
         print_immediate("\n✅ Server stopped successfully.\n")
 
@@ -912,8 +1106,14 @@ def main() -> int:
         print_banner(config, ai_voicebot_enabled)
         
         # 서버 실행 (asyncio)
-        return asyncio.run(run_server(config))
-        
+        # Windows: Ctrl+C 시 SIGINT가 루프의 select()·asyncio.run() 정리 구간에서
+        # 한 번 더 KeyboardInterrupt를 올릴 수 있어 run_server 내부 except만으로는
+        # traceback이 남는 경우가 있다. 여기서 흡수하면 정상 종료(0)로 마친다.
+        try:
+            return asyncio.run(run_server(config))
+        except KeyboardInterrupt:
+            return 0
+
     except ConfigurationError:
         return 1
     except Exception as e:

@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import structlog
 from src.ai_voicebot.langgraph.hitl_escalation_policy import is_social_direct_path
 from src.ai_voicebot.langgraph.state import ConversationState
+from src.ai_voicebot.langgraph.call_context import get_llm_client
 from src.common.rag_hit_serializer import build_rag_hits_llm_context
 from src.common.call_data_record_logger import log_call_data
 
@@ -92,7 +93,7 @@ async def generate_response_node(state: ConversationState) -> dict:
       - response: 전체 응답 텍스트
       - response_chunks: 스트리밍용 청크 리스트
     """
-    llm = state.get("_llm_client")
+    llm = get_llm_client()
     user_query = state.get("user_query", "")
 
     if not llm or not user_query:

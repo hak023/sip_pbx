@@ -386,10 +386,16 @@ class AIVoicebotConfig(BaseModel):
 
 
 class OrganizationPersona(BaseModel):
-    """조직 페르소나 (Chitchat vs Question 분류용)
-    
-    AI Bot이 응대하는 조직/서비스의 정체성과 업무 범위를 정의.
-    사용자 질문이 persona와 관련되면 question (RAG/LLM), 무관하면 chitchat (템플릿).
+    """조직 페르소나 메타 (Chitchat 분류·에스컬레이션 저장소)
+
+    대화 톤·지식은 주로 지식 베이스에서 관리하고, 본 모델은 레거시 분류 필드와
+    **AI 한계 시 에스컬레이션**(HITL / SIP 호전환) 설정을 저장한다.
+
+    escalation_mode:
+      - "hitl"     : AI가 모르는 내용 발생 시 운영자 대시보드 HITL 알림 (기존 동작)
+      - "transfer" : HITL 대신 즉시 SIP 호전환 — 대상 내선은 착신 규칙(call-control)으로 결정
+      - "none"     : AI 판정으로는 HITL/호전환하지 않음(고객이 명시적으로 상담원 연결 요청한 경우는 예외)
+    transfer_extension: 레거시 폴백(착신 규칙으로 해석 불가할 때만). transfer 모드에서도 생략 가능
     """
     owner: str = Field(description="Owner ID (착신번호, 예: 1004)")
     name: str = Field(description="조직명 (예: 기상청, 서울시청)")
@@ -402,7 +408,23 @@ class OrganizationPersona(BaseModel):
         default=None,
         description="Chitchat 시 응답 템플릿 (None이면 기본 템플릿 사용)"
     )
+    escalation_mode: str = Field(
+        default="hitl",
+        description="에스컬레이션: 'hitl' | 'transfer'(착신 규칙 기반 호전환) | 'none'(AI 판정 억제)",
+    )
+    transfer_extension: Optional[str] = Field(
+        default=None,
+        description="착신 규칙으로 대상을 못 찾을 때만 쓰는 레거시 내선 폴백 (선택)",
+    )
     enabled: bool = Field(default=True, description="Persona 활성화 여부")
+    sip_message_ai_reply_enabled: bool = Field(
+        default=False,
+        description="SIP MESSAGE(채팅) 수신 시 LangGraph와 동일 경로로 자동 텍스트 응답",
+    )
+    sip_message_ai_reply_prefix: Optional[str] = Field(
+        default=None,
+        description="자동 응답 본문 앞에 붙는 고지 문구(비우면 기본 '[AI 자동응답]')",
+    )
     created_at: Optional[str] = Field(default=None, description="생성 시각 (ISO 8601)")
     updated_at: Optional[str] = Field(default=None, description="수정 시각 (ISO 8601)")
 

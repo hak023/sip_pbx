@@ -2,39 +2,54 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { KNOWLEDGE_CATEGORIES, DOC_TYPES, KNOWLEDGE_SOURCES, type KnowledgeItem } from '@/types';
+import Link from 'next/link';
+import { KNOWLEDGE_CATEGORIES, KNOWLEDGE_SOURCES, type KnowledgeItem } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+interface ForwardTargetRow {
+  id: string;
+  owner: string;
+  name: string;
+  kind: string;
+  single_extension?: string | null;
+  members?: string[];
+  ring_mode?: string;
+}
 
 export default function KnowledgePage() {
   const router = useRouter();
   const [tenant, setTenant] = useState<{ owner: string; name?: string } | null>(null);
   const [text, setText] = useState('');
   const [category, setCategory] = useState('persona');
-  const [docType, setDocType] = useState<string>('knowledge');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [filterOwner, setFilterOwner] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
-  const [filterDocType, setFilterDocType] = useState('');
   const [filterSource, setFilterSource] = useState('');
   const [loadingList, setLoadingList] = useState(false);
   const [groupByCategory, setGroupByCategory] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sortByHit, setSortByHit] = useState(false);
+
+  const [forwardTargets, setForwardTargets] = useState<ForwardTargetRow[]>([]);
+  const [forwardTargetsError, setForwardTargetsError] = useState<string | null>(null);
+  const [loadingForwardTargets, setLoadingForwardTargets] = useState(false);
+  const [contactManualExt, setContactManualExt] = useState('');
+  const [contactSelectedForwardId, setContactSelectedForwardId] = useState('');
+  const [contactTransferLabel, setContactTransferLabel] = useState('');
   
   // Persona 입력 필드 (category === 'persona' 일 때만 표시)
   const [personaName, setPersonaName] = useState('');
   const [personaDescription, setPersonaDescription] = useState('');
   const [personaScopeKeywords, setPersonaScopeKeywords] = useState<string[]>([]);
-  const [personaChitchatTemplate, setPersonaChitchatTemplate] = useState('');
   const [personaEnabled, setPersonaEnabled] = useState(true);
   const [keywordInput, setKeywordInput] = useState('');
   // 저장된 페르소나 요약 (목록 카드용)
   const [savedPersona, setSavedPersona] = useState<{
     name: string; description: string; scope_keywords: string[];
-    chitchat_response_template?: string; enabled: boolean;
+    enabled: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -60,7 +75,6 @@ export default function KnowledgePage() {
       params.set('owner', filterOwner);
     }
     if (filterCategory) params.set('category', filterCategory);
-    if (filterDocType) params.set('doc_type', filterDocType);
     if (filterSource) params.set('source', filterSource);
     if (sortByHit) params.set('sort_by', 'hit_count');
     try {
@@ -82,7 +96,7 @@ export default function KnowledgePage() {
     } finally {
       setLoadingList(false);
     }
-  }, [filterOwner, filterCategory, filterDocType, filterSource, sortByHit]);
+  }, [filterOwner, filterCategory, filterSource, sortByHit]);
 
   useEffect(() => {
     if (tenant) {
@@ -98,6 +112,55 @@ export default function KnowledgePage() {
     }
   }, [category, tenant]);
 
+  useEffect(() => {
+    if (category !== 'contact' || !tenant?.owner) {
+      setForwardTargets([]);
+      setForwardTargetsError(null);
+      return;
+    }
+    const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+    let cancelled = false;
+    (async () => {
+      setLoadingForwardTargets(true);
+      setForwardTargetsError(null);
+      try {
+        const res = await fetch(
+          `${API_URL}/api/call-control/forward-targets?owner=${encodeURIComponent(tenant.owner)}`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const detail = err.detail ?? err.error ?? `HTTP ${res.status}`;
+          if (!cancelled) {
+            setForwardTargets([]);
+            setForwardTargetsError(typeof detail === 'string' ? detail : JSON.stringify(detail));
+          }
+          return;
+        }
+        const data = await res.json();
+        if (!cancelled) setForwardTargets(Array.isArray(data) ? data : []);
+      } catch (e) {
+        if (!cancelled) {
+          setForwardTargets([]);
+          setForwardTargetsError((e as Error).message || '착신 전환 목록을 불러오지 못했습니다.');
+        }
+      } finally {
+        if (!cancelled) setLoadingForwardTargets(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [category, tenant?.owner]);
+
+  useEffect(() => {
+    if (category !== 'contact') {
+      setContactManualExt('');
+      setContactSelectedForwardId('');
+      setContactTransferLabel('');
+    }
+  }, [category]);
+
   const loadPersonaIfExists = async (owner: string) => {
     if (!owner) return;
     try {
@@ -107,13 +170,11 @@ export default function KnowledgePage() {
         setPersonaName(data.name || '');
         setPersonaDescription(data.description || '');
         setPersonaScopeKeywords(data.scope_keywords || []);
-        setPersonaChitchatTemplate(data.chitchat_response_template || '');
         setPersonaEnabled(data.enabled ?? true);
         setSavedPersona({
           name: data.name || '',
           description: data.description || '',
           scope_keywords: data.scope_keywords || [],
-          chitchat_response_template: data.chitchat_response_template || '',
           enabled: data.enabled ?? true,
         });
       } else {
@@ -157,7 +218,6 @@ export default function KnowledgePage() {
             name: personaName.trim(),
             description: personaDescription.trim(),
             scope_keywords: personaScopeKeywords,
-            chitchat_response_template: personaChitchatTemplate.trim() || undefined,
             enabled: personaEnabled,
           }),
         });
@@ -183,29 +243,57 @@ export default function KnowledgePage() {
       setMessage({ type: 'error', text: '착신(owner), 내용(text), 카테고리(category)를 입력하세요.' });
       return;
     }
+    let phone_number = '';
+    let transfer_label = '';
+    if (category === 'contact') {
+      const manual = contactManualExt.trim();
+      if (manual) {
+        phone_number = manual;
+        transfer_label = '';
+      } else if (contactSelectedForwardId) {
+        phone_number = `fwd:${contactSelectedForwardId}`;
+        transfer_label = contactTransferLabel.trim();
+      }
+      if (!phone_number) {
+        setMessage({
+          type: 'error',
+          text: '연락처(contact): 설정 → 착신 전환 탭에서 등록한 대상을 선택하거나, 직접 내선 번호를 입력하세요.',
+        });
+        return;
+      }
+    }
     setSubmitting(true);
     setMessage(null);
     const token = localStorage.getItem('access_token') || localStorage.getItem('token');
     const postUrl = `${API_URL}/api/knowledge`;
     try {
+      const body: Record<string, unknown> = {
+        text: text.trim(),
+        owner: tenant.owner,
+        category,
+        source: 'api',
+      };
+      if (category === 'contact') {
+        body.phone_number = phone_number;
+        if (transfer_label) body.transfer_label = transfer_label;
+      }
       const res = await fetch(postUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          text: text.trim(),
-          owner: tenant.owner,
-          category,
-          doc_type: docType, // 추가
-          source: 'api',
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         setMessage({ type: 'ok', text: `저장됨 (doc_id: ${data.doc_id}${data.cached ? ', 즉시 캐시됨' : ''})` });
         setText('');
+        if (category === 'contact') {
+          setContactManualExt('');
+          setContactSelectedForwardId('');
+          setContactTransferLabel('');
+        }
         fetchList();
       } else {
         const errorMsg = typeof data.detail === 'string' 
@@ -247,7 +335,7 @@ export default function KnowledgePage() {
 
   const categoryLabel = (value: string) => KNOWLEDGE_CATEGORIES.find((c) => c.value === value)?.label ?? value;
   const itemsByCategory = items.reduce<Record<string, KnowledgeItem[]>>((acc, item) => {
-    const cat = item.metadata?.category ?? 'unknown';
+    const cat = item.category || item.metadata?.category || 'unknown';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(item);
     return acc;
@@ -268,6 +356,8 @@ export default function KnowledgePage() {
           </button>
         </div>
         <p className="text-gray-600 text-sm mb-6">
+          <strong>카테고리</strong>는 질의·인사·연락처 등 업무 구분이고, <strong>doc_type</strong>(knowledge / capability 등)은 서버가 기본값으로 두며
+          이 화면에서는 보내지 않습니다. Capability 전용 문서는 별도 API로만 적재됩니다.{' '}
           <strong>내용</strong> 필드 하나로 저장됩니다. 일반 카테고리는 RAG 검색에 쓰이고,
           <strong className="font-medium"> 인사 (시작)·인사 (첫 응답)</strong>은 통화 시작 시 해당 문구를 <strong>LLM 없이 TTS</strong>로 재생합니다
           (카테고리별 최신 1건). <strong className="font-medium">도움말·할 수 있는 일 (help)</strong>은 항목마다 <strong>별도로 한 줄씩</strong> 등록하면,
@@ -291,8 +381,12 @@ export default function KnowledgePage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                {category === 'persona' 
+                {category === 'persona'
                   ? 'AI가 응대하는 조직의 정체성을 정의합니다. 업무 관련 질문과 잡담을 정확히 분류하는 데 사용됩니다.'
+                  : category === 'waiting_phrase'
+                  ? 'LLM 처리 중 고객에게 발화되는 대기 안내 멘트입니다. 멘트를 한 줄씩 등록하면 순서대로 순환 발화됩니다. 등록이 없으면 기본 멘트가 사용됩니다.'
+                  : category === 'contact'
+                  ? '고객이 상담원 연결·전환을 요청할 때(퀵 의도) 발화와 이 문구의 유사도로 매칭됩니다. 전환 대상은 아래에서 «착신 전환»에 등록한 항목(fwd:) 또는 내선 번호로 저장됩니다.'
                   : '질의·FAQ·잡담·불만·전환·연락처는 RAG 후보입니다. 인사(시작)/(첫 응답)은 오프닝 TTS, help는 "뭘 할 수 있어요" 류 질문 시 멘트 구성용입니다.'
                 }
               </p>
@@ -358,17 +452,6 @@ export default function KnowledgePage() {
                   </div>
                   <p className="text-xs text-gray-500 mt-1">업무 관련 키워드 (쉼표로 구분)</p>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Chitchat 응답 템플릿 (선택)</label>
-                  <textarea
-                    value={personaChitchatTemplate}
-                    onChange={(e) => setPersonaChitchatTemplate(e.target.value)}
-                    rows={2}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                    placeholder="죄송합니다. 저는 날씨 관련 업무만 도와드릴 수 있어요."
-                  />
-                  <p className="text-xs text-gray-500 mt-1">비어있으면 기본 chitchat 응답 사용</p>
-                </div>
                 <div className="flex items-center gap-4">
                   <label className="flex items-center gap-2">
                     <input
@@ -380,31 +463,116 @@ export default function KnowledgePage() {
                     <span className="text-sm font-medium text-gray-700">활성화</span>
                   </label>
                 </div>
+                <p className="text-xs text-gray-600 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                  SIP MESSAGE(채팅) AI 자동응답은{' '}
+                  <Link href="/settings/chat-relay" className="text-indigo-600 hover:text-indigo-800 underline font-medium">
+                    설정 → 채팅·SIP MESSAGE
+                  </Link>
+                  에서 관리합니다.
+                </p>
               </>
             ) : (
               <>
+                {category === 'contact' && (
+                  <div className="rounded-md border border-indigo-100 bg-indigo-50/60 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-indigo-900">전환 대상 (Call Control)</span>
+                      <Link
+                        href="/settings/call-control?tab=forward-targets"
+                        className="text-sm text-indigo-700 hover:text-indigo-900 underline font-medium"
+                      >
+                        착신 전환 탭으로 이동
+                      </Link>
+                    </div>
+                    <p className="text-xs text-gray-700 leading-relaxed">
+                      먼저 <strong>설정 → 착신 라우팅(Call Control) → «착신 전환»</strong> 탭에서 단일 내선 또는 그룹을 등록한 뒤,
+                      여기서 항목을 선택하면 <code className="bg-white/80 px-1 rounded">fwd:…</code> 형태로 저장되어 통화 시 실제 내선으로 해석됩니다.
+                      직접 내선만 쓸 경우 아래 번호란에 입력하면 됩니다(선택과 번호란 동시 입력 시 <strong>번호란</strong>이 우선합니다).
+                    </p>
+                    {forwardTargetsError && (
+                      <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                        착신 전환 목록을 불러오지 못했습니다: {forwardTargetsError}
+                      </p>
+                    )}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">착신 전환 대상 선택</label>
+                      <select
+                        value={contactSelectedForwardId}
+                        disabled={!!contactManualExt.trim() || loadingForwardTargets}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          setContactSelectedForwardId(id);
+                          setContactManualExt('');
+                          if (!id) {
+                            setContactTransferLabel('');
+                            return;
+                          }
+                          const row = forwardTargets.find((t) => t.id === id);
+                          setContactTransferLabel(row?.name?.trim() || '');
+                        }}
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm disabled:bg-gray-100"
+                      >
+                        <option value="">
+                          {loadingForwardTargets ? '불러오는 중…' : '— 선택 —'}
+                        </option>
+                        {forwardTargets.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name} ({t.kind === 'group' ? '그룹' : '단일'}
+                            {t.kind === 'group' ? ` · ${(t.members || []).length}명` : ''})
+                          </option>
+                        ))}
+                      </select>
+                      {!loadingForwardTargets && forwardTargets.length === 0 && !forwardTargetsError && (
+                        <p className="text-xs text-gray-500 mt-1">
+                          등록된 착신 전환 대상이 없습니다. 위 링크에서 추가하세요.
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">또는 직접 내선 번호</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={contactManualExt}
+                        onChange={(e) => {
+                          setContactManualExt(e.target.value);
+                          if (e.target.value.trim()) {
+                            setContactSelectedForwardId('');
+                            setContactTransferLabel('');
+                          }
+                        }}
+                        placeholder="예: 1003"
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">문서 유형 (doc_type)</label>
-                  <select
-                    value={docType}
-                    onChange={(e) => setDocType(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                  >
-                    {DOC_TYPES.map((t) => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">대시보드 입력은 기본적으로 knowledge 사용</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">내용 (질문/문구) *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {category === 'waiting_phrase'
+                      ? '대기 안내 멘트 (한 줄) *'
+                      : category === 'contact'
+                      ? '매칭용 문구 (고객이 말할 내용에 가깝게) *'
+                      : '내용 (질문/문구) *'}
+                  </label>
                   <textarea
                     value={text}
                     onChange={(e) => setText(e.target.value)}
-                    rows={3}
+                    rows={category === 'waiting_phrase' ? 2 : category === 'contact' ? 4 : 3}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                    placeholder="예: 안녕하세요, OO입니다 / 영업시간이 궁금해요"
+                    placeholder={
+                      category === 'waiting_phrase'
+                        ? '예: 잠시만 기다려 주세요. / 정보를 확인하고 있습니다.'
+                        : category === 'contact'
+                        ? '예: 예약 담당 연결해 주세요 / 영업팀으로 바꿔줘 / 상담원이랑 통화하고 싶어요'
+                        : '예: 안녕하세요, OO입니다 / 영업시간이 궁금해요'
+                    }
                   />
+                  {category === 'waiting_phrase' && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      ⏳ 멘트 한 줄씩 개별 등록하세요. LLM 처리 중 순서대로 순환 발화됩니다.
+                    </p>
+                  )}
                 </div>
               </>
             )}
@@ -452,9 +620,12 @@ export default function KnowledgePage() {
                 ))}
               </div>
             )}
-            {savedPersona.chitchat_response_template && (
-              <p className="text-xs text-gray-400 mt-1">잡담 응답: {savedPersona.chitchat_response_template}</p>
-            )}
+            <p className="text-xs text-gray-500 mt-2">
+              SIP MESSAGE AI 자동응답:{' '}
+              <Link href="/settings/chat-relay" className="text-indigo-600 hover:text-indigo-800 underline">
+                설정에서 관리
+              </Link>
+            </p>
           </div>
         )}
 
@@ -477,16 +648,6 @@ export default function KnowledgePage() {
               <option value="">전체 카테고리</option>
               {KNOWLEDGE_CATEGORIES.map((c) => (
                 <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
-            </select>
-            <select
-              value={filterDocType}
-              onChange={(e) => setFilterDocType(e.target.value)}
-              className="border border-gray-300 rounded px-2 py-1 text-sm"
-            >
-              <option value="">전체 doc_type</option>
-              {DOC_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
             <select
@@ -620,7 +781,7 @@ export default function KnowledgePage() {
                 {items.map((row) => (
                   <tr key={row.id} className="border-b border-gray-100">
                     <td className="py-2 pr-3 font-mono text-xs truncate" title={row.id}>{row.id}</td>
-                    <td className="py-2 pr-3 truncate text-xs">{categoryLabel(row.metadata?.category ?? '')}</td>
+                    <td className="py-2 pr-3 truncate text-xs">{categoryLabel(row.category || row.metadata?.category || '')}</td>
                     <td className="py-2 pr-3 truncate">{row.metadata?.owner ?? '-'}</td>
                     <td className="py-2 pr-3 truncate text-xs text-gray-600" title={row.metadata?.doc_type ?? ''}>{row.metadata?.doc_type ?? '-'}</td>
                     <td className="py-2 pr-3 truncate text-xs text-gray-600">{row.metadata?.source ?? '-'}</td>

@@ -28,6 +28,38 @@ def set_transfer_manager(transfer_manager):
     logger.info("transfer_manager_set", has_manager=_transfer_manager is not None)
 
 
+async def initiate_dock_transfer(
+    call_id: str,
+    target_number: str,
+    owner_cli: str,
+) -> bool:
+    """
+    Call Dock 「돌려주기」: 테넌트 owner를 From CLI로, target_number로 전환 INVITE.
+    """
+    if not _transfer_manager:
+        logger.error(
+            "dock_transfer_manager_not_available",
+            call_id=call_id,
+            note="TransferManager not set",
+        )
+        return False
+    try:
+        rec = await _transfer_manager.initiate_dock_transfer(
+            call_id=call_id,
+            target_number=target_number.strip(),
+            owner_cli=(owner_cli or "").strip(),
+        )
+        return rec is not None
+    except Exception as e:
+        logger.error(
+            "dock_transfer_error",
+            call_id=call_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return False
+
+
 async def initiate_call_transfer(
     call_id: str,
     target_number: str,

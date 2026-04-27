@@ -134,6 +134,15 @@ class PipelineBuilder:
         tts_sync_context = tts_sync_context or {}
         tts_sync_context["_call_id"] = call_id  # Notifier/Output 로그용 (Phase1→Phase2 연동)
 
+        _ms_c = getattr(rtp_worker, "media_session", None)
+        _caller_for_sms = ""
+        if _ms_c is not None:
+            _raw_c = getattr(_ms_c, "caller_identity", None) or getattr(_ms_c, "caller", None) or ""
+            if isinstance(_raw_c, dict):
+                _caller_for_sms = str(_raw_c.get("number") or _raw_c.get("uri") or "").strip()
+            else:
+                _caller_for_sms = str(_raw_c).strip()
+
         transport = SIPPBXTransport(rtp_worker, tts_sync_context=tts_sync_context)
         _, rec_input, rec_output = create_recording_processors(call_id)
 
@@ -146,12 +155,14 @@ class PipelineBuilder:
             system_prompt=system_prompt,
             max_history_turns=max_history_turns,
             owner=owner,
+            caller_id=_caller_for_sms or None,
             call_id=call_id or None,
             hitl_on_alert=hitl_on_alert,
             tts_sync_context=tts_sync_context,
             stt_post_filter_config=stt_post_filter_config,
             # 개선안 3: Debounce 비활성화 → 즉시 처리 + Supersede 방식으로 분할 STT 병합
             stt_final_debounce_sec=0.0,
+            rtp_worker=rtp_worker,
         )
 
         # TTS 완료 감지 프로세서 (Phase 1/2 인사말 동기화용)
@@ -242,6 +253,7 @@ class PipelineBuilder:
         outbound_purpose: str = "",
         outbound_questions: Optional[list] = None,
         hangup_callback: Optional[Callable[..., Any]] = None,
+        greeting_override: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -388,21 +400,41 @@ class PipelineBuilder:
         greeting_task: Optional[asyncio.Task] = None
 
         async def _send_initial_greeting():
-            """Pipeline 시작 후 초기 인사말 자동 전송"""
+            """Pipeline 시작 후 초기 인사말 자동 전송.
+
+            greeting_override가 있으면 Call Control 안내멘트 텍스트를 우선 사용한다.
+            """
             await asyncio.sleep(0.5)  # Pipeline 초기화 대기
             try:
                 rag_llm = getattr(pipeline, "_rag_llm", None)
-                send = getattr(rag_llm, "send_greeting", None) if rag_llm is not None else None
-                if callable(send):
-                    await send()
-                    logger.info("initial_greeting_sent", call_id=call_id, via="pipeline._rag_llm")
+                if greeting_override:
+                    # Call Control 안내멘트 텍스트 우선 재생
+                    send_custom = getattr(rag_llm, "send_greeting", None) if rag_llm is not None else None
+                    if callable(send_custom):
+                        await send_custom(text=greeting_override)
+                        logger.info(
+                            "initial_greeting_sent_override",
+                            call_id=call_id,
+                            source="call_control_announcement",
+                        )
+                    else:
+                        logger.warning(
+                            "initial_greeting_override_skipped_no_send",
+                            call_id=call_id,
+                            note="send_greeting 없음 — greeting_override 미적용",
+                        )
                 else:
-                    logger.warning(
-                        "initial_greeting_skipped_no_rag_llm",
-                        call_id=call_id,
-                        has_attr=rag_llm is not None,
-                        note="build_pipeline이 pipeline._rag_llm을 설정하지 않았거나 send_greeting 없음",
-                    )
+                    send = getattr(rag_llm, "send_greeting", None) if rag_llm is not None else None
+                    if callable(send):
+                        await send()
+                        logger.info("initial_greeting_sent", call_id=call_id, via="pipeline._rag_llm")
+                    else:
+                        logger.warning(
+                            "initial_greeting_skipped_no_rag_llm",
+                            call_id=call_id,
+                            has_attr=rag_llm is not None,
+                            note="build_pipeline이 pipeline._rag_llm을 설정하지 않았거나 send_greeting 없음",
+                        )
             except asyncio.CancelledError:
                 pass
             except Exception as e:
@@ -424,6 +456,35 @@ class PipelineBuilder:
                 register_active_call(call_id, callee=owner or "", is_ai_handled=True)
             except Exception:
                 pass
+            # P3: 통화 시작 시 call_records DB upsert
+            try:
+                from src.common.call_record_db import upsert_call_record
+                from datetime import datetime as _dt, timezone as _tz
+                _ms = getattr(rtp_worker, "media_session", None)
+                _caller = ""
+                if _ms is not None:
+                    _caller = (
+                        getattr(_ms, "caller_identity", None)
+                        or getattr(_ms, "caller", None)
+                        or ""
+                    )
+                if isinstance(_caller, dict):
+                    _caller = _caller.get("number", "") or _caller.get("uri", "") or ""
+                _callee_for_row = owner or ""
+                if _ms is not None and (getattr(_ms, "callee_identity", None) or "").strip():
+                    _callee_for_row = (getattr(_ms, "callee_identity", "") or "").strip()
+                _direction = "outbound" if (call_id or "").startswith("outbound-") else "inbound"
+                upsert_call_record(
+                    call_id=call_id,
+                    owner=owner or "",
+                    caller_id=str(_caller).strip(),
+                    callee_id=_callee_for_row,
+                    direction=_direction,
+                    start_time=_dt.now(_tz.utc).isoformat().replace("+00:00", "Z"),
+                    is_ai_handled=True,
+                )
+            except Exception as _e:
+                logger.debug("call_record_start_upsert_failed", call_id=call_id, error=str(_e))
         try:
             await runner.run(task)
         except asyncio.CancelledError:
@@ -484,6 +545,117 @@ class PipelineBuilder:
                     get_hitl_service().unregister_call(call_id)
                 except Exception:
                     pass
+                # P3: 통화 종료 시 call_records DB upsert (종료 시각·녹음·대본 갱신)
+                try:
+                    from src.common.call_record_db import upsert_call_record
+                    from datetime import datetime as _dt, timezone as _tz
+                    from src.api.routers.call_history import _find_call_dir, _recordings_root
+                    _end_now = _dt.now(_tz.utc).isoformat().replace("+00:00", "Z")
+                    _call_dir = _find_call_dir(call_id)
+                    _has_rec = (_call_dir / "mixed.wav").is_file() if _call_dir else False
+                    _has_ts = (_call_dir / "transcript.txt").is_file() if _call_dir else False
+                    _rec_dir = str(_call_dir) if _call_dir else ""
+                    # call_insights.json에서 요약·AI 미처리 건수 읽기
+                    _summary = None
+                    _ai_unhandled = 0
+                    _is_ai = True
+                    if _call_dir:
+                        try:
+                            from src.common.call_insights_buffer import load_call_insights_for_directory
+                            _ins = load_call_insights_for_directory(_call_dir)
+                            if _ins:
+                                _summary = _ins.get("call_summary") or None
+                                _ai_unhandled = int(_ins.get("ai_unhandled_count") or 0)
+                                _is_ai = bool(_ins.get("is_ai_handled_call", True))
+                        except Exception:
+                            pass
+                    _ms_end = getattr(rtp_worker, "media_session", None)
+                    _cid_fill = (
+                        (getattr(_ms_end, "caller_identity", None) or "").strip()
+                        if _ms_end is not None
+                        else ""
+                    )
+                    _callee_fill = (
+                        (getattr(_ms_end, "callee_identity", None) or "").strip()
+                        if _ms_end is not None
+                        else ""
+                    )
+                    _end_kw: dict = dict(
+                        call_id=call_id,
+                        end_time=_end_now,
+                        call_summary=_summary,
+                        is_ai_handled=_is_ai,
+                        ai_unhandled_count=_ai_unhandled,
+                        has_recording=_has_rec,
+                        has_transcript=_has_ts,
+                        recordings_dir=_rec_dir,
+                    )
+                    if _cid_fill:
+                        _end_kw["caller_id"] = _cid_fill
+                    if _callee_fill:
+                        _end_kw["callee_id"] = _callee_fill
+                    upsert_call_record(**_end_kw)
+                    # 발신자 연락처 자동 생성 (수동 없을 때만) — LLM·예약 힌트
+                    _excerpt = ""
+                    if _call_dir and (_call_dir / "transcript.txt").is_file():
+                        try:
+                            _excerpt = (_call_dir / "transcript.txt").read_text(
+                                encoding="utf-8", errors="ignore"
+                            )[:4000]
+                        except OSError:
+                            _excerpt = ""
+                    _rag_llm = getattr(pipeline, "_rag_llm", None)
+                    _llm_for_contact = getattr(_rag_llm, "_llm", None) if _rag_llm is not None else None
+                    if (
+                        call_id
+                        and _llm_for_contact is not None
+                        and (owner or "").strip()
+                        and (_cid_fill or "").strip()
+                    ):
+                        try:
+                            from src.services.caller_contact_autofill import (
+                                schedule_caller_contact_autofill,
+                            )
+
+                            schedule_caller_contact_autofill(
+                                llm=_llm_for_contact,
+                                owner=owner or "",
+                                caller_raw=_cid_fill,
+                                call_id=call_id,
+                                call_summary=_summary,
+                                transcript_excerpt=_excerpt,
+                            )
+                        except Exception as _acf_e:
+                            logger.debug(
+                                "caller_contact_autofill_schedule_failed",
+                                call_id=call_id,
+                                error=str(_acf_e),
+                            )
+                except Exception as _e:
+                    logger.debug("call_record_end_upsert_failed", call_id=call_id, error=str(_e))
+            # 통화 종료 SIP MESSAGE(RCS) 요약 — WS(emit_call_ended) 지연 방지를 위해 백그라운드 태스크
+            rag_llm = getattr(pipeline, "_rag_llm", None)
+            if call_id and rag_llm is not None and hasattr(rag_llm, "send_end_call_summary_sms_async"):
+                async def _pipecat_end_call_sms_bg() -> None:
+                    try:
+                        await asyncio.wait_for(rag_llm.send_end_call_summary_sms_async(), timeout=120.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("pipecat_end_call_sms_timeout", call_id=call_id)
+                    except Exception as _sms_e:
+                        logger.warning(
+                            "pipecat_end_call_sms_failed",
+                            call_id=call_id,
+                            error=str(_sms_e),
+                        )
+
+                try:
+                    asyncio.create_task(_pipecat_end_call_sms_bg())
+                except Exception as _sched_e:
+                    logger.warning(
+                        "pipecat_end_call_sms_task_failed",
+                        call_id=call_id,
+                        error=str(_sched_e),
+                    )
             if call_id and self._on_call_ended:
                 try:
                     if asyncio.iscoroutinefunction(self._on_call_ended):

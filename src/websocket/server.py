@@ -15,14 +15,20 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
+import structlog
+
 logger = logging.getLogger(__name__)
+# app.log(JSON) 상에서 Call Dock·대시보드와 상관 — SIP/WS 교차 점검용
+_sio_structlog = structlog.get_logger(__name__)
 
 # CallManager 참조 (main에서 set_call_manager로 주입)
 _call_manager: Any = None
 # Socket.IO 서버 인스턴스 (start_server() 내에서 설정, emit 시 사용)
 _sio: Any = None
-# Socket.IO / aiohttp가 돌아가는 이벤트 루프 (별도 스레드). SIP/Pipecat 메인 루프와 다름.
+# Socket.IO / aiohttp가 묶인 이벤트 루프 (옵션 A: 메인 루프와 동일. 레거시 스레드 모드에서는 전용 루프).
 _ws_loop: Optional[asyncio.AbstractEventLoop] = None
+_ws_runner: Any = None
+_ws_site: Any = None
 
 WS_PORT = 8001
 CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -135,7 +141,36 @@ def _resolve_hitl_kb_owner(call_id: str, data: dict) -> tuple[str, str]:
     return "", "empty"
 
 
-# ---------- Socket.IO는 WS 전용 스레드 루프에서만 안전하게 emit. SIP/Pipecat 루프에서는 스케줄만 함. ----------
+# ---------- Socket.IO emit: 메인 루프와 동일하면 create_task, 타 스레드면 run_coroutine_threadsafe ----------
+
+
+def _schedule_emit_on_ws_loop(_do_emit_coro: Any) -> None:
+    """_do_emit 코루틴을 Socket.IO 루프에서 실행 (fire-and-forget)."""
+    assert _ws_loop is not None
+
+    def _log_exc(f: asyncio.Future) -> None:
+        try:
+            f.result()
+        except (asyncio.CancelledError, asyncio.InvalidStateError):
+            pass
+        except Exception as e:
+            logger.debug("scheduled_emit_done_failed error=%s", e)
+
+    try:
+        cur = asyncio.get_running_loop()
+    except RuntimeError:
+        cur = None
+
+    if cur is not None and cur is _ws_loop:
+        t = _ws_loop.create_task(_do_emit_coro)
+        t.add_done_callback(_log_exc)
+        return
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_do_emit_coro, _ws_loop)
+        fut.add_done_callback(_log_exc)
+    except Exception as e:
+        logger.debug("run_coroutine_threadsafe_failed error=%s", e)
 
 
 def schedule_socket_emit(event: str, payload: Dict[str, Any], **emit_kwargs: Any) -> None:
@@ -146,7 +181,7 @@ def schedule_socket_emit(event: str, payload: Dict[str, Any], **emit_kwargs: Any
             _stt_emit_skip_logged = True
             logger.warning(
                 "schedule_socket_emit_skipped_ws_not_ready event=%s "
-                "note=WebSocket_스레드_미기동_또는_socketio_미설치로_STT_이벤트_유실",
+                "note=WebSocket_미기동_또는_socketio_미설치로_STT_이벤트_유실",
                 event,
             )
         return
@@ -157,18 +192,7 @@ def schedule_socket_emit(event: str, payload: Dict[str, Any], **emit_kwargs: Any
         except Exception as e:
             logger.debug("schedule_socket_emit_failed event=%s error=%s", event, e)
 
-    try:
-        fut = asyncio.run_coroutine_threadsafe(_do_emit(), _ws_loop)
-
-        def _log_exc(f: asyncio.Future) -> None:
-            try:
-                f.result()
-            except Exception as e:
-                logger.debug("scheduled_emit_done_failed event=%s error=%s", event, e)
-
-        fut.add_done_callback(_log_exc)
-    except Exception as e:
-        logger.debug("run_coroutine_threadsafe_failed event=%s error=%s", event, e)
+    _schedule_emit_on_ws_loop(_do_emit())
 
 
 async def _emit_on_ws_loop(event: str, payload: Dict[str, Any], **emit_kwargs: Any) -> None:
@@ -210,11 +234,32 @@ async def _emit_on_ws_loop(event: str, payload: Dict[str, Any], **emit_kwargs: A
 
 async def emit_call_started(call_id: str, call_data: Dict[str, Any]) -> None:
     """통화 시작 이벤트를 대시보드에 전송."""
+    if not _sio:
+        _sio_structlog.warning(
+            "ws_emit_call_started_skipped_no_sio",
+            call_id=call_id,
+            sip_phase=call_data.get("sip_phase"),
+            note="Socket.IO 미기동 — 브라우저 Dock 수신 불가",
+        )
+    else:
+        _sio_structlog.info(
+            "ws_emit_call_started",
+            call_id=call_id,
+            sip_phase=call_data.get("sip_phase"),
+            is_ai_handled=call_data.get("is_ai_handled"),
+            note="Socket.IO call_started 송신 예약 — 브라우저 수신·Dock은 frontend_client_log(source=call-dock)로 별도 확인",
+        )
     await _emit_on_ws_loop("call_started", {"call_id": call_id, **call_data})
 
 
 async def emit_call_ended(call_id: str) -> None:
     """통화 종료 이벤트를 대시보드에 전송."""
+    if _sio:
+        _sio_structlog.info(
+            "ws_emit_call_ended",
+            call_id=call_id,
+            note="Socket.IO call_ended 송신 예약",
+        )
     await _emit_on_ws_loop("call_ended", {"call_id": call_id})
 
 
@@ -338,6 +383,126 @@ async def emit_hitl_timeout(call_id: str, data: Optional[Dict[str, Any]] = None)
 
 async def emit_knowledge_updated(call_id: str, data: Dict[str, Any]) -> None:
     await _emit_on_ws_loop("knowledge_updated", {"call_id": call_id, **data})
+
+
+# ---------- Ringback Music Events (통화 연결음 생성 알림) ----------
+
+async def emit_ringback_music_ready(
+    owner: str,
+    items: list,
+    task_id: str = "",
+) -> None:
+    """Suno 음원 생성 완료 이벤트 — 전체 브로드캐스트.
+
+    Args:
+        owner: 설정 owner 식별자
+        items: 생성된 음원 목록 (각 항목: id, audio_url, title, duration 등)
+        task_id: Suno task ID
+    """
+    payload = {
+        "owner": owner,
+        "task_id": task_id,
+        "items": items,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    await _emit_on_ws_loop("ringback_music_ready", payload)
+
+
+async def emit_ringback_music_failed(
+    owner: str,
+    task_id: str,
+    error: str = "",
+) -> None:
+    """Suno 음원 생성 실패/타임아웃 이벤트 — 전체 브로드캐스트.
+
+    Args:
+        owner: 설정 owner 식별자
+        task_id: Suno task ID
+        error: 오류 메시지
+    """
+    payload = {
+        "owner": owner,
+        "task_id": task_id,
+        "error": error,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    await _emit_on_ws_loop("ringback_music_failed", payload)
+
+
+# ---------- SIP MESSAGE Events (RFC 3428 — SMS 테스트 대용) ----------
+
+async def emit_sip_message_received(
+    from_uri: str,
+    from_addr: str,
+    body: str,
+    content_type: str = "text/plain",
+    call_id: str = "",
+    to_user: str = "",
+    tenant_owner: str = "",
+    *,
+    thread_peer: str = "",
+    dock_as_outbound: bool = False,
+) -> None:
+    """SIP MESSAGE 수신 이벤트 — 운영자 대시보드 전체에 브로드캐스트.
+
+    Linphone 등 소프트폰이 SIP MESSAGE를 전송했을 때 호출된다.
+    실제 SMS 없이 예약 알림·문자 확인 시나리오를 테스트할 수 있다.
+
+    Args:
+        from_uri: 발신자 SIP username 또는 URI
+        from_addr: 발신자 IP:port
+        body: 메시지 본문 (UTF-8 로깅 가능한 표시용; 서로게이트는 이미 치환된 값 권장)
+        content_type: Content-Type (기본 text/plain)
+        call_id: SIP Call-ID (선택)
+        to_user: Request-URI / To 내선 등 수신 측 피어 (채팅 UI 스레드 매칭용)
+        tenant_owner: 수신함 매핑된 테넌트 owner (프론트 SMS 도크 필터용)
+        thread_peer: SMS 도크 스레드 상대 키(내선 등). 비우면 from_uri 로 스레드 구성(기본).
+        dock_as_outbound: True면 도크에서 발신 줄(나)로 표시 — AI 자동응답 등 PBX 생성 문안용.
+    """
+    payload = {
+        "from_uri": from_uri,
+        "from_addr": from_addr,
+        "body": body,
+        "content_type": content_type,
+        "call_id": call_id,
+        "to_user": to_user or "",
+        "tenant_owner": (tenant_owner or "").strip(),
+        "thread_peer": (thread_peer or "").strip(),
+        "dock_as_outbound": bool(dock_as_outbound),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    await _emit_on_ws_loop("sip_message_received", payload)
+
+
+def schedule_sip_message_sent(
+    *,
+    kind: str,
+    from_user: str = "",
+    to_user: str = "",
+    to_uri: str = "",
+    body: str = "",
+    call_id: str = "",
+    tenant_owner: str = "",
+    ok: bool = True,
+    sip_status: str = "",
+) -> None:
+    """SIP MESSAGE 송신 후 Socket.IO 브로드캐스트 (동기·타 스레드에서 호출 가능)."""
+    b = body or ""
+    if len(b) > 4000:
+        b = b[:3997] + "..."
+    payload = {
+        "kind": kind,
+        "from_user": (from_user or "").strip(),
+        "to_user": (to_user or "").strip(),
+        "to_uri": (to_uri or "").strip(),
+        "body": b,
+        "call_id": call_id or "",
+        "tenant_owner": (tenant_owner or "").strip(),
+        "ok": bool(ok),
+        "sip_status": (sip_status or "").strip(),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    schedule_socket_emit("sip_message_sent", payload)
 
 
 # ---------- Transfer Events (AI Dynamic Call Transfer) ----------
@@ -468,9 +633,29 @@ async def broadcast_global(event: str, data: Dict[str, Any]) -> None:
     await _emit_on_ws_loop(event, data)
 
 
+async def stop_websocket_server() -> None:
+    """aiohttp TCPSite·AppRunner 정리 (옵션 A 종료 시 또는 태스크 cancel 후)."""
+    global _ws_site, _ws_runner, _ws_loop, _sio
+    site, runner = _ws_site, _ws_runner
+    _ws_site = None
+    _ws_runner = None
+    if site is not None:
+        try:
+            await site.stop()
+        except Exception as e:
+            logger.debug("ws_site_stop_failed error=%s", e)
+    if runner is not None:
+        try:
+            await runner.cleanup()
+        except Exception as e:
+            logger.debug("ws_runner_cleanup_failed error=%s", e)
+    _sio = None
+    _ws_loop = None
+
+
 async def start_server() -> None:
     """Socket.IO 서버 기동 (0.0.0.0:8001). tok_* / JWT 모두 허용."""
-    global _sio, _ws_loop
+    global _sio, _ws_loop, _ws_runner, _ws_site
     try:
         import socketio
         from aiohttp import web
@@ -828,6 +1013,58 @@ async def start_server() -> None:
                 "message": f"오류: {str(e)}"
             }
 
+    @sio.event
+    async def dock_transfer_request(sid: str, data: dict) -> dict:
+        """Call Dock transfer — data: { call_id, target_number, owner_cli? }"""
+        call_id = (data or {}).get("call_id")
+        target_number = (data or {}).get("target_number")
+        owner_cli = (data or {}).get("owner_cli") or ""
+        if not call_id or not target_number:
+            return {"success": False, "message": "call_id 및 target_number 필수"}
+        try:
+            from src.call_transfer.manager import initiate_dock_transfer
+
+            ok = await initiate_dock_transfer(
+                call_id=str(call_id).strip(),
+                target_number=str(target_number).strip(),
+                owner_cli=str(owner_cli).strip(),
+            )
+            if ok:
+                return {"success": True, "message": "전환을 시작했습니다."}
+            return {"success": False, "message": "전환 시작 실패(이미 전환 중이거나 SIP 미가용)"}
+        except Exception as e:
+            logger.exception("dock_transfer_error call_id=%s error=%s", call_id, e)
+            return {"success": False, "message": str(e)}
+
+    @sio.event
+    async def dock_hold_request(sid: str, data: dict) -> dict:
+        """Call Dock hold — data: { call_id, enable: bool }"""
+        call_id = (data or {}).get("call_id")
+        enable = bool((data or {}).get("enable"))
+        if not call_id:
+            return {"success": False, "message": "call_id 필수"}
+        try:
+            from src.sip_core.sip_runtime import get_sip_endpoint_global
+
+            ep = get_sip_endpoint_global()
+            if not ep or not hasattr(ep, "set_dock_hold"):
+                return {"success": False, "message": "SIP 엔드포인트 없음"}
+            ok = await ep.set_dock_hold(str(call_id).strip(), enable)
+            if not ok:
+                return {"success": False, "message": "RTP 워커 없음 또는 토글 실패"}
+            await _emit_on_ws_loop(
+                "dock_hold_state",
+                {
+                    "call_id": str(call_id).strip(),
+                    "active": enable,
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                },
+            )
+            return {"success": True, "message": "통화대기 적용됨" if enable else "통화대기 해제됨"}
+        except Exception as e:
+            logger.exception("dock_hold_error call_id=%s error=%s", call_id, e)
+            return {"success": False, "message": str(e)}
+
     # ClientConnectionResetError: 클라이언트가 먼저 연결을 끊은 뒤 서버가 응답을 보내려 할 때
     # 발생하는 무해한 에러다 (브라우저 탭 닫기, 페이지 이동, 네트워크 재연결 등).
     # aiohttp web_protocol.py가 ERROR 레벨로 출력하는 스택트레이스를 logging filter로 억제한다.
@@ -855,11 +1092,40 @@ async def start_server() -> None:
         app,
         handle_signals=False,
     )
+    _ws_runner = runner
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WS_PORT)
+    _ws_site = site
     await site.start()
 
     logger.info("WebSocket server started on ws://0.0.0.0:%s", WS_PORT)
 
-    while True:
-        await asyncio.sleep(3600)
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        logger.info("websocket_server_task_cancelled")
+        raise
+    finally:
+        # aiohttp AppRunner.cleanup() 이 환경에 따라 길어질 수 있어 상한을 두고
+        # 메인 프로세스가 uvicorn 종료 메시지 이후 무한 대기하지 않도록 한다.
+        logger.info(
+            "websocket_runner_cleanup_begin",
+            message="TCPSite/AppRunner 정리 시작 — graceful shutdown 구간",
+        )
+        _cleanup_sec_raw = (os.environ.get("WS_RUNNER_CLEANUP_TIMEOUT_SEC") or "25").strip()
+        try:
+            _cleanup_sec = float(max(3.0, min(120.0, float(_cleanup_sec_raw))))
+        except ValueError:
+            _cleanup_sec = 25.0
+        try:
+            await asyncio.wait_for(stop_websocket_server(), timeout=_cleanup_sec)
+            logger.info("websocket_runner_cleanup_done", timeout_sec=_cleanup_sec)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "websocket_runner_cleanup_timeout",
+                timeout_sec=_cleanup_sec,
+                message="aiohttp TCPSite/AppRunner 정리 시간 초과 — 상위 shutdown에서 추가 대기 가능",
+            )
+        except Exception as _e:
+            logger.warning("websocket_runner_cleanup_error error=%s", _e)

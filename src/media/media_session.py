@@ -66,6 +66,10 @@ class MediaSession:
     B2BUA 전체 미디어 세션 (caller ↔ B2BUA ↔ callee)
     """
     call_id: str
+
+    # SIP에서 파싱한 발·착신 식별자 (통화이력·DB·Pipecat call_records 용; RTP 레그와 별개)
+    caller_identity: str = ""
+    callee_identity: str = ""
     
     # 양쪽 미디어 Leg
     caller_leg: MediaLeg = field(default_factory=MediaLeg)

@@ -294,6 +294,7 @@ def flush_call_insights_to_dir(
         for r in unhandled
     ]
 
+    unhandled_count = len(public_items)
     payload = {
         "call_id": call_id,
         "callee_summary": summary,
@@ -302,9 +303,10 @@ def flush_call_insights_to_dir(
         "call_summary_source": None,
         "call_summary_generated_at": None,
         "ai_unhandled_items": public_items,
-        "ai_unhandled_count": len(public_items),
+        "ai_unhandled_count": unhandled_count,
         "ai_unhandled_total_recorded": len(rows),
         "ai_unhandled_resolved_by_hitl_count": sum(1 for r in rows if r.get("resolved_by_hitl")),
+        "is_unresolved": unhandled_count > 0,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 

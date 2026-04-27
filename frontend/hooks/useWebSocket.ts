@@ -1,13 +1,16 @@
+'use client';
+
 /**
  * WebSocket Hook
  * 
  * React 컴포넌트에서 WebSocket을 쉽게 사용하기 위한 Hook
  */
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { wsClient } from '@/lib/websocket';
 
 /** 사용 가능한 토큰인지 검사. JWT 또는 백엔드 발급 토큰(tok_*) 허용 */
-function isAcceptableToken(token: string | null): boolean {
+export function isAcceptableWebSocketToken(token: string | null): boolean {
   if (!token || typeof token !== 'string') return false;
   const t = token.trim();
   if (!t) return false;
@@ -19,16 +22,28 @@ function isAcceptableToken(token: string | null): boolean {
   return false;
 }
 
+/** 브라우저에서 WS connect에 쓸 수 있는 토큰만 반환 (없으면 null) */
+export function readAcceptableWebSocketToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+  if (!token || !isAcceptableWebSocketToken(token)) return null;
+  return token.trim();
+}
+
 export function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
+  /** /login → /dashboard 등 라우트 전환 후에도 토큰 저장 뒤 connect 되도록 재평가 */
+  const pathname = usePathname();
 
   useEffect(() => {
     const token = localStorage.getItem('access_token') || localStorage.getItem('token');
-    if (!token || !isAcceptableToken(token)) {
+    if (!token || !isAcceptableWebSocketToken(token)) {
       if (token) {
         localStorage.removeItem('access_token');
         localStorage.removeItem('token');
       }
+      wsClient.disconnect();
+      setIsConnected(false);
       return;
     }
     if (!wsClient.isConnected()) {
@@ -46,11 +61,11 @@ export function useWebSocket() {
       unsubscribe();
       clearInterval(interval);
     };
-  }, []);
+  }, [pathname]);
 
   const reconnect = () => {
     const token = localStorage.getItem('access_token') || localStorage.getItem('token');
-    if (!token || !isAcceptableToken(token)) return;
+    if (!token || !isAcceptableWebSocketToken(token)) return;
     wsClient.disconnect();
     wsClient.connect(token);
     setIsConnected(wsClient.isConnected());

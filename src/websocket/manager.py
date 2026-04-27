@@ -14,6 +14,8 @@ from .server import (
     emit_transfer_ringing,
     emit_transfer_success,
     emit_transfer_failed,
+    emit_ringback_music_ready,
+    emit_ringback_music_failed,
     broadcast_to_call,
     broadcast_to_operators,
     broadcast_global
@@ -34,6 +36,8 @@ __all__ = [
     'emit_transfer_ringing',
     'emit_transfer_success',
     'emit_transfer_failed',
+    'emit_ringback_music_ready',
+    'emit_ringback_music_failed',
     'broadcast_to_call',
     'broadcast_to_operators',
     'broadcast_global'

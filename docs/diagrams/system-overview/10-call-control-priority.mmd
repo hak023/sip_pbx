@@ -1,0 +1,6 @@
+%% 4.10 착신 제어 — 평가 순서 (요지)
+flowchart TD
+  INV[INVITE 수신] --> CF[발신자 필터 VIP/차단]
+  CF --> SCH[스케줄 + 라우팅 규칙]
+  SCH --> OP[operator_status 폴백]
+  OP --> ACT[동작: direct / no_answer_ai / immediate_ai / forward / ring_group]

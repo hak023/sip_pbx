@@ -1,0 +1,12 @@
+%% 4.5 지식 베이스 흐름
+flowchart LR
+  subgraph kb [지식]
+    RAG[Vector search RAG]
+    PC2[Persona]
+    QC[qa_cache]
+  end
+  U2[User] --> CL[classify]
+  CL --> RAG
+  CL --> PC2
+  CL --> QC
+  RAG --> ANS[응답 or HITL/Transfer]

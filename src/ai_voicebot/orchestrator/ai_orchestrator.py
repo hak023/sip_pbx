@@ -925,13 +925,26 @@ should_end_call: 고객이 통화를 원하지 않거나 바쁘다고 하면 tru
                     f"{'AI' if t.speaker == 'ai' else '고객'}: {t.text}"
                     for t in self._outbound_transcript
                 )
-                summary_prompt = f"다음 통화 내용을 2-3문장으로 요약해주세요:\n\n{transcript_text}"
+                summary_prompt = (
+                    "다음 통화 내용의 핵심만 **한 문장**으로 요약하세요.\n"
+                    "- 공백 포함 **최대 60자** 이내\n"
+                    "- 줄바꿈 금지, 마침표로 끝내기\n"
+                    "- 설명·머리말 없이 요약 문장만 출력\n\n"
+                    f"{transcript_text}"
+                )
                 summary = await self.llm.generate_response(
                     user_text=summary_prompt,
                     context_docs=[],
                     call_id=self.call_id,
-                    system_prompt="통화 내용을 간결하게 요약하세요.",
+                    system_prompt=(
+                        "아웃바운드 통화 종료 요약 전용입니다. "
+                        "반드시 한 문장, 공백 포함 60자 이하의 한국어만 출력하세요."
+                    ),
                 )
+                _s = " ".join((summary or "").replace("\n", " ").split()).strip()
+                if len(_s) > 60:
+                    _s = _s[:59].rstrip() + "…"
+                summary = _s
             except Exception as e:
                 logger.warning("outbound_summary_error", error=str(e))
                 summary = "요약 생성 실패"
@@ -1081,10 +1094,74 @@ should_end_call: 고객이 통화를 원하지 않거나 바쁘다고 하면 tru
                        call_id=self.call_id,
                        total_turns=self.total_turns,
                        duration=self.conversation.get_duration_seconds() if self.conversation else 0)
-            
+
+            # ── 통화 종료 후 AI SMS 발송 (KB 인사말 + 응대 요약 + 예약 변경 내역) ──
+            asyncio.create_task(self._send_end_call_sms())
+
+            # 발신자 연락처 자동 생성 (Pipecat과 동일 서비스, legacy 경로)
+            if self.llm and self.call_id and (self.callee or "").strip() and (self.caller or "").strip():
+                excerpt_parts: list[str] = []
+                if self.conversation:
+                    for m in self.conversation.messages[-16:]:
+                        c = (getattr(m, "content", None) or "").strip()
+                        if c:
+                            excerpt_parts.append(f"{getattr(m, 'role', '?')}: {c[:600]}")
+                excerpt = "\n".join(excerpt_parts)[:4000]
+                try:
+                    from src.services.caller_contact_autofill import schedule_caller_contact_autofill
+
+                    schedule_caller_contact_autofill(
+                        llm=self.llm,
+                        owner=self.callee or "",
+                        caller_raw=self.caller or "",
+                        call_id=self.call_id or "",
+                        call_summary=None,
+                        transcript_excerpt=excerpt,
+                    )
+                except Exception as _acf_e:
+                    logger.debug(
+                        "legacy_caller_contact_autofill_schedule_failed",
+                        call_id=self.call_id,
+                        error=str(_acf_e),
+                    )
+
         except Exception as e:
             logger.error("End call error", error=str(e), exc_info=True)
     
+    async def _send_end_call_sms(self) -> None:
+        """통화 종료 후 SIP MESSAGE(RCS) 요약 발송 — 공통 서비스 위임."""
+        try:
+            if not self.caller:
+                logger.debug("end_call_sms_skip_no_caller", call_id=self.call_id)
+                return
+            if self.total_turns == 0:
+                logger.debug("end_call_sms_skip_no_turns", call_id=self.call_id)
+                return
+
+            ai_responses: list[str] = []
+            if self.conversation:
+                for m in self.conversation.messages:
+                    if m.role == "assistant" and m.content:
+                        ai_responses.append(m.content)
+
+            langgraph_state = getattr(self, "_langgraph_state", None)
+            booking_ctx = None
+            if langgraph_state and isinstance(langgraph_state, dict):
+                booking_ctx = langgraph_state.get("booking_context")
+
+            from src.services.end_call_sms_service import send_end_call_summary_sms
+
+            await send_end_call_summary_sms(
+                call_id=self.call_id or "",
+                caller=self.caller,
+                owner=self.callee or "",
+                llm_client=self.llm,
+                assistant_snippets=ai_responses,
+                booking_context=booking_ctx if isinstance(booking_ctx, dict) else None,
+            )
+        except Exception as e:
+            logger.warning("end_call_sms_error", call_id=self.call_id, error=str(e), exc_info=True)
+
     def _build_transcript(self) -> str:
         """대화 전사 텍스트 생성"""
         if not self.conversation:

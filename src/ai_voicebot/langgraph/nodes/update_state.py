@@ -10,6 +10,7 @@ Business State Update 노드.
 import time
 import structlog
 from src.ai_voicebot.langgraph.state import ConversationState
+from src.ai_voicebot.langgraph.call_context import get_org_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -146,7 +147,7 @@ async def update_state_node(state: ConversationState) -> dict:
     # farewell(감사합니다, 끊을게 등) 시 마무리 멘트를 TTS로 재생하도록 response 설정
     if intent == "farewell":
         closing = DEFAULT_CLOSING_MESSAGE
-        org_manager = state.get("_org_manager")
+        org_manager = get_org_manager()
         if org_manager and hasattr(org_manager, "get_random_closing_template"):
             try:
                 closing = org_manager.get_random_closing_template() or closing

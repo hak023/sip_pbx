@@ -15,9 +15,10 @@ router = APIRouter(prefix="/operator", tags=["operator"])
 
 
 class OperatorStatusUpdate(BaseModel):
-    available: bool = Field(..., description="True=응대 가능, False=자리 비움(AI 우선)")
+    available: bool | None = Field(None, description="True=응대 가능, False=자리 비움(AI 우선). None이면 변경 안 함.")
     tenant_id: str = Field(..., min_length=1, description="내선/테넌트 owner")
     away_message: str | None = Field(None, description="자리 비움 시 안내 메시지 (선택)")
+    ai_fallback_mode: str | None = Field(None, description="hitl | transfer — AI 모를 때 처리 방식")
 
 
 @router.get("/status")
@@ -34,6 +35,7 @@ def get_operator_status(
         "available": available,
         "status": info["status"],
         "status_changed_at": info.get("status_changed_at"),
+        "ai_fallback_mode": info.get("ai_fallback_mode", "hitl"),
     }
 
 
@@ -43,14 +45,24 @@ def post_operator_status(body: OperatorStatusUpdate) -> dict:
     if not uid:
         raise HTTPException(status_code=422, detail="tenant_id는 빈 문자열일 수 없습니다.")
     mgr = get_operator_status_manager()
-    if body.available:
-        mgr.set_status(uid, OperatorStatus.AVAILABLE)
-    else:
-        mgr.set_status(uid, OperatorStatus.AWAY, away_message=body.away_message)
+
+    # 응대 가능/자리 비움 변경 (None이면 유지)
+    if body.available is not None:
+        if body.available:
+            mgr.set_status(uid, OperatorStatus.AVAILABLE)
+        else:
+            mgr.set_status(uid, OperatorStatus.AWAY, away_message=body.away_message)
+
+    # ai_fallback_mode 저장 (hitl | transfer)
+    if body.ai_fallback_mode in ("hitl", "transfer"):
+        mgr.set_fallback_mode(uid, body.ai_fallback_mode)
+
     info = mgr.get_status_info(uid)
+    available = info["status"] != OperatorStatus.AWAY.value
     return {
         "success": True,
-        "available": body.available,
+        "available": available,
         "status": info["status"],
         "status_changed_at": info.get("status_changed_at"),
+        "ai_fallback_mode": info.get("ai_fallback_mode", "hitl"),
     }

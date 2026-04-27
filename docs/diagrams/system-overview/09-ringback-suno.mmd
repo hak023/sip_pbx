@@ -1,0 +1,8 @@
+%% 4.9 통화 연결음 — LLM + Suno + early RTP
+flowchart LR
+  SET[settings / persona] --> LLM[LLM: lyrics + style]
+  LLM --> SUNO[Suno generate]
+  SUNO -->|callback| API[POST /api/ringback/...]
+  API --> MP3[cache MP3]
+  MP3 --> PL[RingbackPlayer]
+  PL --> RTP[early RTP]

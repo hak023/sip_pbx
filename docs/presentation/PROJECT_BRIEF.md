@@ -1,8 +1,8 @@
 # Project Brief: Agentic AI CallBot — 자율 학습형 AI 컨택센터 솔루션
 
 **작성일**: 2026-03-30  
-**최종 수정**: 2026-04-03  
-**버전**: 1.11  
+**최종 수정**: 2026-04-08  
+**버전**: 1.12  
 **상태**: 발표용 소개 문서
 
 ---
@@ -208,11 +208,13 @@ flowchart TB
         B2BUA["SIP B2BUA\n(통화 제어)"]
         AI["AI 파이프라인\n(Pipecat + LangGraph)"]
         DB["ChromaDB\n(지식DB)"]
+        SQLite["SQLite\n(예약DB)"]
         API["API & WebSocket\nREST :8000 / Socket.IO :8001"]
         Dashboard["운영자 대시보드\n(Next.js 14) :3000"]
 
         B2BUA <--> AI
         AI <--> DB
+        AI <--> SQLite
         B2BUA --> API
         AI --> API
         API --> Dashboard
@@ -872,7 +874,7 @@ persona_1004                    persona_1005
 
 ---
 
-#### 17가지 의도 분류 체계
+#### 18가지 의도 분류 체계
 
 > **LLM 호출 횟수 기준**: classify_intent 단계의 LLM 병합 호출(intent+rewrite 동시 생성)은 각 행에 포함.
 > rewrite_query는 정상 경로에서 스킵되며, 짧은 발화(<5단어) 또는 대명사 포함 시에만 추가 1회 발생.
@@ -890,6 +892,7 @@ persona_1004                    persona_1005
 | **지식 검색** | `question` | check_cache → adaptive_rag → generate | 1~3회 ※ | ~0.1~3초 | 조건부 |
 | **지식 검색** | `complaint` | adaptive_rag → generate | 2회 (classify+generate) | ~2.5초 | ✅ (conf<0.5) |
 | **지식 검색** | `help` | check_cache(hit→즉시) / help_response(miss→RAG+LLM) | 캐시 히트: 1회 / 미스: 2회 † | ~0.1초 / ~2초 | ✗ |
+| **예약 처리** | `booking` | booking_agent (LLM + Tool Use loop) | 0회(키워드 조기 분류) 또는 1+N회 ‡ | ~0.002~5초 | ✗ |
 | **특수 처리** | `transfer` | adaptive_rag → generate | 2회 (classify+generate) | ~2.5초 | ✅ 즉시 |
 | **폴백** | `nlu_fallback` | fallback_response | 0회 | ~0.001초 | ✅ |
 
@@ -903,6 +906,12 @@ persona_1004                    persona_1005
 > - **캐시 히트 (1회)**: 서버 기동 시 자동 구성된 qa_cache(intent=help, 최대 5개)와 발화 유사도 ≥ 0.85 → classify 1회만 호출 후 즉시 반환 (~0.1초)
 >   - 캐시 구성 방법: ① `help` 카테고리 직접 입력 멘트 우선 / ② 없으면 `question`(질의·FAQ) 목록에서 서버 기동 시 LLM 자동 추출
 > - **캐시 미스 (2회)**: help 캐시가 없거나 유사도 미달 → help_response 노드로 폴백하여 RAG+LLM 응답 생성 (classify 1회 + generate 1회, ~2초)
+>
+> ‡ booking 경로 LLM 호출 상세:
+> - **0회 (키워드 조기 분류)**: "예약", "예약 취소", "예약 가능" 등 `_BOOKING_KEYWORDS` 매칭 시 LLM 없이 즉시 `booking_agent`로 라우팅 (~2ms)
+> - **1+N회 (LLM + Tool Use loop)**: 키워드 미매칭 시 classify LLM 1회 + booking_agent 내 LLM-tool 루프 최대 `_MAX_TOOL_ROUNDS`회
+>   - `check_available_slots`, `create_booking_tool`, `cancel_booking_tool`, `get_booking_info`, `get_booking_settings` 등 5개 Tool을 LLM이 필요에 따라 순차 호출
+>   - 슬롯 확인 → 예약 생성 → 확인 메시지 전달 등 복수 Tool 호출이 자동으로 이루어짐 (Progressive Slot Filling)
 
 ---
 
@@ -2092,6 +2101,138 @@ STT 서비스 장애 시에도 대화가 끊기지 않도록 합니다.
 
 ---
 
+## 5.10 📅 범용 AI 예약 시스템
+
+**무엇을 해결하나**: 전화 한 통으로 예약·변경·취소까지 — 특정 도메인에 종속되지 않는 범용 예약 처리 자동화
+
+---
+
+### 설계 원칙
+
+AI Voicebot의 예약 시스템은 **도메인 독립(Domain-Agnostic)** 구조로 설계되었습니다.
+레스토랑·병원·미용실·상담소 등 어떤 업종이든, 프런트엔드 설정 페이지에서 옵션만 지정하면 AI가 해당 도메인에 맞는 방식으로 예약 대화를 처리합니다.
+
+---
+
+### 핵심 구성 요소
+
+#### ① SQLite 예약 데이터베이스 (4개 테이블)
+
+```
+booking_settings     — 테넌트별 도메인 설정 (도메인 유형, 슬롯 길이, 확인 메시지 템플릿 등)
+booking_slots        — 예약 가능 슬롯 (날짜·시간·용량·차단 여부)
+bookings             — 예약 내역 (고객 정보, 슬롯 ID, 상태, 추가 데이터 JSON)
+booking_schema_fields — 도메인 맞춤 추가 수집 필드 정의 (레스토랑의 "알레르기 정보" 등)
+```
+
+- `bookings` 생성 시 `BEGIN IMMEDIATE` 트랜잭션으로 **낙관적 잠금(Optimistic Locking)** 적용 → 동시 예약 시 슬롯 초과 방지
+- `owner`(SIP 내선번호) 기준 **테넌트별 완전 격리**
+
+---
+
+#### ② FastAPI REST API (14개 엔드포인트)
+
+```
+GET/POST   /api/booking/slots           — 슬롯 목록 조회 / 생성
+PUT/DELETE /api/booking/slots/{id}      — 슬롯 수정 / 삭제
+GET/POST   /api/booking                 — 예약 목록 조회 / 생성
+GET/PUT    /api/booking/{id}            — 예약 상세 / 수정
+DELETE     /api/booking/{id}            — 예약 취소 (booked_count 자동 감소)
+GET/PUT    /api/booking/settings/{owner} — 도메인 설정 조회 / 저장
+GET/POST   /api/booking/fields/{owner}  — 추가 필드 목록 / 생성
+PUT/DELETE /api/booking/fields/{owner}/{id} — 추가 필드 수정 / 삭제
+```
+
+---
+
+#### ③ LangGraph Tool Use — AI가 직접 예약 API를 호출
+
+고객이 "내일 오후 2시에 2명 예약해줘" 라고 말하면, AI는 다음 Tool들을 순차적으로 호출합니다.
+
+```
+고객 발화 → [0차 키워드 분류: "예약" → booking intent, ~2ms]
+          → booking_agent_node 진입
+                │
+                ▼
+          LLM + bind_tools(BOOKING_TOOLS)
+                │
+    ┌───────────┼────────────────────────────┐
+    │           │                            │
+    ▼           ▼                            ▼
+get_booking_  check_available_  create_booking_tool
+settings      slots             (BEGIN IMMEDIATE TX)
+(도메인 설정)  (가용 슬롯 목록)  → booked_count++
+    │                            → 확인 메시지 반환
+    └──────── LLM 응답 생성 ───────────────────┘
+                │
+                ▼
+          고객에게 TTS 확인 안내
+```
+
+- **LLM에서 직접 Python 함수 호출** (HTTP 오버헤드 없음, 동일 프로세스 내 실행)
+- **Progressive Slot Filling**: 날짜·시간·인원 정보가 부족하면 LLM이 자연스럽게 추가 질문하며 정보를 채워나감
+- `owner`는 LLM 호출 시 자동 주입 (테넌트 격리 보장)
+
+**5가지 Booking Tool**:
+
+| Tool | 설명 |
+|---|---|
+| `check_available_slots` | 날짜·인원 기준 가용 슬롯 조회 |
+| `get_booking_info` | 예약 ID로 상세 정보 조회 |
+| `create_booking_tool` | 예약 생성 + 확인 메시지 반환 |
+| `cancel_booking_tool` | 예약 취소 (상태 변경 + 슬롯 복원) |
+| `get_booking_settings` | 도메인 설정 조회 (LLM 응답 톤 맞춤) |
+
+---
+
+#### ④ Next.js 예약 관리 UI (3개 페이지)
+
+```
+/booking          — 예약 목록 (날짜·상태·전화번호 필터, 상태 변경 액션)
+/booking/slots    — 슬롯 관리 (날짜별 그룹, 용량 진행률 표시, 차단/해제, 신규 추가)
+/booking/settings — 도메인 설정 (서비스 유형, 슬롯 길이, 확인 메시지 템플릿)
+                  + 추가 수집 필드 CRUD (도메인 맞춤 필드 정의)
+```
+
+---
+
+### 도메인 범용성 — 설정만으로 다양한 업종 지원
+
+| 도메인 | domain_type 설정 | 추가 수집 필드 예시 |
+|---|---|---|
+| 레스토랑 | restaurant | 알레르기 정보, 특별 요청사항 |
+| 병원·클리닉 | clinic | 진료과, 증상 설명 |
+| 미용실·뷰티 | beauty | 시술 종류, 담당 직원 선택 |
+| 상담소·교습소 | consultation | 상담 목적, 경력 수준 |
+
+**슬롯 관리 예시 (레스토랑)**:
+
+```
+고객: "이번 주 토요일 저녁에 4명 자리 있나요?"
+AI:   [check_available_slots(owner, "2026-04-11", party_size=4)]
+      → 슬롯 2개 확인: 18:00(잔여 2자리), 19:00(잔여 6자리)
+      "토요일 저녁은 오후 6시와 7시 자리가 있습니다. 어느 시간이 좋으세요?"
+
+고객: "7시로 해주세요"
+AI:   [create_booking_tool(owner, "2026-04-11", "19:00", party_size=4, ...)]
+      → 예약 생성 완료 (booking_id: BK-xxxx)
+      "토요일 오후 7시, 4분 예약이 완료되었습니다. 예약 번호는 BK-xxxx입니다."
+```
+
+---
+
+### 기대 효과
+
+| 항목 | 기존 방식 | 이 시스템 |
+|---|---|---|
+| 예약 접수 | 전화 응대 직원 필요 | AI가 24시간 자동 처리 |
+| 도메인 적용 | 업종별 별도 개발 | 설정 페이지에서 옵션 조정만으로 전환 |
+| 슬롯 관리 | 수기 또는 별도 솔루션 | 웹 대시보드에서 통합 관리 |
+| 동시 예약 | 초과 예약 위험 | 낙관적 잠금으로 슬롯 초과 방지 |
+| 예약 확인 | 별도 SMS/이메일 | 통화 중 AI가 즉시 음성 확인 안내 |
+
+---
+
 ## 6. Active RAG 자율 학습 사이클 — 선순환 구조
 
 이 시스템의 핵심 차별점은 **사용할수록 좋아지는 구조**입니다.
@@ -2424,8 +2565,9 @@ AI 봇 자동 발신 → 상대방 응답
 - **언어**: Python 3.11+, FastAPI, asyncio
 - **SIP/RTP**: 순수 Python B2BUA (표준 SIP 완전 구현)
 - **AI 파이프라인**: Pipecat (실시간 음성 처리 프레임워크)
-- **대화 그래프**: LangGraph (StateGraph 기반 의도 라우팅)
+- **대화 그래프**: LangGraph (StateGraph 기반 의도 라우팅) + LangChain Tool Use
 - **벡터 DB**: ChromaDB + Sentence Transformers (all-MiniLM-L6-v2, 384차원)
+- **관계형 DB**: SQLite (예약 시스템 전용, `data/booking.db`)
 - **AI 서비스**: Google Cloud STT/TTS, Google Gemini 2.5 Flash
 
 ### Frontend
@@ -2469,6 +2611,7 @@ AI 봇 자동 발신 → 상대방 응답
 - ✅ 아웃바운드 STT 에코 억제 (TTS 재생 중 VAD 입력 차단)
 - ✅ 아웃바운드 통화 녹음 저장 (BYE 경로별 stop_recording 처리)
 - ✅ 통화이력 방향(인바운드/아웃바운드) 자동 구분 및 필터링
+- ✅ **범용 AI 예약 시스템** (SQLite + FastAPI REST API + LangGraph Tool Use + Next.js 관리 UI)
 
 ### 중기 (로드맵)
 - 아웃바운드 미션 결과 자동 리포팅 (수집된 답변 요약 대시보드)
@@ -2493,8 +2636,9 @@ AI 봇 자동 발신 → 상대방 응답
 |---|---|
 | [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) | 전체 시스템 기술 상세 |
 | [AI_VOICEBOT_ARCHITECTURE.md](../design/AI_VOICEBOT_ARCHITECTURE.md) | AI 파이프라인 아키텍처 |
-| [INTENT_HANDLING_DESIGN.md](../design/INTENT_HANDLING_DESIGN.md) | 17개 의도 처리 설계 |
+| [INTENT_HANDLING_DESIGN.md](../design/INTENT_HANDLING_DESIGN.md) | 18개 의도 처리 설계 |
 | [TTS_RTP_AND_STT_QUEUE_DESIGN.md](../design/TTS_RTP_AND_STT_QUEUE_DESIGN.md) | 실시간 음성 처리 설계 |
+| [reports/2026-04/2026-04-08_1450_AI_VOICEBOT_BOOKING_SYSTEM_DESIGN.md](../reports/2026-04/2026-04-08_1450_AI_VOICEBOT_BOOKING_SYSTEM_DESIGN.md) | AI 예약 시스템 상세 설계 |
 | [QUICK_START.md](../QUICK_START.md) | 빠른 시작 가이드 |
 
 ---

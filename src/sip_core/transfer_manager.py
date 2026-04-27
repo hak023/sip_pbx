@@ -9,7 +9,7 @@ B2BUA 기반 제3자 호 제어 (RFC 3725 3pcc 패턴).
 import asyncio
 import time
 from datetime import datetime
-from typing import Dict, Optional, Tuple, Any, Callable
+from typing import Awaitable, Dict, Optional, Tuple, Any, Callable
 from uuid import uuid4
 
 from src.sip_core.models.enums import TransferState
@@ -55,6 +55,9 @@ class TransferManager:
         
         # WebSocket 이벤트 발행 콜백
         self._emit_event_cb: Optional[Callable] = None
+
+        # Call Dock: 새 INVITE 전 기존 착신(인간/AI) 레그 정리
+        self._preclear_callee_cb: Optional[Callable[[str], Awaitable[None]]] = None
         
         # 설정값
         self.ring_timeout = config.get('ring_timeout', 30)
@@ -91,6 +94,7 @@ class TransferManager:
         resume_ai: Callable = None,
         speak_to_caller: Callable = None,
         emit_event: Callable = None,
+        preclear_callee: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
         """SIP/RTP/AI 콜백 함수 설정"""
         if send_invite:
@@ -109,10 +113,46 @@ class TransferManager:
             self._speak_to_caller_cb = speak_to_caller
         if emit_event:
             self._emit_event_cb = emit_event
+        if preclear_callee:
+            self._preclear_callee_cb = preclear_callee
     
     # =========================================================================
     # 전환 시작
     # =========================================================================
+
+    async def initiate_dock_transfer(
+        self,
+        call_id: str,
+        target_number: str,
+        owner_cli: str,
+    ) -> Optional[TransferRecord]:
+        """Call Dock 「돌려주기」: 착신 레그 정리 후 owner CLI로 전환 INVITE."""
+        if self._preclear_callee_cb:
+            try:
+                await self._preclear_callee_cb(call_id)
+            except Exception as e:
+                logger.error(
+                    "dock_transfer_preclear_failed",
+                    call_id=call_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+                return None
+        owner_f = (owner_cli or "").strip()
+        tgt = (target_number or "").strip()
+        if not tgt:
+            logger.warning("dock_transfer_empty_target", call_id=call_id)
+            return None
+        return await self.initiate_transfer(
+            call_id=call_id,
+            transfer_to=tgt,
+            department_name="Dock",
+            phone_display=tgt,
+            user_request_text="dock_transfer",
+            caller_uri="",
+            caller_display=owner_f,
+            skip_announcement=True,
+        )
     
     async def initiate_transfer(
         self,
@@ -123,6 +163,8 @@ class TransferManager:
         user_request_text: str,
         caller_uri: str = "",
         caller_display: str = "",
+        *,
+        skip_announcement: bool = False,
     ) -> Optional[TransferRecord]:
         """호 전환 시작
         
@@ -156,6 +198,7 @@ class TransferManager:
             caller_display=caller_display,
             state=TransferState.ANNOUNCE,
             user_request_text=user_request_text,
+            skip_announcement=bool(skip_announcement),
         )
         
         self.active_transfers[call_id] = record
@@ -174,7 +217,9 @@ class TransferManager:
         announcement = self._build_announcement(department_name, phone_display)
         
         # 안내 멘트 재생 (비동기)
-        if self._speak_to_caller_cb:
+        if record.skip_announcement:
+            await self._send_transfer_invite(call_id, record)
+        elif self._speak_to_caller_cb:
             asyncio.create_task(
                 self._speak_and_invite(call_id, record, announcement)
             )
@@ -232,8 +277,8 @@ class TransferManager:
                         transfer_leg=record.transfer_leg_call_id,
                         transfer_to=record.transfer_to)
             
-            # 대기 안내
-            if self._speak_to_caller_cb:
+            # 대기 안내 (Dock 즉시 전환은 생략)
+            if self._speak_to_caller_cb and not record.skip_announcement:
                 asyncio.create_task(
                     self._speak_to_caller_cb(call_id, self.waiting_message, allow_barge_in=True)
                 )

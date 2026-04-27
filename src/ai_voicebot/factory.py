@@ -380,23 +380,22 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         llm_import_elapsed = time.time() - llm_start
         logger.info(f"🔧 [FACTORY] LLM import: {llm_import_elapsed:.3f}s")
         
-        gemini_config = google_config.get("gemini", {})
-        
-        # Gemini API 키 확인 (우선순위: config.yaml > 환경 변수)
-        api_key = (
-            gemini_config.get("api_key") or  # 1순위: config.yaml
-            os.getenv("GEMINI_API_KEY") or    # 2순위: GEMINI_API_KEY 환경 변수
-            os.getenv("GOOGLE_API_KEY")       # 3순위: GOOGLE_API_KEY 환경 변수
-        )
-        
+        _gemini_raw = google_config.get("gemini") or {}
+        gemini_config = dict(_gemini_raw) if isinstance(_gemini_raw, dict) else {}
+        # 파일 기반 키는 사용하지 않음 — 환경 변수만 (링백·지식 추출과 동일)
+        gemini_config.pop("api_key", None)
+
+        from src.common.gemini_api_key import resolve_gemini_api_key
+
+        api_key = resolve_gemini_api_key()
+
         if not api_key:
             logger.error("Gemini API key not found")
-            logger.info("Please set api_key in config.yaml or GEMINI_API_KEY environment variable")
+            logger.info("Set GEMINI_API_KEY or GOOGLE_API_KEY in the environment (not in config.yaml)")
             return None
-        
-        # API 키 일부 마스킹하여 로깅
+
         masked_key = f"{api_key[:10]}...{api_key[-4:]}" if len(api_key) > 14 else "***"
-        logger.debug("gemini_api_key_loaded", source="config" if gemini_config.get("api_key") else "env", key=masked_key)
+        logger.debug("gemini_api_key_loaded", source="env", key=masked_key)
         
         llm = LLMClient(gemini_config, api_key)
         llm_elapsed = time.time() - llm_start
@@ -626,8 +625,9 @@ async def create_pipecat_pipeline_builder(config: Dict[str, Any]) -> Optional[An
         import time
         graph_start = time.time()
         try:
-            from src.ai_voicebot.langgraph.agent import build_conversation_graph
-            graph = build_conversation_graph()
+            from src.ai_voicebot.langgraph.agent import get_or_build_compiled_graph_async
+
+            graph = await get_or_build_compiled_graph_async()
             graph_elapsed = time.time() - graph_start
             if graph:
                 logger.info("✅ [Pipecat] LangGraph pre-compiled",

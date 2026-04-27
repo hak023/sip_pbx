@@ -116,7 +116,7 @@ class ExtractionPipeline:
         # 스텝 설정
         steps = self.config.get("steps", {})
         self.enable_summarize = steps.get("summarize", True)
-        self.enable_qa_extract = steps.get("qa_extract", True)
+        self.enable_qa_extract = steps.get("qa_extract", False)  # 기본 비활성: judge_usefulness Q&A 통합 추출로 일원화
         self.enable_entity_extract = steps.get("entity_extract", True)
 
         # 품질 설정
@@ -292,7 +292,7 @@ class ExtractionPipeline:
                         entity_speaker=ent.get("speaker", ""),
                     ))
 
-            # Step 2-4: 지식 정제 — 설계서: 맥락 위해 전체 전사 전달, 저장은 착신자 발화만 (extracted_info는 복수 건 지원)
+            # Step 2-4: 지식 정제 — Q&A 쌍 통합 추출: 질문자 화자 무관하게 답변 포함 Q&A 단위 추출 (extracted_info는 복수 건 지원)
             judgment = await self.llm.judge_usefulness(full_transcript, speaker, call_id=call_id)
             extracted_list = judgment.get("extracted_info") or []
             log_call_data(
@@ -374,6 +374,22 @@ class ExtractionPipeline:
                             reason=halluc.details,
                             syntactic_score=halluc.syntactic_score,
                             semantic_score=halluc.semantic_score,
+                        )
+                        log_call_data(
+                            call_id,
+                            "knowledge",
+                            "knowledge_hallucination_reject",
+                            owner_id=owner_id,
+                            doc_type=item.doc_type,
+                            item_category=item.category,  # "category"는 log_call_data 위치 인자와 충돌
+                            failed_at=halluc.failed_at,
+                            syntactic_score=round(halluc.syntactic_score, 4),
+                            semantic_score=round(halluc.semantic_score, 4),
+                            entailment_result=halluc.entailment_result,
+                            reason=(halluc.details or "")[:800],
+                            text_preview=(_halluc_text or "")[:400],
+                            pipeline_version=PIPELINE_VERSION,
+                            **chroma_context_for_call_data(),
                         )
                         continue
 
@@ -478,7 +494,7 @@ class ExtractionPipeline:
                     "useful_feedback_count": 0,
                 }
 
-                # QA 전용 필드
+                # QA 전용 필드 (qa_extract step이 활성화된 경우에만 도달)
                 if item.doc_type == "qa_pair":
                     metadata["question"] = item.question or ""
                     metadata["source_speaker"] = item.source_speaker or ""
@@ -533,6 +549,8 @@ class ExtractionPipeline:
                 extractor="ExtractionPipeline",
                 pipeline_version=PIPELINE_VERSION,
                 stored_chunks=result.stored_count,
+                extraction_candidates=len(items),
+                kb_reflected=result.stored_count > 0,
                 skipped_duplicate=result.skipped_duplicate,
                 skipped_quality=result.skipped_quality,
                 skipped_hallucination=result.skipped_hallucination,

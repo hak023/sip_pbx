@@ -1,0 +1,12 @@
+%% 4.2 RTP 처리 — Bypass vs AI leg
+flowchart LR
+  subgraph userleg [인간-인간]
+    A[RTP in] --> B[Bypass relay]
+    B --> C[RTP out]
+  end
+  subgraph aileg [AI leg]
+    D[STT in] --> E[Agent]
+    E --> F[TTS PCM]
+    F --> G[20ms schedule]
+    G --> H[RTP to caller]
+  end

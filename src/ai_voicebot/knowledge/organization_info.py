@@ -251,14 +251,17 @@ class OrganizationInfoManager:
             return template
     
     def get_organization_context(self) -> str:
-        """RAG용 기관 정보 컨텍스트 반환"""
+        """RAG용 기관 정보 컨텍스트 반환.
+        
+        영업시간 정보는 지식베이스(KB) RAG 검색으로 응답하므로
+        하드코딩된 business_hours 필드를 시스템 컨텍스트에 포함하지 않는다.
+        """
         return f"""## 기관 정보
 - 이름: {self.get_organization_name()}
 - 설명: {self.tenant_config.get('description', 'N/A')}
 - 서비스: {self.tenant_config.get('service_description', 'N/A')}
 - 대표번호: {self.tenant_config.get('main_phone', 'N/A')}
 - 웹사이트: {self.tenant_config.get('website', 'N/A')}
-- 운영시간: {self.tenant_config.get('business_hours', 'N/A')}
 
 ## 제공 가능한 기능
 {self.get_capabilities_text()}""".strip()

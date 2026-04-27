@@ -124,6 +124,7 @@ class ContactKnowledgeExtractor:
                 "department": metadata.get("department", ""),
                 "phone_number": metadata.get("phone_number", ""),
                 "name": metadata.get("name", ""),
+                "transfer_label": (metadata.get("transfer_label") or "").strip(),
             }
             
             # 6. 필수 필드(phone_number) 검증
@@ -134,8 +135,12 @@ class ContactKnowledgeExtractor:
                               note="phone_number 필드가 비어있음")
                 return None
             
-            # 7. 로그 (전화번호는 마스킹)
-            masked_phone = contact["phone_number"][:8] + "***" if len(contact["phone_number"]) > 8 else "***"
+            # 7. 로그 (내선·fwd 참조는 짧게만 표시)
+            pn = contact["phone_number"]
+            if (pn or "").lower().startswith("fwd:"):
+                masked_phone = "fwd:***"
+            else:
+                masked_phone = pn[:8] + "***" if len(pn) > 8 else "***"
             logger.info("contact_search_found",
                        query=query,
                        department=contact["department"],

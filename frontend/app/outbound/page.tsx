@@ -448,7 +448,7 @@ export default function OutboundPage() {
         body: JSON.stringify({ outbound_id: outboundId }),
       });
       if (res.ok && res.data) { alert(`재시도가 시작되었습니다.\n새 ID: ${res.data.new_outbound_id}`); fetchData(); }
-      else alert(`재시도 실패: ${res.message}`);
+      else alert(`재시도 실패: ${!res.ok ? res.message : "응답 데이터가 없습니다."}`);
     } catch (e: any) { alert(`재시도 실패: ${e?.message || e}`); }
   };
 

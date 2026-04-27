@@ -60,6 +60,8 @@ pipecat-ai[google,silero]>=0.0.85    # Voice AI pipeline framework
 # LangGraph Agentic RAG (Phase 2)
 # -----------------------------------------------------------------------------
 langgraph>=0.1.0                     # Agent workflow orchestration
+langgraph-checkpoint-sqlite>=2.0.0   # AsyncSqliteSaver — aiosqlite + async 그래프(ainvoke) 필수
+aiosqlite>=0.20.0                    # AsyncSqliteSaver 의존성 (동기 SqliteSaver는 async 미지원)
 langchain-core>=0.2.0                # LangGraph core dependency
 
 # -----------------------------------------------------------------------------

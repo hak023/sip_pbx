@@ -7,7 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { KNOWLEDGE_CATEGORIES, DOC_TYPES } from '@/types';
+import { KNOWLEDGE_CATEGORIES } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -16,7 +16,6 @@ export default function AddKnowledgePage() {
   const [tenant, setTenant] = useState<{ owner: string; name?: string } | null>(null);
   const [text, setText] = useState('');
   const [category, setCategory] = useState('question');
-  const [docType, setDocType] = useState<string>('knowledge');
   const [answer, setAnswer] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [department, setDepartment] = useState('');
@@ -46,7 +45,7 @@ export default function AddKnowledgePage() {
       return;
     }
     if (category === 'contact' && !phoneNumber.trim()) {
-      setMessage({ type: 'error', text: '연락처 카테고리는 전화번호가 필요합니다.' });
+      setMessage({ type: 'error', text: '연락처·호 전환 카테고리는 착신번호가 필요합니다.' });
       return;
     }
     setSubmitting(true);
@@ -63,7 +62,6 @@ export default function AddKnowledgePage() {
           text: text.trim(),
           owner: tenant.owner,
           category,
-          doc_type: docType,
           answer: answer.trim() || undefined,
           source: 'api',
           ...(category === 'contact'
@@ -149,38 +147,41 @@ export default function AddKnowledgePage() {
 
           {needsContactFields && (
             <div className="space-y-2 rounded-md border border-amber-100 bg-amber-50/50 p-3">
-              <p className="text-xs text-amber-900 font-medium">연락처 — 전화번호 필수</p>
-              <input
-                type="text"
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                placeholder="전화번호 *"
-              />
-              <input
-                type="text"
-                value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                placeholder="부서명 (선택)"
-              />
+              <p className="text-xs text-amber-900 font-medium">연락처·호 전환 — 착신번호 필수</p>
+              <p className="text-xs text-amber-700">
+                AI가 &quot;상담원 연결해줘&quot;, &quot;담당자와 통화하고 싶어요&quot; 등을 인식하면
+                아래 번호로 호 전환합니다. 내용 란에 전환을 유발할 문장을 입력하세요.
+              </p>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  착신번호 (내선 or 외선) *
+                </label>
+                <input
+                  type="text"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                  placeholder="예: 1001, 010-1234-5678"
+                  required
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  SIP 서버의 실제 착신 가능 번호를 입력하세요. TTS 안내에는 아래 부서명이 사용됩니다.
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  부서/담당자명 (선택 — TTS 안내용)
+                </label>
+                <input
+                  type="text"
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                  placeholder="예: 상담원, 예약팀, 홍길동 상담사"
+                />
+              </div>
             </div>
           )}
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">문서 유형</label>
-            <select
-              value={docType}
-              onChange={(e) => setDocType(e.target.value)}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-            >
-              {DOC_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">내용 *</label>

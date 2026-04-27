@@ -4,6 +4,10 @@ FastAPI 앱 진입점.
   uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
 녹음 경로: 환경변수 `SIP_RECORDINGS_DIR` 또는 `RECORDINGS_DIR` (기본 `./recordings`).
+
+채팅 SIP MESSAGE는 SIP 프로세스(`src.main`)와 분리 기동 시
+`SIP_MESSAGE_RELAY_BASE_URL` + `SIP_INTERNAL_API_SECRET` 으로 PBX 내부 HTTP에 위임한다
+(`src.services.chat_sip_delivery`, `src.sip_core.sip_internal_http` 참고).
 """
 
 from __future__ import annotations
@@ -15,15 +19,32 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routers import (
     auth_compat,
+    call_control_api,
     call_history,
+    caller_contacts,
+    contact_folders,
+    client_log,
     knowledge_api,
     metrics,
     operator_status_api,
     outbound,
     persona,
 )
+from src.api.routers import booking as booking_router
+from src.api.routers import messages as messages_router
+from src.api.routers import chat as chat_router
+from src.api.routers import google_calendar as google_calendar_router
+from src.api.routers import ringback as ringback_router
+from src.api.http_error_logging import register_http_error_logging
+from src.booking.database import init_db
+from src.call_control.db import init_db as init_call_control_db
 
 app = FastAPI(title="SIP PBX API", version="1.0.0")
+
+# 예약 DB 초기화 (앱 기동 시 테이블 생성)
+init_db()
+# Call Control DB 초기화
+init_call_control_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,13 +54,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 4xx/422 시 detail + 요청 본문 미리보기를 structlog(app.log)에 남김
+register_http_error_logging(app)
+
 app.include_router(auth_compat.router, prefix="/api")
 app.include_router(knowledge_api.router, prefix="/api")
 app.include_router(call_history.router, prefix="/api")
+app.include_router(caller_contacts.router, prefix="/api")
+app.include_router(contact_folders.router, prefix="/api")
+app.include_router(client_log.router)
 app.include_router(metrics.router)  # /api/metrics prefix already in router
 app.include_router(operator_status_api.router, prefix="/api")
 app.include_router(outbound.router)  # /api/outbound prefix already included
 app.include_router(persona.router)  # /api/persona prefix already included
+app.include_router(booking_router.router, prefix="/api")
+app.include_router(messages_router.router)  # /api/messages prefix already in router
+app.include_router(chat_router.router)       # /api/chat prefix already in router
+app.include_router(google_calendar_router.router)  # /api/google prefix already in router
+app.include_router(ringback_router.router)         # /api/ringback prefix already in router
+app.include_router(call_control_api.router)        # /api/call-control
 
 
 def _serialize_active_sessions(cm: Any) -> List[Dict[str, Any]]:

@@ -5,6 +5,7 @@ Knowledge Service
 """
 
 import asyncio
+import json
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 import structlog
@@ -205,10 +206,12 @@ class KnowledgeService:
             
             output = []
             for i, doc_id in enumerate(ids):
+                meta = metadatas[i] if i < len(metadatas) else {}
                 output.append({
                     "id": doc_id,
                     "text": documents[i] if i < len(documents) else "",
-                    "metadata": metadatas[i] if i < len(metadatas) else {},
+                    "category": meta.get("category", ""),
+                    "metadata": meta,
                 })
             
             return output
@@ -315,6 +318,337 @@ class KnowledgeService:
                         source_file=source_file,
                         error=str(e))
             return 0
+
+    # ------------------------------------------------------------------
+    # Capability (doc_type=capability) — REST / 시드 / AI Phase2 가이드용
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _coerce_bool_active(v: Any, default: bool = True) -> bool:
+        if v is True or v is False:
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes")
+        if v is None:
+            return default
+        return bool(v)
+
+    def _parse_capability_keywords(self, meta: Dict[str, Any]) -> List[str]:
+        kw = meta.get("keywords")
+        if isinstance(kw, list):
+            return [str(x) for x in kw if str(x).strip()]
+        if isinstance(kw, str) and kw.strip():
+            return [x.strip() for x in kw.split(",") if x.strip()]
+        return []
+
+    def _capability_chroma_to_dict(
+        self,
+        doc_id: str,
+        document: str,
+        meta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Chroma 행 → capabilities API / orchestrator 공통 dict."""
+        m = meta or {}
+        api_params: Optional[Dict[str, Any]] = None
+        raw_ap = m.get("api_params")
+        if isinstance(raw_ap, str) and raw_ap.strip():
+            try:
+                api_params = json.loads(raw_ap)
+            except (json.JSONDecodeError, TypeError):
+                api_params = None
+        elif isinstance(raw_ap, dict):
+            api_params = raw_ap
+
+        collect_fields: Optional[List[Dict[str, Any]]] = None
+        raw_cf = m.get("collect_fields")
+        if isinstance(raw_cf, str) and raw_cf.strip():
+            try:
+                parsed = json.loads(raw_cf)
+                if isinstance(parsed, list):
+                    collect_fields = parsed
+            except (json.JSONDecodeError, TypeError):
+                collect_fields = None
+        elif isinstance(raw_cf, list):
+            collect_fields = raw_cf
+
+        pr = m.get("priority", 50)
+        try:
+            priority = int(pr)
+        except (TypeError, ValueError):
+            priority = 50
+
+        return {
+            "id": doc_id,
+            "display_name": str(m.get("display_name") or ""),
+            "text": document if isinstance(document, str) else "",
+            "category": str(m.get("category") or ""),
+            "response_type": str(m.get("response_type") or "info"),
+            "keywords": self._parse_capability_keywords(m),
+            "priority": priority,
+            "is_active": self._coerce_bool_active(m.get("is_active"), True),
+            "owner": (
+                str(_ow).strip()
+                if (_ow := m.get("owner")) not in (None, "")
+                else None
+            ),
+            "api_endpoint": (m.get("api_endpoint") or None) if m.get("api_endpoint") else None,
+            "api_method": (m.get("api_method") or None) if m.get("api_method") else None,
+            "api_params": api_params,
+            "transfer_to": (m.get("transfer_to") or None) if m.get("transfer_to") else None,
+            "phone_display": (m.get("phone_display") or None) if m.get("phone_display") else None,
+            "collect_fields": collect_fields,
+            "created_at": str(m.get("created_at") or ""),
+            "updated_at": (str(m.get("updated_at")) if m.get("updated_at") else None),
+        }
+
+    async def get_all_capabilities(
+        self,
+        owner: Optional[str] = None,
+        active_only: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """doc_type=capability 문서 목록 (priority 오름차순)."""
+        where: Dict[str, Any] = {"doc_type": "capability"}
+        try:
+            results = await asyncio.to_thread(
+                self._vector_db.get,
+                where=where,
+                limit=5000,
+            )
+        except Exception as e:
+            logger.error("get_all_capabilities_chroma_error", error=str(e), exc_info=True)
+            return []
+
+        ids = results.get("ids") or []
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+
+        out: List[Dict[str, Any]] = []
+        owner_f = (owner or "").strip() or None
+
+        for i, doc_id in enumerate(ids):
+            meta = metadatas[i] if i < len(metadatas) else {}
+            if not isinstance(meta, dict):
+                meta = {}
+            if (meta.get("doc_type") or "") != "capability":
+                continue
+            if owner_f:
+                doc_owner = str(meta.get("owner") or "").strip()
+                if doc_owner != owner_f:
+                    continue
+            if active_only and not self._coerce_bool_active(meta.get("is_active"), True):
+                continue
+            doc_text = documents[i] if i < len(documents) else ""
+            out.append(
+                self._capability_chroma_to_dict(doc_id, doc_text, meta)
+            )
+
+        out.sort(key=lambda x: (x.get("priority", 50), x.get("display_name", "")))
+        return out
+
+    async def count_capabilities(self, owner: Optional[str] = None) -> int:
+        items = await self.get_all_capabilities(owner=owner, active_only=False)
+        return len(items)
+
+    async def add_capability(
+        self,
+        doc_id: str,
+        display_name: str,
+        text: str,
+        category: str,
+        response_type: str = "info",
+        keywords: Optional[List[str]] = None,
+        priority: int = 50,
+        is_active: bool = True,
+        owner: Optional[str] = None,
+        source: str = "api",
+        api_endpoint: Optional[str] = None,
+        api_method: Optional[str] = None,
+        api_params: Optional[Dict[str, Any]] = None,
+        transfer_to: Optional[str] = None,
+        phone_display: Optional[str] = None,
+        collect_fields: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Capability 1건 추가 (임베딩 = display_name + 본문)."""
+        now = datetime.now().isoformat()
+        meta: Dict[str, Any] = {
+            "doc_type": "capability",
+            "display_name": display_name,
+            "category": category,
+            "response_type": response_type,
+            "keywords": ",".join(keywords or []),
+            "priority": int(priority),
+            "is_active": bool(is_active),
+            "source": source,
+            "created_at": now,
+            "updated_at": now,
+        }
+        if owner:
+            meta["owner"] = owner
+        if api_endpoint:
+            meta["api_endpoint"] = api_endpoint
+        if api_method:
+            meta["api_method"] = api_method
+        if api_params is not None:
+            meta["api_params"] = json.dumps(api_params, ensure_ascii=False)
+        if transfer_to:
+            meta["transfer_to"] = transfer_to
+        if phone_display:
+            meta["phone_display"] = phone_display
+        if collect_fields is not None:
+            meta["collect_fields"] = json.dumps(collect_fields, ensure_ascii=False)
+
+        embed_text = f"{display_name}\n{text}".strip()
+        embedding = await self._embedder.embed(embed_text)
+
+        await asyncio.to_thread(
+            self._vector_db.add,
+            ids=[doc_id],
+            embeddings=[embedding],
+            documents=[text],
+            metadatas=[meta],
+        )
+        logger.info(
+            "capability_added",
+            doc_id=doc_id,
+            owner=owner or "",
+            display_name_preview=display_name[:40],
+        )
+        return self._capability_chroma_to_dict(doc_id, text, meta)
+
+    async def update_capability(
+        self,
+        cap_id: str,
+        updates: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """메타데이터·본문 갱신. 본문/display_name 변경 시 임베딩 재계산."""
+
+        def _get() -> Dict[str, Any]:
+            return self._vector_db.collection.get(
+                ids=[cap_id],
+                include=["documents", "metadatas"],
+            )
+
+        res = await asyncio.to_thread(_get)
+        ids_out = res.get("ids") or []
+        if not ids_out:
+            return None
+        doc_text = (res.get("documents") or [""])[0] or ""
+        meta = dict((res.get("metadatas") or [{}])[0] or {})
+        if (meta.get("doc_type") or "") != "capability":
+            return None
+
+        new_body = doc_text
+        if updates.get("text") is not None:
+            new_body = str(updates["text"])
+
+        new_display = str(
+            updates["display_name"]
+            if updates.get("display_name") is not None
+            else meta.get("display_name") or ""
+        )
+
+        reembed = updates.get("text") is not None or updates.get("display_name") is not None
+
+        field_map = (
+            ("category", "category"),
+            ("response_type", "response_type"),
+            ("priority", "priority"),
+            ("is_active", "is_active"),
+            ("owner", "owner"),
+            ("api_endpoint", "api_endpoint"),
+            ("api_method", "api_method"),
+            ("transfer_to", "transfer_to"),
+            ("phone_display", "phone_display"),
+        )
+        for src, dst in field_map:
+            if updates.get(src) is not None:
+                val = updates[src]
+                if dst == "priority":
+                    try:
+                        meta[dst] = int(val)
+                    except (TypeError, ValueError):
+                        meta[dst] = 50
+                elif dst == "is_active":
+                    meta[dst] = bool(val)
+                else:
+                    meta[dst] = val
+
+        if updates.get("keywords") is not None:
+            kw = updates["keywords"]
+            meta["keywords"] = ",".join(kw) if isinstance(kw, list) else str(kw)
+
+        if updates.get("api_params") is not None:
+            ap = updates["api_params"]
+            meta["api_params"] = json.dumps(ap, ensure_ascii=False) if ap is not None else ""
+
+        if updates.get("collect_fields") is not None:
+            cf = updates["collect_fields"]
+            meta["collect_fields"] = (
+                json.dumps(cf, ensure_ascii=False) if cf is not None else ""
+            )
+
+        meta["updated_at"] = datetime.now().isoformat()
+
+        if updates.get("display_name") is not None:
+            meta["display_name"] = str(updates["display_name"])
+
+        if reembed:
+            new_embedding = await self._embedder.embed(
+                f"{new_display}\n{new_body}".strip()
+            )
+
+            def _upd_full():
+                self._vector_db.collection.update(
+                    ids=[cap_id],
+                    embeddings=[new_embedding],
+                    documents=[new_body],
+                    metadatas=[meta],
+                )
+
+            await asyncio.to_thread(_upd_full)
+        else:
+
+            def _upd_meta():
+                self._vector_db.collection.update(ids=[cap_id], metadatas=[meta])
+
+            await asyncio.to_thread(_upd_meta)
+
+        return self._capability_chroma_to_dict(cap_id, new_body, meta)
+
+    async def toggle_capability(self, cap_id: str) -> Optional[Dict[str, Any]]:
+        def _get() -> Dict[str, Any]:
+            return self._vector_db.collection.get(
+                ids=[cap_id],
+                include=["documents", "metadatas"],
+            )
+
+        res = await asyncio.to_thread(_get)
+        if not (res.get("ids") or []):
+            return None
+        doc_text = (res.get("documents") or [""])[0] or ""
+        meta = dict((res.get("metadatas") or [{}])[0] or {})
+        if (meta.get("doc_type") or "") != "capability":
+            return None
+        meta["is_active"] = not self._coerce_bool_active(meta.get("is_active"), True)
+        meta["updated_at"] = datetime.now().isoformat()
+
+        def _upd():
+            self._vector_db.collection.update(ids=[cap_id], metadatas=[meta])
+
+        await asyncio.to_thread(_upd)
+        return self._capability_chroma_to_dict(cap_id, doc_text, meta)
+
+    async def reorder_capabilities(self, ordered_ids: List[str]) -> bool:
+        try:
+            for i, cap_id in enumerate(ordered_ids):
+                r = await self.update_capability(cap_id, {"priority": (i + 1) * 10})
+                if r is None:
+                    logger.warning("reorder_capability_missing", cap_id=cap_id)
+                    return False
+            return True
+        except Exception as e:
+            logger.error("reorder_capabilities_error", error=str(e), exc_info=True)
+            return False
 
 
 async def initialize_knowledge_service(vector_db, embedder, extraction_pending_file: str = None):

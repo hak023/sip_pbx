@@ -79,6 +79,25 @@ async def route_utterance_node(state: ConversationState) -> dict:
         "rag_cache_hit": False,
     }
 
+    # 예약 의도 → booking_agent 직행 (RAG/캐시 불필요)
+    if intent == "booking":
+        elapsed = time.perf_counter() - _start
+        logger.info(
+            "route_utterance_booking_direct",
+            intent=intent,
+            utterance_lane="booking",
+            elapsed_sec=round(elapsed, 4),
+            note="예약 의도 → booking_agent 직행 (RAG 스킵)",
+        )
+        return {
+            **base_clear,
+            "utterance_lane": "booking",
+            "rag_mode": "skip",
+            "domain_question_signal": False,
+            "confidence": 0.95,
+            "rewritten_query": query,
+        }
+
     if intent in ("chitchat", "out_of_scope"):
         elapsed = time.perf_counter() - _start
         logger.info(

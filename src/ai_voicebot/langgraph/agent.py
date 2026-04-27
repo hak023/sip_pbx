@@ -42,6 +42,7 @@ from src.ai_voicebot.langgraph.nodes.response_shortcuts import (
     clarification_response_node,
     help_response_node,
 )
+from src.ai_voicebot.langgraph.nodes.booking_agent import booking_agent_node
 from src.common.call_data_record_logger import log_call_data
 
 logger = structlog.get_logger(__name__)
@@ -64,12 +65,13 @@ _LANGGRAPH_NODE_NAMES = frozenset(
         "help_response",
         "check_greeting_farewell_cache",
         "greeting_farewell_kb",
+        "booking_agent",  # 예약 에이전트 노드
     }
 )
 
 
 async def _invoke_graph_with_node_timing(
-    graph: Any, invoke_state: Dict[str, Any]
+    graph: Any, invoke_state: Dict[str, Any], config: Optional[Dict[str, Any]] = None
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, float]]:
     """
     단일 그래프 실행으로 최종 state + 노드별 wall 시간을 수집한다.
@@ -77,17 +79,22 @@ async def _invoke_graph_with_node_timing(
     우선 stream_mode=["updates","values"] (한 번의 실행)로 updates 키=노드명,
     마지막 values 청크=병합된 전체 state.
     미지원 시 values만으로 최종 state만 수집하거나 (None, {}) 로 ainvoke 폴백.
+    config: Checkpointer thread_id 등 LangGraph config 딕셔너리
     """
     ast = getattr(graph, "astream", None)
     if not callable(ast):
         return None, {}
+
+    stream_kwargs: Dict[str, Any] = {"stream_mode": ["updates", "values"]}
+    if config:
+        stream_kwargs["config"] = config
 
     node_sec: Dict[str, float] = defaultdict(float)
     last_values: Optional[Dict[str, Any]] = None
     prev_wall = time.perf_counter()
 
     try:
-        async for packet in ast(invoke_state, stream_mode=["updates", "values"]):
+        async for packet in ast(invoke_state, **stream_kwargs):
             if not isinstance(packet, tuple) or len(packet) != 2:
                 continue
             mode, chunk = packet
@@ -105,8 +112,11 @@ async def _invoke_graph_with_node_timing(
                 prev_wall = time.perf_counter()
     except TypeError:
         try:
+            values_kwargs: Dict[str, Any] = {"stream_mode": "values"}
+            if config:
+                values_kwargs["config"] = config
             prev = time.perf_counter()
-            async for chunk in ast(invoke_state, stream_mode="values"):
+            async for chunk in ast(invoke_state, **values_kwargs):
                 if isinstance(chunk, dict):
                     last_values = chunk
                     _ = time.perf_counter() - prev
@@ -141,6 +151,9 @@ def _route_after_intent(state: ConversationState) -> str:
     intent = state.get("intent", "")
     if intent in ("farewell", "greeting"):
         return "greeting_farewell_kb"
+    # 예약 의도 → booking_agent 직행 (RAG/캐시 불필요)
+    if intent == "booking":
+        return "booking_agent"
     # B 그룹 반응/피드백 → 템플릿 응답
     if intent in ("affirm", "deny", "gratitude", "doubt", "positive_reaction", "negative_reaction"):
         return "template_response"
@@ -161,6 +174,9 @@ def _route_after_utterance(state: ConversationState) -> str:
     # 아웃바운드 모드: classify/cache/rewrite/RAG 전체 스킵 → generate_response 직행
     if state.get("outbound_purpose"):
         return "generate_response"
+    # 예약 의도: utterance_lane="booking"이면 booking_agent 직행 (rag_mode 체크보다 선행)
+    if state.get("utterance_lane") == "booking":
+        return "booking_agent"
     if state.get("rag_mode") == "skip":
         return "generate_response"
     return _route_after_intent(state)
@@ -198,30 +214,14 @@ def _route_after_classify(state: ConversationState) -> str:
 
 
 # 토폴로지 변경 시 버전 증가 → 기존 프로세스 내 캐시 무효화
-_LANGGRAPH_SCHEMA_VERSION = 5  # 2026-04-03: step_back 노드 제거
-_compiled_graph_entry = None  # (version, compiled_graph)
+_LANGGRAPH_SCHEMA_VERSION = 8  # 2026-04-20: booking_flow_active + persona_chitchat skip during booking
+_compiled_graph_entry = None  # (version, compiled_graph) — 동기 MemorySaver 캐시(레거시)
+_compiled_async_entry = None  # (version, compiled_graph) — AsyncSqliteSaver + ainvoke
+_async_graph_compile_lock = asyncio.Lock()
 
 
-def build_conversation_graph():
-    """
-    LangGraph StateGraph 워크플로우 빌드.
-    
-    컴파일된 그래프는 전역 캐시에 저장하여 재사용한다.
-    매 통화마다 컴파일하면 ~7초 지연이 발생하므로 반드시 캐싱해야 한다.
-    
-    Returns:
-        compiled StateGraph (invoke/ainvoke 가능)
-    """
-    global _compiled_graph_entry
-    if _compiled_graph_entry is not None:
-        ver, cached = _compiled_graph_entry
-        if ver == _LANGGRAPH_SCHEMA_VERSION and cached is not None:
-            logger.info("langgraph_graph_cache_hit", message="기존 컴파일된 그래프 재사용")
-            return cached
-
-    import time
-    compile_start = time.time()
-
+def _build_state_graph():
+    """StateGraph 구성만 수행(컴파일 전)."""
     try:
         from langgraph.graph import StateGraph, END
     except ImportError:
@@ -248,6 +248,7 @@ def build_conversation_graph():
     graph.add_node("help_response", help_response_node)
     graph.add_node("check_greeting_farewell_cache", check_greeting_farewell_cache_node)
     graph.add_node("greeting_farewell_kb", greeting_farewell_kb_node)
+    graph.add_node("booking_agent", booking_agent_node)
 
     # ── 엣지 정의 ──
     graph.set_entry_point("classify_intent")
@@ -275,8 +276,12 @@ def build_conversation_graph():
             "repeat_response": "repeat_response",
             "clarification_response": "clarification_response",
             "help_response": "help_response",
+            "booking_agent": "booking_agent",
         },
     )
+
+    # booking_agent → update_state → END (캐시/RAG/HITL 스킵)
+    graph.add_edge("booking_agent", "update_state")
 
     # greeting/farewell 캐시 검색 후 분기
     graph.add_conditional_edges(
@@ -321,14 +326,96 @@ def build_conversation_graph():
     # update_state → END
     graph.add_edge("update_state", END)
 
-    compiled = graph.compile()
+    return graph
+
+
+def build_conversation_graph():
+    """
+    동기 경로: MemorySaver 체크포인터로 컴파일(레거시·테스트).
+
+    PBX·실통화는 ``await get_or_build_compiled_graph_async()`` 가 AsyncSqliteSaver 를 사용한다.
+    """
+    global _compiled_graph_entry
+    if _compiled_graph_entry is not None:
+        ver, cached = _compiled_graph_entry
+        if ver == _LANGGRAPH_SCHEMA_VERSION and cached is not None:
+            logger.info("langgraph_graph_cache_hit", message="기존 동기 컴파일 그래프 재사용")
+            return cached
+
+    compile_start = time.time()
+    graph = _build_state_graph()
+    if graph is None:
+        return None
+
+    try:
+        from langgraph.checkpoint.memory import MemorySaver
+
+        checkpointer = MemorySaver()
+    except ImportError:
+        checkpointer = None
+
+    compiled = graph.compile(checkpointer=checkpointer) if checkpointer else graph.compile()
     compile_elapsed = time.time() - compile_start
-    logger.info("langgraph_conversation_graph_compiled",
-               nodes=10, edges="conditional+linear",
-               compile_time=f"{compile_elapsed:.3f}s")
+    logger.info(
+        "langgraph_conversation_graph_compiled_sync",
+        nodes=10,
+        edges="conditional+linear",
+        checkpointer=type(checkpointer).__name__ if checkpointer else "none",
+        compile_time=f"{compile_elapsed:.3f}s",
+    )
 
     _compiled_graph_entry = (_LANGGRAPH_SCHEMA_VERSION, compiled)
     return compiled
+
+
+async def get_or_build_compiled_graph_async():
+    """비동기 SQLite(또는 Memory) 체크포인터로 컴파일 — ``ainvoke``/``astream`` 용."""
+    global _compiled_async_entry
+    if _compiled_async_entry is not None:
+        ver, cached = _compiled_async_entry
+        if ver == _LANGGRAPH_SCHEMA_VERSION and cached is not None:
+            logger.info("langgraph_graph_async_cache_hit", message="기존 Async 컴파일 그래프 재사용")
+            return cached
+
+    async with _async_graph_compile_lock:
+        if _compiled_async_entry is not None:
+            ver, cached = _compiled_async_entry
+            if ver == _LANGGRAPH_SCHEMA_VERSION and cached is not None:
+                return cached
+
+        compile_start = time.time()
+        graph = _build_state_graph()
+        if graph is None:
+            return None
+
+        try:
+            from src.ai_voicebot.langgraph.checkpointer import get_async_sqlite_checkpointer
+
+            checkpointer = await get_async_sqlite_checkpointer()
+        except Exception as e:
+            logger.warning("langgraph_async_checkpointer_resolve_failed", error=str(e))
+            checkpointer = None
+
+        if checkpointer is None:
+            try:
+                from langgraph.checkpoint.memory import MemorySaver
+
+                checkpointer = MemorySaver()
+            except ImportError:
+                checkpointer = None
+
+        compiled = graph.compile(checkpointer=checkpointer) if checkpointer else graph.compile()
+        compile_elapsed = time.time() - compile_start
+        logger.info(
+            "langgraph_conversation_graph_compiled_async",
+            nodes=10,
+            edges="conditional+linear",
+            checkpointer=type(checkpointer).__name__ if checkpointer else "none",
+            compile_time=f"{compile_elapsed:.3f}s",
+        )
+
+        _compiled_async_entry = (_LANGGRAPH_SCHEMA_VERSION, compiled)
+        return compiled
 
 
 class ConversationAgent:
@@ -354,7 +441,8 @@ class ConversationAgent:
         self.org_manager = org_manager
         self.owner = owner  # 착신번호 (테넌트 ID)
 
-        self.graph = build_conversation_graph()
+        # 그래프는 첫 process_utterance 에서 AsyncSqliteSaver 로 컴파일(이벤트 루프 필요)
+        self.graph = None
         self._state: ConversationState = {
             "messages": [],
             "turn_count": 0,
@@ -364,12 +452,19 @@ class ConversationAgent:
             "confidence": 0.0,
         }
 
-        if self.graph:
-            logger.info("conversation_agent_initialized",
-                       has_rag=rag_engine is not None,
-                       has_cache=(vector_db is not None and embedder is not None))
-        else:
-            logger.warning("conversation_agent_graph_build_failed")
+        logger.info(
+            "conversation_agent_initialized",
+            has_rag=rag_engine is not None,
+            has_cache=(vector_db is not None and embedder is not None),
+            note="그래프는 첫 발화 시 get_or_build_compiled_graph_async 로 로드",
+        )
+
+    async def _ensure_graph(self) -> None:
+        if self.graph is not None:
+            return
+        self.graph = await get_or_build_compiled_graph_async()
+        if not self.graph:
+            logger.error("conversation_agent_graph_build_failed")
 
     async def process_utterance(self, user_text: str, call_id: Optional[str] = None, **kwargs) -> dict:
         """
@@ -384,6 +479,8 @@ class ConversationAgent:
                            business_state, response_chunks, rag_cache_hit
         """
         utterance_start = time.time()
+
+        await self._ensure_graph()
 
         if not self.graph:
             logger.error("conversation_agent_no_graph")
@@ -445,35 +542,59 @@ class ConversationAgent:
         #              미전달 시 self.owner(AI봇 발신번호)를 그대로 사용 (기존 동작 유지)
         _persona_owner: str = kwargs.get("callee") or self.owner
 
-        # 현재 상태 + 새 입력 병합
+        # 발신자 전화번호 (kwargs로 전달, 없으면 빈 문자열)
+        caller_number: str = kwargs.get("caller_number") or kwargs.get("_caller_number") or ""
+
+        # ── call_context ContextVar 레지스트리에 직렬화 불가 객체 등록 ──
+        # checkpointer(AsyncSqliteSaver/MemorySaver)가 state를 msgpack 직렬화할 때
+        # LLMClient 등이 포함되면 "Type is not msgpack serializable" 오류가 발생.
+        # 해결: 직렬화 불가 객체는 state 대신 ContextVar(asyncio Task 스코프)로 전달.
+        from src.ai_voicebot.langgraph.call_context import set_call_context
+        set_call_context(
+            llm_client=self.llm_client,
+            rag_engine=self.rag_engine,
+            embedder=self.embedder,
+            vector_db=self.vector_db,
+            org_manager=self.org_manager,
+            hangup_callback=hangup_callback if is_outbound_session else None,
+        )
+        logger.debug(
+            "call_context_registered",
+            call_id=call_id or "",
+            has_llm=self.llm_client is not None,
+            has_rag=self.rag_engine is not None,
+            is_outbound=is_outbound_session,
+        )
+
+        # 현재 상태 + 새 입력 병합 (직렬화 가능 값만)
         invoke_state = {
             **self._state,
             "user_query": user_text,
             "user_query_raw": user_query_raw,
             "org_context": org_context,
             "system_prompt": system_prompt,
-            # 내부 참조 주입
-            "_llm_client": self.llm_client,
-            "_rag_engine": self.rag_engine,
-            "_embedder": self.embedder,
-            "_vector_db": self.vector_db,
-            "_org_manager": self.org_manager,
-            "_owner": self.owner,         # 테넌트 ID (RAG owner_filter, KB 격리)
-            "_persona_owner": _persona_owner,  # 페르소나 조회 owner (inbound=callee, outbound=상대방번호)
-            "_call_id": call_id or "",    # 통화 ID → RAG/로그 call 키
+            "_owner": self.owner,              # 테넌트 ID (RAG owner_filter, KB 격리)
+            "_caller_number": caller_number,   # 발신자 전화번호 (예약 검색·SMS용)
+            "_persona_owner": _persona_owner,  # 페르소나 조회 owner
+            "_call_id": call_id or "",         # 통화 ID → RAG/로그 call 키
         }
         if is_outbound_session:
             invoke_state["outbound_purpose"] = outbound_purpose
             invoke_state["outbound_questions"] = list(outbound_questions)
             invoke_state["outbound_answers"] = dict(outbound_answers)
             invoke_state["outbound_mission_done"] = outbound_mission_done
-            if hangup_callback is not None:
-                invoke_state["_hangup_callback"] = hangup_callback
+
+        # Checkpointer thread config (call_id 기반)
+        try:
+            from src.ai_voicebot.langgraph.checkpointer import get_thread_config
+            thread_config = get_thread_config(call_id or "")
+        except Exception:
+            thread_config = {}
 
         try:
             graph_start = time.time()
             timed_result, node_durations_sec = await _invoke_graph_with_node_timing(
-                self.graph, invoke_state
+                self.graph, invoke_state, config=thread_config
             )
             if timed_result is not None:
                 result = timed_result
@@ -483,7 +604,7 @@ class ConversationAgent:
                     call_id=call_id or "",
                     note="astream_events 미수신 시 단일 ainvoke",
                 )
-                result = await self.graph.ainvoke(invoke_state)
+                result = await self.graph.ainvoke(invoke_state, config=thread_config)
                 node_durations_sec = {}
             graph_elapsed = time.time() - graph_start
 
@@ -502,6 +623,9 @@ class ConversationAgent:
             self._state["messages"] = result.get("messages", self._state["messages"])
             self._state["turn_count"] = result.get("turn_count", self._state["turn_count"])
             self._state["business_state"] = result.get("business_state", self._state["business_state"])
+            # 예약 컨텍스트 (발화 간 히스토리) 보존
+            if "booking_context" in result:
+                self._state["booking_context"] = result["booking_context"]
 
             total_elapsed = time.time() - utterance_start
 

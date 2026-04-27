@@ -1,0 +1,16 @@
+%% 3.4 인입 음성 제어 루프
+sequenceDiagram
+  participant C as 발신자
+  participant P as B2BUA
+  participant R as Callee/AI
+  C->>P: INVITE
+  P->>R: 2nd INVITE (B2BUA)
+  alt 일반 응답
+    R-->>P: 200 OK
+    P-->>C: 200 OK
+    Note over P: RTP Bypass 저지연 릴레이
+  else 무응답/정책에 따른 AI
+    P->>P: no_answer / call_control 규칙
+    P->>R: AI 파이프라인 기동
+    Note over P,R: RTP AI 모드 20ms 격자 TTS
+  end

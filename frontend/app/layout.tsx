@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
+import { ActiveCallDockProvider } from "@/components/ActiveCallDockProvider";
+import { ActiveSmsDockProvider } from "@/components/ActiveSmsDockProvider";
+import { GlobalCallDock } from "@/components/GlobalCallDock";
+import { GlobalLeftDockStack } from "@/components/GlobalLeftDockStack";
 
 export const metadata: Metadata = {
   title: "AI Voicebot Control Center",
@@ -15,7 +19,13 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <body className="antialiased">
-        <AppShell>{children}</AppShell>
+        <ActiveCallDockProvider>
+          <ActiveSmsDockProvider>
+            <AppShell>{children}</AppShell>
+            <GlobalCallDock />
+            <GlobalLeftDockStack />
+          </ActiveSmsDockProvider>
+        </ActiveCallDockProvider>
       </body>
     </html>
   );
