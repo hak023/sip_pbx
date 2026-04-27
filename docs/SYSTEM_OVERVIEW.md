@@ -10,20 +10,20 @@
 
 ### 다이어그램 (PNG) — 다른 문서·슬라이드에서 재사용
 
-렌더된 그림은 `docs/images/system-overview/` 에 있으며, 편집용 Mermaid 소스는 `docs/diagrams/system-overview/*.mmd` 이다. PNG는 **`mermaid-frontend.json` + `mermaid-frontend.css`** 로 생성해 **밝은 UI 톤·카드형 패널·넉넉한 노드 간격**을 맞춘다(상세·재생성: [diagrams/system-overview/README.md](diagrams/system-overview/README.md)).
+렌더된 그림은 `docs/images/system-overview/` 에 있으며, 편집용 Mermaid 소스는 `docs/diagrams/system-overview/`의 `01-`…`10-` 접두 `.md` 파일(아래 표·[README](diagrams/system-overview/README.md))이다. PNG는 **`mermaid-frontend.json` + `mermaid-frontend.css`** 로 생성해 **밝은 UI 톤·카드형 패널·넉넉한 노드 간격**을 맞춘다(상세·재생성: [diagrams/system-overview/README.md](diagrams/system-overview/README.md)).
 
-| PNG | 절 | 소스(`.mmd`) |
+| PNG | 절 | 소스(`.md`) |
 |-----|----|--------------|
-| [`01-logical-architecture.png`](images/system-overview/01-logical-architecture.png) | §3.1 | [`01-logical-architecture.mmd`](diagrams/system-overview/01-logical-architecture.mmd) |
-| [`02-inbound-voice-sequence.png`](images/system-overview/02-inbound-voice-sequence.png) | §3.4 | [`02-inbound-voice-sequence.mmd`](diagrams/system-overview/02-inbound-voice-sequence.mmd) |
-| [`03-rtp-modes.png`](images/system-overview/03-rtp-modes.png) | §4.2 | [`03-rtp-modes.mmd`](diagrams/system-overview/03-rtp-modes.mmd) |
-| [`04-smart-barge-in.png`](images/system-overview/04-smart-barge-in.png) | §4.3 | [`04-smart-barge-in.mmd`](diagrams/system-overview/04-smart-barge-in.mmd) |
-| [`05-intent-routing.png`](images/system-overview/05-intent-routing.png) | §4.4 | [`05-intent-routing.mmd`](diagrams/system-overview/05-intent-routing.mmd) |
-| [`06-knowledge-flow.png`](images/system-overview/06-knowledge-flow.png) | §4.5 | [`06-knowledge-flow.mmd`](diagrams/system-overview/06-knowledge-flow.mmd) |
-| [`07-booking-tools.png`](images/system-overview/07-booking-tools.png) | §4.6 | [`07-booking-tools.mmd`](diagrams/system-overview/07-booking-tools.mmd) |
-| [`08-sip-message-sequence.png`](images/system-overview/08-sip-message-sequence.png) | §4.7 | [`08-sip-message-sequence.mmd`](diagrams/system-overview/08-sip-message-sequence.mmd) |
-| [`09-ringback-suno.png`](images/system-overview/09-ringback-suno.png) | §4.9 | [`09-ringback-suno.mmd`](diagrams/system-overview/09-ringback-suno.mmd) |
-| [`10-call-control-priority.png`](images/system-overview/10-call-control-priority.png) | §4.10 | [`10-call-control-priority.mmd`](diagrams/system-overview/10-call-control-priority.mmd) |
+| [`01-logical-architecture.png`](images/system-overview/01-logical-architecture.png) | §3.1 | [`01-logical-architecture.md`](diagrams/system-overview/01-logical-architecture.md) |
+| [`02-inbound-voice-sequence.png`](images/system-overview/02-inbound-voice-sequence.png) | §3.3 | [`02-inbound-voice-sequence.md`](diagrams/system-overview/02-inbound-voice-sequence.md) |
+| [`03-rtp-modes.png`](images/system-overview/03-rtp-modes.png) | §4.2 | [`03-rtp-modes.md`](diagrams/system-overview/03-rtp-modes.md) |
+| [`04-smart-barge-in.png`](images/system-overview/04-smart-barge-in.png) | §4.3 | [`04-smart-barge-in.md`](diagrams/system-overview/04-smart-barge-in.md) |
+| [`05-intent-routing.png`](images/system-overview/05-intent-routing.png) | §4.4 | [`05-intent-routing.md`](diagrams/system-overview/05-intent-routing.md) |
+| [`06-knowledge-flow.png`](images/system-overview/06-knowledge-flow.png) | §4.5 | [`06-knowledge-flow.md`](diagrams/system-overview/06-knowledge-flow.md) |
+| [`07-booking-tools.png`](images/system-overview/07-booking-tools.png) | §4.6 | [`07-booking-tools.md`](diagrams/system-overview/07-booking-tools.md) |
+| [`08-sip-message-sequence.png`](images/system-overview/08-sip-message-sequence.png) | §4.7 | [`08-sip-message-sequence.md`](diagrams/system-overview/08-sip-message-sequence.md) |
+| [`09-ringback-suno.png`](images/system-overview/09-ringback-suno.png) | §4.9 | [`09-ringback-suno.md`](diagrams/system-overview/09-ringback-suno.md) |
+| [`10-call-control-priority.png`](images/system-overview/10-call-control-priority.png) | §4.10 | [`10-call-control-priority.md`](diagrams/system-overview/10-call-control-priority.md) |
 
 ---
 
@@ -79,198 +79,276 @@
 
 ![논리 아키텍처: 외부 단말·B2BUA·AI·데이터·웹](images/system-overview/01-logical-architecture.png)
 
-*편집·재렌더: [`diagrams/system-overview/01-logical-architecture.mmd`](diagrams/system-overview/01-logical-architecture.mmd)*
+*편집·재렌더: [`diagrams/system-overview/01-logical-architecture.md`](diagrams/system-overview/01-logical-architecture.md)*
 
-### 3.2 런타임·포트 (개발 기준)
+### 3.2 데이터·테넌트 (「나만의 AI」를 가능하게 하는 구조)
 
-| 경로 | 역할 |
-|------|------|
-| **SIP** | 일반적으로 UDP **5060** (설정에 따름) |
-| **RTP** | **포트 풀** (예: 10000–20000) — 레그·방향별 할당 |
-| **REST** | **8000** — 인증, 통화이력, 지식, 착신 제어, 링백, 예약 등 |
-| **실시간** | **8001** — STT/TTS/통화 이벤트, HITL, CDR 트레이스 |
-| **프론트** | **3000** — 대시보드, 설정(착신/링백/페르소나/연락처 등) |
+발표·온보딩용으로, **“데이터가 어디에 있고, 왜 고객사마다 AI가 달라 보이는가”**를 먼저 짚는다.
 
-### 3.3 데이터·테넌트
+**비유**  
+하나의 PBX/플랫폼을 **여러 ‘입주사’**가 쓰는 오피스와 같다. 건물(시스템)은 공유하지만, **각 사무실(테넌트) 서랍**에는 **그 회사만의 매뉴얼**이 들어 있다. 엘리베이터(전화)로 들어온 방문객(발신자)은 **접수처 안내(착신 내선)**에 따라 **어느 서랍을 열지**가 결정되고, AI는 **그 서랍에 있는 지식**만 꺼내 답한다.
 
-- **테넌트**는 대개 **착신 내선(SIP user)** 기준(`owner`)으로 식별한다.
-- **ChromaDB**에 `knowledge` / `qa_cache` / `persona` 등 **owner별 컬렉션**으로 격리한다.
-- **SQLite**에 예약(`booking` DB), **착신 제어**(`call_control` DB), 통화/연락처 관련 기록 등을 둔다(마이그레이션·경로는 배포마다 `config`/`env` 확인).
+**테넌트란**  
+- 기술적으로는 보통 **착신 SIP 내선(사용자 ID)** 를 **테넌트 키**(`owner` 등)로 쓴다.  
+- “A 번호로 걸리면 A 회사 AI”, “B 번호로 걸리면 B 회사 AI”처럼 **한 번에 하나의 ‘나만의 AI’ 페르소나·지식**이 선택된다.  
+- **B 회사**가 올려 둔 FAQ가 **A 회사** 통화에 **섞이지 않도록** 설계한 것이 핵심이다.
 
-### 3.4 주요 제어 루프 (인입 음성)
+**지식·AI가 테넌트별로 나뉘는 이유 (장점)**  
+- **지식 격리**: **벡터 DB(ChromaDB)** 에서 `knowledge`·`qa_cache`·`persona` 등이 **owner(내선)별 컬렉션**으로 분리되어, RAG·캐시·인사/톤이 **다른 주체의 데이터에 의존하지 않는다**.  
+- **나만의 AI**: 상담·영업팀이 올리는 **문서·Q&A**와 통화·문자로 쌓이는 **자동 적재**가 전부 **그 테넌트의 “두뇌”**에만 쌓인다. 경쟁사·다른 점포와 **지식이 섞일 위험**을 막는다.  
+- **페르소나**: “우리는 이런 톤·이런 업무 범위”를 **조직마다** 다르게 둘 수 있어, 동일 LLM 뒤에서도 **브랜드에 맞는 응답**이 나온다.  
+- **운영 단위**: 예약·착신 제어·연락처 등 **관계형 데이터(SQLite 등)**도 **테넌트/owner 단위**로 쪼개 관리해, **설정·이력**이 뒤엉키지 않게 한다.
 
-![인입 음성: INVITE ~ 일반 응답 vs AI 경로](images/system-overview/02-inbound-voice-sequence.png)
+**한 줄 요약**  
+> **테넌트 = (대개) 착신 내선 1로 묶이는 “고객사·조직” 단위**이고, **지식·캐시·페르소나·업무 DB를 끊어 두어** “같은 플랫폼이지만 **우리만의 AI**”를 갖는 것이 이 구조의 본질이다.
 
-*편집·재렌더: [`diagrams/system-overview/02-inbound-voice-sequence.mmd`](diagrams/system-overview/02-inbound-voice-sequence.mmd)*
+(포트·호스트·배포 경로 등 **엔지니어용 런타임 표**는 [`SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md`](SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md) 또는 운영 가이드에서 다룬다.)
+
+### 3.3 주요 제어 루프 (복잡 흐름: 무응답 → AI → HITL → 운영자 채팅 기반 응대)
+
+가장 **많은 모듈이 엮이는** 인입 시나리오로 정리한다. (단순 “사람끼리 통화만 되고 끝”이 아닌 경우.)
+
+1. **발신 → 착신(사람)**  
+   B2BUA가 **2차 INVITE**로 벨을 울리지만, 착신이 **끄지 못하거나(무응답)** , 착신 정책상 **N초 후 AI** 등으로 **AI 음성 파이프라인**이 뜬다.  
+2. **AI 1차 응대**  
+   STT → LangGraph(의도·RAG·LLM) → TTS로 **고객과 음성 대화**가 이어진다.  
+3. **HITL 에스컬레이션**  
+   AI **신뢰도가 낮거나** 답이 어려운 intent 등으로 **HITL**이 켜지면, **대시보드**에 `hitl_requested` 등으로 **질문·call_id**가 올라간다. (고객에는 대기 멘트 TTS.)  
+4. **운영자는 “전화”가 아니라 “채팅(텍스트)”으로 답**  
+   운영자는 실시간으로 **웹·Socket.IO**를 통해 **짧은 사실/지시**를 입력한다(환경에 따라 대시보드 HITL 패널).  
+5. **AI가 그 문구를 “그대로 읽기”가 아니라 가공**  
+   시스템이 운영자 문장을 `format_hitl_reply` 를 포함한 흐름으로 **고객이 듣기 자연스운 한국어**로 정리한 뒤 **TTS**로 보낸다.  
+6. **결과**  
+   **사람(운영자)의 지식·판단**이 **그 통화의 AI 응답**에 반영되고, 이후 **지식베이스 자동 반영** 정책이 있으면 같은 질문을 AI가 **다음부터 직접** 처리할 수도 있다(제품/설정에 따름).
+
+![복잡 루프: 무응답 → AI 음성 → HITL → 운영자 채팅 → 정제 TTS](images/system-overview/02-inbound-voice-sequence.png)
+
+*편집·재렌더: [`diagrams/system-overview/02-inbound-voice-sequence.md`](diagrams/system-overview/02-inbound-voice-sequence.md)*
 
 ---
 
 ## 4. 핵심 기능
 
+이 절은 **기능을 아키텍처 수준**에서만 이해하면 되는 청자(기획, 영업, 운영, 경영)를 기준으로 썼다. **“전화/문자/웹이 어떻게 엮이고, 끝사용자와 상담 조직이 무엇을 경험하는가”**에 무게를 둔다. 다이어그램·세부 API는 각 절의 PNG·백업 문서·리포트를 보면 된다.
+
+| 절 | 다루는 질문(발표용) |
+|----|-------------------|
+| **4.1** | 왜 “PBX + AI”를 한 시스템에 넣는가, 통화는 어떻게 잇는가 |
+| **4.2** | 음성은 **인간끼리**와 **AI**에서 왜 다르게 다뤄지는가 |
+| **4.3** | **듣기–말하기**는 어떤 순서·규칙으로 자연스럽게 느껴지는가 |
+| **4.4** | “의도”는 어떻게 잘리고, **어디로** 보내지는가 |
+| **4.5** | **지식**은 어디에 있고, 못 풀 때는 **사람**과 어떻게 연결되는가 |
+| **4.6** | **예약**을 말로만 잡는다는 것은 **무엇이 자동**으로 되는가 |
+| **4.7** | **문자/채팅**은 음성과 **같은 AI**를 쓰는가 |
+| **4.8** | **AI가 먼저 전화**를 거는 **발신**은 어디에 쓰는가 |
+| **4.9** | **받는 사람이 받기 전** 발신자가 듣는 **연결음**은 |
+| **4.10** | **착신 정책**(직통·무응답·즉시 AI·전달)은 **어디서** 정하는가 |
+
 ### 4.1 SIP PBX 처리
 
-**역할**: RFC 3261에 가까운 **B2BUA**로, 발신·착신 레그를 **독립** 관리하며 `INVITE`/`ACK`/`BYE`/`CANCEL`/`REGISTER`/`OPTIONS` 등을 처리한다.
+**발표용 한 줄**  
+**전화(SIP)로 들어온 “줄(레그)”을 두 갈래(발신 측 / 착신 측)로 나눠 잡고**, 그 **사이**에서 **사람·AI·호전환**을 바꿔 끼우는 **교환기+오케스트레이터** 역할을 한다.
 
-**흐름 (요지)**:
+**비전문가용 설명**  
+일반 “전화 한 통”도 시스템 입장에는 **A–교환기–B**로 **두 갈래 회선**으로 보는 편이 정확하다. B2BUA는 **A와 B에 각각 따로** 관계를 맺기 때문에, 한쪽이 먼저 끊거나, 한쪽만 AI로 돌리거나, 나중에 **상담원으로 갈아끼우는** 식의 **정교한 제어**가 가능하다.  
+`INVITE`는 “이 번호로 통화해도 될지 요청”이고, `200 OK`는 “응, 미디어 포트·코덱은 이렇게 쓰자”는 **협상 결과**이며, `BYE`는 “끊자”다. `REGISTER`/`OPTIONS` 등은 **단말·가용성** 점검에 쓰인다(세부는 SIP 도메인).
 
-1. `INVITE` 수신 → SDP 파싱, **미디어 세션·포트** 할당.
-2. 착신 측에 **2차 INVITE** — 링/조기미디어(early media) 경로는 **통화 연결음**과 결합될 수 있다(§4.9).
-3. **미디어 모드**에 따라 `Direct` / `Bypass·Reflecting` / **AI** 경로로 분기.
-4. **호전환·아웃바운드**는 `CallManager` / `TransferManager` / `OutboundCallManager` 등과 연동.
+**끝사용자·운영 관점**
 
-**장점 (요약)**: 한 프로세스에서 **시그널링 + RTP + AI**를 엮을 수 있어, 단순 SBC만으로는 어려운 **AI 인수·재개** 시나리오를 코드 레벨에서 제어한다.
+- **고객(발신)**: “전화를 걸었더니 – 벨 / 연결음 / AI / 상담원”으로 **끊김 없이** 이어지는 경험을 기대한다. B2BUA는 **시그널**과 **음성(RTP) 경로**를 함께 묶기 때문에, **AI가 끼어드는 시점**을 제품이 정책대로 **정밀 제어**할 수 있다.  
+- **운영**: 한 프로세스에서 **호 설정 + 미디어 + AI**를 다루므로, “AI만 재시동” “호만 유지” 같은 **혼합 시나리오**를 **단일 코드베이스**로 설명·운영할 수 있다.
+
+**흐름(상세 요지)**  
+
+1. `INVITE`가 들어오면 **누가 누구에게 걸려왔는지** 식별하고, **SDP(미디어 설명서)** 를 읽어 **RTP/RTCP 포트**를 배정한다.  
+2. **착신 쪽**으로 **2차 INVITE** — 착신 전화기가 **울리고(180 Ringing)**, **조기 미디어(early media)** 를 쓰는 경우 **연결 음(§4.9)** 이 여기에 붙을 수 있다.  
+3. **착신이 받으면(200 OK)** : 일정 시간 동안 **사람끼리** 오디오를 **초저지연**으로 **직통(Bypass)에 가깝게** 중계하거나, 정책·무응답에 따라 **AI 파이프라인**이 끼어든다(§3.3, §4.2~4.3).  
+4. **호전환·AI 발신**은 내부 모듈(`CallManager`, `TransferManager`, `OutboundCallManager` 등)이 **SIP·세션**과 **동기**를 맞춰 처리한다.  
+
+**이 구조의 요지**  
+**SBC(단순 경유)**만으로는 “같은 통화 안에서” **AI → 사람 → AI** 를 **끊지 않고** 이어 맞추기 어렵다. B2BUA는 **양쪽 독립 제어**가 가능해 **AICC(상담·AI)** 제품이 요구하는 **시나리오**를 **소프트웨어로** 풀 수 있게 해 준다.
 
 ---
 
 ### 4.2 RTP 처리 (케이스별)
 
-**사용자 간 릴레이 (Bypass)**: 상담원·내선이 응답한 **인간–인간 통화**는 **초저지연** 양방향 릴레이를 목표로 한다.
+**발표용 한 줄**  
+**RTP(실시간 음성 패킷)** 는 “**지금 이 통화가 사람 통화냐, AI 음성이냐, 바뀌었냐**”에 따라 **다르게** 흐르게 둔다.
 
-**AI 응대 모드**: TTS·STT 쪽으로 붙는 구간은 **지속적인 RTP 타이밍**이 중요하다. **20ms 격자**로 PCM을 밀어 넣고, 큐가 비면 **무음 프레임**을 넣어 디코더가 끊기지 않게 설계한다(연속 silence).
+**비전문가용 설명**  
+일반 **사람끼리** 통화는 “가능한 한 **빨리, 그대로** 소리를 건넨다”가 목표다. **AI**가 끼어올 때는, 마이크로 들어온 소리는 **글자**로 바꾸고(STT), 답을 **또다시 소리**로 만든 뒤(TTS) **전화로 실어** 보내야 하므로, **처리 큐·타이밍**이 꼭 필요하다. **호전환**이 되면, 다시 **새로운 대상**과 **브릿지(Bridge)** 를 이어 “사람끼리”에 가깝게 돌아간다.
 
-| 모드(개념) | 설명 |
-|------------|------|
-| **Bypass** | 정상 상담 연결 후 양자 릴레이 |
-| **AI** | 봇 음성/수신 STT — **TTS·PCM 큐**와 **전송 스레드** |
-| **Bridge** | 호전환 후 **새 대상**과의 미디어 브릿지 |
+| 모드(개념) | 누가 체감하나 | 설명 |
+|------------|----------------|------|
+| **Bypass** | 일반 콜센터/내선 | 양쪽이 **200 OK**로 연결된 뒤, PBX는 **가능한 한 지연 없이** 양방향 **음성을 중계**한다. |
+| **AI** | AI 응답이 나온 통화 | STT/LLM/TTS가 **20ms** 단위 **연속** RTP로 맞춰 **끊김 없이** 송신한다(큐가 비면 **무음**으로 채워 수신 측 디코더를 안정화). |
+| **Bridge** | 전환 이후 | **새로운 담당자(내선/외부)** 와 **미디어**가 **연결**되고, **AI**는 **안전히 내려갈** 수 있어야 한다. |
 
 ![RTP: 인간–인간 Bypass vs AI 레그](images/system-overview/03-rtp-modes.png)
 
-*편집·재렌더: [`diagrams/system-overview/03-rtp-modes.mmd`](diagrams/system-overview/03-rtp-modes.mmd)*
+*편집·재렌더: [`diagrams/system-overview/03-rtp-modes.md`](diagrams/system-overview/03-rtp-modes.md)*
 
-**에코/품질**: **AEC(에코 캔슬레이션)** 경로를 두고, STT 쪽에는 **후처리 필터**로 짧은 발화·에코성 잔여를 걸러 LLM에 넘길지 판단한다(§4.3).
+**품질(한 줄)**  
+**에코 캔슬(AEC)**, **전화 품질 STT**, **짧은 반응·에코 STT**를 **후처리**로 걸러 **“말 끊기/말 넘기”** 를 줄인다(§4.3과 연동).
 
 ---
 
 ### 4.3 AI 음성 — Voice Agent 파이프라인
 
-**구성(개념)**: `SIPPBX` 트랜스포트 → (녹음) → **VAD** → **STT** → **RAG+LLM** → **TTS** → (녹음) → 송신.
+**발표용 한 줄**  
+**입력(마이크)** → **누가 말하는지/언제 말 끊나** → **글자** → **의미 처리** → **답** → **다시 음성** → **스피커(상대)** 로 이어지는 **실시간 파이프**다.
 
-| 요소 | 구현·역할 (코드베이스 기준) |
-|------|---------------------------|
-| **VAD** | 음성 구간 감지 — **무음/발화** 구간을 STT·턴 타이밍에 사용 |
-| **Endpointing(실질)** | **STT 최종 결과** + **VAD/후처리**로 “이번 턴 끝”에 가깝게 처리(제품에 따라 **고정 m/s 엔드포인터**는 별도 모듈명으로 두지 않을 수 있음) |
-| **Turn-taking** | `MinWordsUserTurnStartStrategy` 등 — **최소 N어절** 이후 사용자 턴으로 간주 |
-| **Barge-in** | TTS 중 사용자 발화 시 **interruption** — **스마트 바지인**으로 단계화(아래 시퀀스) |
-| **Backchannel(맞장구)** | **짧은 수긍(“네”, “음” 등)** 은 `BACKCHANNEL_PATTERNS` + **LLM 판별**로 **끼어들기와 구분** (`barge_in_strategy.py`) |
-| **노이즈/품질** | **전용 RNNoise 같은 별도 노드**가 항상 있는 것은 아니고, **STT Telephony 모델·AEC·STT Post Filter**로 실질적 품질을 맞춘다 |
+**비전문가용 설명**  
+사람끼리는 “상대가 말을 끊기 전에 내가 끼어들 수 있다”는 **감**이 있지만, 시스템은 **초** 단위로 **조각**을 나눠 처리한다. **VAD**는 “지금 **말**인지 **쉼**인지”를 봅니다. **STT**는 **말끼리**를 **문장**으로 묶어 준다. **턴(taking)** 은 “이제 **다음** 발화 턴이구나”를 정하는 규칙(예: **최소 몇 음절** 이상이면 “진짜 말”로 본다). **바지인(Barge-in)** 은 AI가 TTS로 말하는 **도중**에 **사용자가 끼어들면** — 단순히 “응, 네” **맞장구**인지, **“잠깐!”** 이후 **질문**인지 **구분**해, 전자는 **끊지 않고** 후자는 **AI 말을 멈출** 수 있게 설계한 것이 **스마트 바지인**이다.
 
-**스마트 Barge-in (3단계, 요지)**:
+| 요소 | 청자에게 이렇게 말해도 됨 | 조금 풀어서 |
+|------|--------------------------|-------------|
+| **VAD** | “말하는 구간” 자동 | 발화/무음 **구간**을 STT·턴 판정에 쓴다. |
+| **엔드포인팅(실질)** | “이번 문장 끝” 판정 | **STT 최종 결과** + **VAD/후처리**로, 지나친 **짤막 응답**·**잡음**을 **질문으로 넘기지** 않는다. |
+| **턴** | “진짜로 말하기 시작” 기준 | **최소 N어절** 등으로 **끼어들기/오인식**을 줄인다. |
+| **바지인** | “AI말 셔플 끼기” | **끼어들기**면 TTS를 **중단**하도록 할 수 있게 **프레임**을 처리한다. |
+| **맞장구(Backchannel)** | “네, 응, 그렇죠” | **끼어들기**와 다르다 — **LLM/패턴**으로 **구분**해 **불필요한 끊김**을 막는다. |
+| **노이즈/품질** | “전화 음질 + 에코 + 엔드포인트” | **Telephony STT**·**AEC**·**STT Post Filter**로 **현장 음질**을 받아들인다. |
+
+**스마트 Barge-in(개념)**  
+1) **“잠깐/멈춰”** 같이 **즉시** 멈출 키워드 → 2) **최소 단어 수** → 3) 그래도 애매하면 **LLM**이 **맞장구 vs 진짜 끼어들기**를 **판정**한다.
 
 ![스마트 Barge-in: 키워드 → 단어 수 → LLM 맞장구/끼어들기](images/system-overview/04-smart-barge-in.png)
 
-*편집·재렌더: [`diagrams/system-overview/04-smart-barge-in.mmd`](diagrams/system-overview/04-smart-barge-in.mmd)*
+*편집·재렌더: [`diagrams/system-overview/04-smart-barge-in.md`](diagrams/system-overview/04-smart-barge-in.md)*
 
 ---
 
 ### 4.4 LangGraph 대화 에이전트 (의도·경로)
 
-**역할**: 발화(텍스트)에 대해 **의도**를 정하고, **RAG / 페르소나 / 예약 / HITL** 등으로 **라우팅**한다.
+**발표용 한 줄**  
+고객 **말(텍스트)** 를 받으면, 먼저 “**무슨 상황의 말인가**(의도)”를 **고정 분류**로 잡고, 그다음 “**누가 답할지·어떤 도구를 쓸지**”(지식, 예약, 사람, 전환)를 **그래프**가 **순서대로** 연결한다.
 
-- **의도 집합**은 `greeting` … `booking` … `nlu_fallback` 등 **고정 택소노미** + **예약 휴리스틱 병합**(`booking_intent_heuristic`)로 보강된다.
-- **복합 발화**는 **접속사 뒤 핵심 절** 추출(`_extract_main_clause`)로 앞뒤 잡담을 줄이고 **질문 본질**에 집중한다.
-- **아웃바운드**는 `outbound_purpose` 등이 있을 때 **분류를 스킵**하고 **미션 응답** 경로로 간다(구현은 `classify_intent` 등 참고).
+**비전문가용 설명**  
+챗봇/보이스봇에서 **의도(intent)** 는 “**질문**인지, **인사**인지, **예약**인지, **상담원 요청**인지”처럼 **다음 액션**을 정하는 **라벨**이다. **LangGraph** 는 이런 단계를 **노드**로 쪼개고(예: `classify_intent` → RAG/예약/전환), **상태(대화·세션·체크포인트)** 를 넘기며 **끊김·재시도**를 **관리**한다. “한 번에 LLM에 다 맡기는 것”이 아니라, **시스템이 통제**할 수 있게 **경로를 쪼개** 둔 **구조**가 제품/운영에 중요하다.
 
-**단순 의도 → 처리 경로(개략)**:
+**운영·발표에 유용한 포인트**
+
+- **고정 택소노미**(`greeting` … `booking` … `nlu_fallback` 등)는 “AI가 **매번 자유**로 **라벨**을 뽑는 것”이 아니라, **엔지니어가 합의한 의도 집합**에 맞출 수 있어 **로그·대시보드**가 **일관**된다.  
+- **STT** 가 “예약”을 다른 단어로 잡는 경우를 줄이기 위해 **예약 휴리스틱**(`booking_intent_heuristic`)을 **병합**해, **고객이 예약**이라는 맥락이면 **예약 쪽**으로 **당긴다**.  
+- **한 문장에 인사+질문** 처럼 **복합**인 경우, **접속사 뒤 핵심 절**만(`_extract_main_clause`) 쓰는 식으로 **잡담**을 덜고 **질문 본질**에 집중해 **RAG/지식**에 넘기기 좋은 형태로 **정리**한다.  
+- **AI 발신(§4.8)** 은 `outbound_purpose` 등 **미션이** 이미 있을 때, **또** 의도 분류를 **거치지 않고** “**답이 목적**”인 **전용** 경로로 **보낼 수** 있다(구체 분기는 `classify_intent` 등).
+
+**의도 → 다음 단계(개략)**  
+아래도식은 “**의도**가 **라우터**” 역할을 해 **지식(페르소나·RAG)**, **예약 도구**, **HITL(사람)**, **호전환**으로 **흩어짐**을 **한눈**에 보이게 한 것이다.
 
 ![의도 분류 → Persona / RAG / booking / Transfer / HITL](images/system-overview/05-intent-routing.png)
 
-*편집·재렌더: [`diagrams/system-overview/05-intent-routing.mmd`](diagrams/system-overview/05-intent-routing.mmd)*
+*편집·재렌더: [`diagrams/system-overview/05-intent-routing.md`](diagrams/system-overview/05-intent-routing.md)*
 
 ---
 
 ### 4.5 지식 베이스
 
-| 구성요소 | 설명 |
-|----------|------|
-| **자동 적재** | 통화·추출 파이프라인으로 **Q&A/요약**을 ChromaDB에 **upsert** (품질 게이트·유사도 중복 정책) |
-| **시맨틱 캐시** | `qa_cache` — **유사 질문**이면 LLM·RAG를 생략 |
-| **페르소나** | 업무 범위·톤·**scope 키워드**·유사도로 **chitchat vs question** 가름 |
-| **CID·연락처** | `GET /api/call-history/caller-context` 등으로 **직전 인입** 맥락을 UI에 표시, **연락처 트UI·콜 독**과 연동(단계적 확장) |
-| **답을 못할 때** | **신뢰도/정책**에 따라 **HITL**(운영자 텍스트 → 정제 → TTS) 또는 **에스컬레이션 모드**에 따라 **내선 호전환** (페르소나 `escalation_mode`) |
+**발표용 한 줄**  
+**“우리 회사만의 답**”을 **질문**과 **비슷한 문서·Q&A**에서 **꺼내** 오고(검색), **말투**와 **답하거나 넘기는 범위**는 **페르소나**로 맞추며, **답**이 **부족**하면 **사람(운영자) 또는 전환**으로 **넘긴다**.
+
+**비전문가용 설명**  
+많은 조직이 **채팅으로만** FAQ를 쓰지만, 전화/문자/웹 **전 채널**에서 “**같은 두뇌(에이전트)**”가 쓰려면, **답**이 **잘못** 나가면 **피해**가 크다. 그래서 (1) **지식**을 **ChromaDB** 등에 **쌓**고, (2) **이미 본 질문**이면 **캐시**로 **빠르게** 답하고, (3) “**그저 듣다 말씀**”과 “**정말 궁금한 질**”을 **페르소나(범위·톤)** 와 **유사도**로 **가름**다. (4) **여전히 애매**하거나 **끊어야** 할 땐 **HITL** 로 **상담자가** 텍스트로 **쓴 답**을 **정리(TTS에 맞게)** 하거나, **에스컬레이션**에 따라 **내선으로** 돌리는 **정책**을 쓴다.
+
+| 구성요소 | 끝사용자·업무 관점 | 기술 요지(짧게) |
+|----------|--------------------|-----------------|
+| **자동 적재** | “통화·문서로부터” **자동**으로 Q&A·요약이 **쌓**임(운영 **부담** 감소) | Chroma **upsert**, 품질·**중복** 정책 |
+| **시맨틱 캐시** | **똑같은/비슷한** 질문이면 **즉답** | `qa_cache` — LLM·RAG **스킵** |
+| **페르소나** | “**톤**”, “**뭘** 담당할지”, “**농담**은 **여기**까지” | scope 키워드, **chitchat vs question** |
+| **CID·연락처** | 상담 **화면**에 “**누가** / **이전** 인입” **맥락** | `caller-context` API, 콜 히스토리·UI 연동 |
+| **답을 못할 때** | “**누가** **어떻게** 도와드릴지” **명확**히 | **HITL** → **정제** → TTS, **호전환** (`escalation_mode`) |
 
 ![지식: 분류 → RAG·페르소나·캐시 → 응답·에스컬레이션](images/system-overview/06-knowledge-flow.png)
 
-*편집·재렌더: [`diagrams/system-overview/06-knowledge-flow.mmd`](diagrams/system-overview/06-knowledge-flow.mmd)*
+*편집·재렌더: [`diagrams/system-overview/06-knowledge-flow.md`](diagrams/system-overview/06-knowledge-flow.md)*
 
 ---
 
 ### 4.6 Tool 처리 — 예약 (slot, 조회/변경/취소)
 
-**DB**: `booking` 관련 테이블 — **슬롯**(`booking_slots`), **예약**(`bookings`), **테넌트 설정**(`booking_settings`), **도메인 필드**(`booking_schema_fields`) 등.
+**발표용 한 줄**  
+“**말**로 (또는 **문자**로) **빈 시간**·**이름**·**연락처** 를 말하면, **LLM**이 **도구(Tool)** 를 **호출**해 **DB**에 **예약**을 **넣**고, **필요하면 SMS**로 **알려** 주는 **클로즈드** 흐름이다.
 
-**런타임**: `booking_agent` 노드에서 **LLM + bind_tools**로 루프 — `check_available_slots` → `create_booking` / `search_my_bookings` → `update`·`cancel` / **예약 SMS** tool 등(버전·이름은 `booking_tools` 및 리포트 참고).
+**비전문가용 설명**  
+예약은 “**캘린더**에 **한 조각**”을 **잡는** 일이다. 시스템은 **빈 슬롯 목록**을 **조회**하고, **가능**하면 **고객 정보**로 **create**, **이미** 있으면 **조회/변경/취소** 를 **같은 루프**에서 **처리**한다. **STT** 가 “예약”을 **다른 단어**로 쓰기도 해서(음성), **휴리스틱**(`booking_intent_heuristic`)으로 **의도**를 **예약** 쪽에 **당기**고, **CDR/이벤트**에 **`booking_*`** 를 남겨 **나중에** “왜 실패했는지” **분석**할 수 있게 한 **관측**을 **겸**한다. **DB** 쪽은 `booking_slots`, `bookings`, `booking_settings`, `booking_schema_fields` 등으로 **슬롯·예약·테넌트 규칙·도메인 필드(예: “차량 모델”)** 를 **잡는** 구조다.
 
-**흐름(개략)**:
+**런타임(개념)**  
+`booking_agent` 노드에서 **LLM + bind_tools** 로 **“가능한 말** → **도구 호출**”을 **몇 턴** **반복**할 수 있게 한다 — 예: `check_available_slots` → `create_booking` / `search_my_bookings` → `update`·`cancel` / **예약 알림 SMS** (정확한 **이름**은 `booking_tools`·리포트). 아래 **도식**이 **휴리스틱 → 루프 → DB·TTS·문자** 흐름을 **짧게** 보여 준다.
 
 ![예약: 휴리스틱 → LLM+도구 루프 → DB·TTS·SMS](images/system-overview/07-booking-tools.png)
 
-*편집·재렌더: [`diagrams/system-overview/07-booking-tools.mmd`](diagrams/system-overview/07-booking-tools.mmd)*
-
-**음성 전용 보조**: `booking_intent_heuristic`으로 **STT가 booking으로 잘 못 잡는 경우**를 줄이고, CDR에 **`booking_*` 이벤트**를 남겨 사후 분석한다.
+*편집·재렌더: [`diagrams/system-overview/07-booking-tools.md`](diagrams/system-overview/07-booking-tools.md)*
 
 ---
 
 ### 4.7 문자 메시지 처리 (SIP MESSAGE, SMS/RCS, 웹)
 
-- **SIP MESSAGE** 수신 시 — 설정(`chat_relay_settings` 등)이 켜져 있으면 **동일 LangGraph 에이전트**로 **텍스트만** 응답 (`sip_message_ai_reply.py`). STT/TTS/RTP는 타지 않는다.
-- **재진입 방지**: PBX가 보내는 자동 응답에 **`X-PBX-Skip-AI-Reply`** 를 붙여 **무한 루프**를 막는다.
-- **웹**: 채팅·**연락처·콜 독**·**미해결 통화** 화면과 연결해 **상담 후속 문자**를 보낼 수 있게 구성(세부는 `end_call_sms`·`chat_relay` 등).
+**발표용 한 줄**  
+**음성**은 **RTP+STT+TTS**가 필요하지만, **문자**는 “**이미** 텍스트”이므로 **같은 LangGraph**로 **빠진 부분**만(오디오) **빼고** **채팅처럼** **응답**할 수 있게 **연결**한다.
+
+**비전문가용 설명**  
+- **SIP MESSAGE** 를 **받으면**, `chat_relay_settings` 등 **릴레이/AI 응답**이 켜져 있으면 **같은 에이전트**가 **텍스트**만 **주고**(`sip_message_ai_reply.py` 계열) **답**을 **SIP MESSAGE** (또는 **연동된** SMS)로 **돌려** 보낸다. **STT·TTS·RTP** 는 **필요 없음**.  
+- **악**순환이 생기지 않게: PBX가 **자체**로 보내는 **자동 응답**에는 **`X-PBX-Skip-AI-Reply`** 를 붙여 **또** AI가 **답**하지 **않게** 해 **무한 루프**를 **막는**다.  
+- **웹** 상담·**연락처**·**미해결 통화** 뷰에서 **끝**난 **후속** 문자(`end_call_sms`, `chat_relay` 등)는 **채널은 다르지만** **“같은 고객/같은 사건**”이 **UI**에 **닿게** **묶**는다.
+
+**문자·음성의 공통점**  
+**뇌(의도·지식·예약·HITL)** 는 하나로 두고, **입·출**만 **채널**에 맞게 바꾸는 **멀티채널** 구조다.
 
 ![SIP MESSAGE → 설정 확인 → Text Agent → 응답](images/system-overview/08-sip-message-sequence.png)
 
-*편집·재렌더: [`diagrams/system-overview/08-sip-message-sequence.mmd`](diagrams/system-overview/08-sip-message-sequence.mmd)*
+*편집·재렌더: [`diagrams/system-overview/08-sip-message-sequence.md`](diagrams/system-overview/08-sip-message-sequence.md)*
 
 ---
 
 ### 4.8 AI 자동 발신 (Outbound)
 
-**`OutboundCallManager`**: 웹·API로 요청된 **AI 발신**을 **대기열**에 넣고, `INVITE` → **응답 시 AI 파이프라인** → **최대 통화시간/재시도**를 관리한다.
+**발표용 한 줄**  
+**시스템이 먼저** 전화를 걸고, 받는 쪽이 응답하면 그 **한 통화** 안에서 **인바운드와 동일**한 AI 음성 파이프라인이 돌아간다. **미리 정한 목적**(리마인드·안내·설문 등)이 있을 때 쓰는 **프로액티브(선제)** 채널이다.
 
-- **상태** 예: `pending` → `calling` → `answered` → `completed` / `failed` (구현·필드는 모델 참고).
-- **에코/미션** 시나리오는 인바운드와 다른 STT/억제 정책이 있을 수 있어 **outbound 전용** 분기·로그를 둔다(리포트 `OUTBOUND_*` 참고).
+**비전문가용 설명**  
+인바운드는 **고객이 먼저** 전화를 걸고, **아웃바운드**는 캠페인·미션이 있을 때 **서버**가 `INVITE` 를 보내 **벨**에 응답을 **기다리는** 흐름이다. **`OutboundCallManager`** 는 API·웹에서 온 **발신 요청**을 **대기열**에 넣고, **수신(answered)** 이후 **최대 통화 시간**·**재시도**·**상태**(`pending` → `calling` → `answered` → `completed` / `failed` 등)를 **따로** 관리한다(필드·상태명은 **모델**·**리포트** 참고). **에코**·**말끊김**·**미션** 제약이 인입과 **다를 수** 있어, **outbound** 전용 **STT/억제**와 **`OUTBOUND_*` 로그·리포트**로 **별도** 튜닝하는 **경로**가 **정리**되어 있다.
 
 ---
 
 ### 4.9 통화 연결음 (Ringback) — Suno + LLM
 
-**타이밍**: 착신이 응답해 **200 OK** 하기 **전** — **early media** 구간에 발신자에게 **인사 TTS** + **연결음(음원)** 을 **RTP**로 흘린다.
+**발표용 한 줄**  
+착신이 **수화기**를 **드는(200 OK)** 전—발신자는 **끊긴 것**처럼 느끼지 않게 **짧은 인사(TTS)**와 **잠깐의 음악(연결음)**을 **SIP early media** 구간에 **RTP**로 **실어** 준다.
 
-**음원 생성 (Suno)** — `ringback_service.py` 요지:
-
-1. (선택) **LLM**이 **가사·스타일** 태그를 생성 — **페르소나/설정**을 참고할 수 있음.
-2. **Suno API** `generate` → **`callBackUrl`** 로 완료 **콜백**(공인 HTTPS·ngrok 등 필요).
-3. **MP3** 캐시·로컬 저장 후 **RingbackPlayer**가 **PCM 16k**로 변환·루프.
-4. **200 OK** 또는 **AI가 통화를 인수**하면 **정지**한다.
+**비전문가용 설명**  
+벨이 울리는 **동안**, 착신이 **완전히** 통화에 **응(200 OK)하기** 전에는 **“연결만 된 구간(early media)”** 이 있을 수 있다. 그 구간에 TTS로 “잠시만 기다려 주세요, 곧 담당자가…” 같이 **짧은 인사**를 붙이고, **Suno**로 **짧은 루프 음악**을 **생성**해 **콜센터 대기** 같은 **체감**을 낼 수 있다. **착신이 받으면** 또는 **AI가** 통화를 **인수**하면 **연결음은 중단**한다. `ringback_service.py` **흐름(요지)**: (1) (선택) LLM이 **가사·스타일** 힌트 생성, (2) Suno API `generate` + **콜백 URL**으로 완성 **MP3**, (3) **캐시**·**로컬** 저장, (4) **RingbackPlayer**가 16k **PCM**으로 변환·**루프**하여 **RTP**로 **발신자**에게. Suno **콜백**은 **인터넷에서** 서버에 **도달**해야 하므로 **localhost는** 보통 **불가**이며, **ngrok** 등 **공인** URL과 `ringback` **설정**이 **필수**다.
 
 ![통화 연결음: LLM → Suno → 콜백·캐시 → RingbackPlayer → early RTP](images/system-overview/09-ringback-suno.png)
 
-*편집·재렌더: [`diagrams/system-overview/09-ringback-suno.mmd`](diagrams/system-overview/09-ringback-suno.mmd)*
+*편집·재렌더: [`diagrams/system-overview/09-ringback-suno.md`](diagrams/system-overview/09-ringback-suno.md)*
 
-**운영 주의**: Suno 콜백은 **localhost가 아닌 공인 URL**이어야 하므로, 로컬 개발 시 **ngrok**·`ringback` 설정을 함께 둔다.
+**운영 주의(반복)**: 콜백 URL이 **로컬만**이면 **음원이 오지** 않는 **흔한** 원인이므로, **퍼블릭** 엔드포인트·**ngrok**로 **끝까지** 확인한다.
 
 ---
 
 ### 4.10 착신 제어 (AI 자동응답, 그룹·대표번호 성격)
 
-**저장**: SQLite **`call_control.db`** (경로는 환경으로 바뀔 수 있음) — `RoutingRule`, `Schedule`, `AnnouncementProfile`, **착신 그룹**·**전달 대상** 등.
+**발표용 한 줄**  
+**이 번호**로 **누가** **걸었을 때**, **벨**을 **몇 초** 울리고 **AI**로 보낼지, **곧** **직접** 연결할지, **여러** 내선을 **같이·순서대로** 울릴지(헌트), **휴일**·**시간**에 **무엇**을 **안내**할지를 **DB 규칙**이 **한꺼번에** **평가**한다.
 
-**평가 순서(요지)**: `sip_endpoint` 인입에서 **발신자 필터** → **스케줄+규칙** → **기존 operator/away 폴백** 등(상세는 `call_control` 리포트).
+**비전문가용 설명**  
+**대표번호**·**콜센터**에서는 **하나**의 **다이얼** 번호 뒤에 **여러** 비즈니스 **규칙**이 **겹친다** — “영업시간만 **직원**”, “**야간**은 **AI**”, “**5초** **무응답**이면 **다음** 내선” 같이. 이 제품의 **착신 제어**는 `RoutingRule`, `Schedule`, `AnnouncementProfile`, **착신 그룹**·**전달 대상**을 **SQLite** `call_control.db` (경로는 **환경**에 따름)에 **저장**하고, SIP **인입** 시 **발신자 필터 → 스케줄·규칙 → 폴백(기존 operator/away 등)** 순으로 **평가**한다(세부·우선순위는 `call_control` **리포트**). 아래 표는 **슬라이드**·**스크립트**에 그대로 써도 된다.
 
 | 동작(모델) | 의미 (사용자 관점) |
 |------------|-------------------|
-| `direct` | A→B 직접 연결 |
-| `no_answer_ai` | N초 **무응답** 후 **AI** |
-| `immediate_ai` | **항상** AI 먼저(착신자는 정책에 따라) |
-| `forward_*` / `ring_group` | **착신전환** 또는 **다중 내선(동시/순차 링)** — “대표번호/헌트”에 가까운 운용 |
+| `direct` | 발신 A를 착신 B에 **곧장** **연결** (흔한 **내선/직통** 응대) |
+| `no_answer_ai` | N초 동안 **아무도** 받지 못하면 **AI**로 (인력 **빈틈** 메움) |
+| `immediate_ai` | **맨 처음**부터 **AI** (대량 콜·24시·인력 부재 **선**별 등) — 이후 **정책**에 따라 **사람**으로 넘길 수 있음 |
+| `forward_*` / `ring_group` | 다른 **번호**·**내선**으로 돌리거나, **여** 내선 **동시/순차** 울림(헌트·대표) |
 
 ![착신 제어: 필터 → 스케줄·규칙 → 폴백 → 동작 모드](images/system-overview/10-call-control-priority.png)
 
-*편집·재렌더: [`diagrams/system-overview/10-call-control-priority.mmd`](diagrams/system-overview/10-call-control-priority.mmd)*
+*편집·재렌더: [`diagrams/system-overview/10-call-control-priority.md`](diagrams/system-overview/10-call-control-priority.md)*
 
-> **주의**: **링 그룹**의 **SIP 동시/순차 링**은 모델·API와 함께 **지속 구현**되는 영역이 있다(배포마다 `docs/reports`의 최신 착신 제어 리포트 확인).
+> **주의 (발표용)**: **링 그룹**의 SIP **동시/순차 울림**은 제품·API·모델과 함께 **계속** 다듬어 가는 **영역**이다. **배포** 전 `docs/reports`의 **최신** 착신 제어 **리포트**를 반드시 확인하라.
 
-**안내멘트**: 규칙에 연결된 `AnnouncementProfile` 텍스트는 **초기 인사 TTS**에 **`greeting_override`** 로 주입된다.
+**안내멘트(연결)**: 규칙에 연결된 `AnnouncementProfile` 문구는 초기 **인사 TTS**에 `greeting_override`로 주입해, “이 번호·이 스케줄”에 맞는 멘트를 통일할 수 있다.
 
 ---
 
