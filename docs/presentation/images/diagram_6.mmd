@@ -1,0 +1,73 @@
+flowchart TB
+    subgraph L0["LAYER 0 — 외부 네트워크"]
+        P1["고객 전화기"]
+        P2["SIP Trunk / PSTN"]
+        P3["모바일 / 소프트폰"]
+    end
+
+    subgraph L1["LAYER 1 — SIP B2BUA (Python · asyncio)"]
+        SIP["SIP Endpoint\n(INVITE / REGISTER / BYE / CANCEL / OPTIONS / MESSAGE)"]
+        CM["Call Manager\n통화 상태 FSM"]
+        RTP["RTP Relay / Media Bridge\n(RTP ↔ PCM 16kHz)"]
+        Ring["RingbackPlayer\n(Early Media: TTS 인사 + Suno 음원 루프)"]
+        SIP --> CM --> RTP
+        SIP -.-> Ring
+    end
+
+    subgraph L2["LAYER 2 — 실시간 음성 파이프라인 (Pipecat)"]
+        VAD["VAD (Silero)\n발화 시작/종료 + 바지인"]
+        STT["Google STT v2 telephony\n16kHz LINEAR16"]
+        PROC["RAG-LLM Processor\nSupersede / 스트리밍 청크"]
+        TTS["Google TTS Chirp3-HD-Kore\nko-KR 스트리밍"]
+        WD["STT Watchdog · 에코 억제"]
+        VAD --> STT --> PROC --> TTS
+        STT -.-> WD
+    end
+
+    subgraph L3["LAYER 3 — LangGraph 에이전트"]
+        ROUTE["classify_intent\n키워드 → 페르소나 → LLM 병합 (17 intents)"]
+        CACHE["check_cache\nqa_cache 시맨틱 검색"]
+        RAG["adaptive_rag\n2-pass + Small-to-Big + 압축"]
+        BOOK["booking_agent\nLLM Tool-Use 루프"]
+        GEN["generate_response\nRAG + LLM (Gemini 2.5)"]
+        HITL["hitl_alert\nconfidence < 0.3"]
+        ROUTE --> CACHE
+        ROUTE --> BOOK
+        CACHE --> RAG
+        CACHE --> GEN
+        RAG --> GEN
+        BOOK --> GEN
+        GEN --> HITL
+    end
+
+    subgraph L4["LAYER 4 — 데이터 저장소 (테넌트별 격리)"]
+        KB["ChromaDB\nknowledge_{owner}\nqa_cache_{owner}\npersona_{owner}"]
+        DB["SQLite\nbooking · call_control · ringback\ncaller_contacts · chat_messages\ncall_records"]
+    end
+
+    subgraph L5["LAYER 5 — API · 운영자 콘솔"]
+        FAPI["FastAPI REST :8000\n/api/knowledge · /api/persona\n/api/calls · /api/hitl\n/api/booking · /api/call-control\n/api/ringback · /api/chat\n/api/caller-contacts · /api/contact-folders\n/api/google/calendar · /api/outbound"]
+        WS["Socket.IO :8001\nhitl_request · call_update\noperator_message · chat_message"]
+        UI["Next.js 14 콘솔 :3000\n실시간 통화 / HITL / 지식 / 예약\n/ 정책 / 연결음 / 연락처 / 채팅"]
+        FAPI --- WS --> UI
+    end
+
+    subgraph GCloud["외부 AI · 외부 서비스"]
+        GSTT["Google STT v2"]
+        GTTS["Google TTS Chirp3-HD"]
+        LLM["Gemini 2.5 Flash"]
+        GCAL["Google Calendar API v3"]
+        SUNO["Suno API (연결음 음원)"]
+    end
+
+    L0 -->|SIP INVITE / MESSAGE| L1
+    L1 -->|PCM 스트림| L2
+    L2 --> L3
+    L3 <--> L4
+    L3 --> L5
+    L1 --> L5
+    L2 <--> GSTT
+    L2 <--> GTTS
+    L3 <--> LLM
+    L5 <--> GCAL
+    L5 <--> SUNO

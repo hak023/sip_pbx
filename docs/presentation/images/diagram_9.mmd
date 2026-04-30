@@ -1,0 +1,17 @@
+flowchart TB
+    INVITE["SIP INVITE\n착신 내선번호 추출"] -->|owner=1004| T1
+    INVITE -->|owner=1005| T2
+
+    subgraph T1["내선 1004 (예: 기상청)"]
+        K1["knowledge_1004\n· 기상특보 안내\n· 기상감정서 발급 절차\n· 찾아오는 길"]
+        C1["qa_cache_1004 / persona_1004"]
+        DB1["call_control · booking · ringback\ncaller_contacts (owner=1004)"]
+        K1 --- C1 --- DB1
+    end
+
+    subgraph T2["내선 1005 (예: 이탈리안 비스트로)"]
+        K2["knowledge_1005\n· 메뉴 / 예약 / 영업시간"]
+        C2["qa_cache_1005 / persona_1005"]
+        DB2["call_control · booking · ringback\ncaller_contacts (owner=1005)"]
+        K2 --- C2 --- DB2
+    end

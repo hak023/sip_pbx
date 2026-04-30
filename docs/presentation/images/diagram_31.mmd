@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant Operator as Operator
+    participant SIP as SIP Endpoint
+    participant API as call_history API
+    participant Dock as GlobalCallDock
+    participant EndCall as End-of-Call Hook
+    participant LLM as LLM
+    SIP->>API: caller-context (caller, owner)
+    API->>API: caller_match_needle 정규화
+    API->>API: count_inbound_calls_for_caller (30d / all, 현재 통화 제외)
+    API-->>Dock: name + tail4 + counts
+    Dock-->>Operator: "홍길동·5678 / 30일 5회 누적 47회"
+    SIP->>EndCall: BYE
+    EndCall->>EndCall: bookings.customer_name 우선 조회
+    alt 예약명 있음
+        EndCall->>CCDB: upsert (source=auto_booking_hint)
+    else 없음
+        EndCall->>LLM: transcript 발췌 → JSON 이름 추출
+        LLM-->>EndCall: {"name": "..."}
+        EndCall->>CCDB: upsert (source=auto_llm)
+    end

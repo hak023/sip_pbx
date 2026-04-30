@@ -1,0 +1,17 @@
+sequenceDiagram
+    participant C as 고객
+    participant A as booking_agent (LLM)
+    participant DB as SQLite
+    participant SMS as SIP MESSAGE
+    participant GC as Google Calendar
+    C->>A: "토요일 저녁 6명 자리 있어요?"
+    A->>A: classify (booking 휴리스틱)
+    A->>DB: check_available_slots(date=Sat, party_size=6)
+    DB-->>A: [18:00, 19:00]
+    A->>C: TTS "18시·19시 가능합니다"
+    C->>A: "19시로 해주세요"
+    A->>DB: create_booking_tool(...)
+    DB-->>A: booking_id
+    A->>SMS: notify_booking_created_sms (idempotent)
+    A->>GC: insert_event(owner_token)
+    A->>C: TTS "예약 확정됐습니다. 확인 문자도 보내드렸어요."

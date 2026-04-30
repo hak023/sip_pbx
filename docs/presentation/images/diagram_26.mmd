@@ -1,0 +1,10 @@
+flowchart TB
+    INVITE["SIP INVITE 착신 내선번호"] --> Owner["owner = tenant"]
+    Owner --> Iso["테넌트별 격리 자원"]
+    Iso --> Chroma["ChromaDB\nknowledge_{owner}\nqa_cache_{owner}\npersona_{owner}"]
+    Iso --> SQL["SQLite (owner 컬럼)\nbooking · call_control · ringback\ncaller_contacts · chat_messages"]
+    Iso --> Pol["Routing / Persona / Escalation 정책"]
+    Chroma --> Search["RAG 검색 (where=owner)"]
+    SQL --> Query["SQL 조회 (WHERE owner=?)"]
+    Search --> LLM["같은 LLM, 다른 컨텍스트"]
+    Query --> LLM

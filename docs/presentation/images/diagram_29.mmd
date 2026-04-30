@@ -1,0 +1,17 @@
+sequenceDiagram
+    participant SIP as SIP B2BUA
+    participant RE as Routing Engine
+    participant DB as call_control DB
+    participant AI as AI Pipeline
+    SIP->>RE: INVITE (caller, callee, 시각)
+    RE->>DB: caller_filter 평가
+    alt VIP/Block 매칭
+        RE-->>SIP: 강제 액션 적용
+    else 매칭 없음
+        RE->>DB: schedule + rule 평가
+        DB-->>RE: matched RoutingRule (action, announcement_id, forward_to)
+        opt announcement_id 존재
+            RE->>AI: greeting_override = announcement.text
+        end
+        RE-->>SIP: action 적용 (direct/no_answer_ai/immediate_ai/forward/ring_group)
+    end

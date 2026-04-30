@@ -1,0 +1,10 @@
+sequenceDiagram
+    participant SIP as SIP B2BUA
+    participant CM as Call Manager
+    participant L as LangGraph
+    participant CH as ChromaDB
+    SIP->>CM: INVITE (To: <sip:1004@host>)
+    CM->>L: owner=1004 컨텍스트 주입
+    L->>CH: search(where={owner:"1004"})
+    CH-->>L: knowledge_1004 결과만 반환
+    Note over CH: 같은 인프라의 1005 데이터는 결코 노출되지 않음

@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant Caller as 발신자
+    participant SIP as SIP B2BUA
+    participant RP as RingbackPlayer
+    participant T as Google TTS
+    participant S as Suno 음원 캐시
+    Caller->>SIP: INVITE
+    SIP->>RP: Early Bind 후 start (asyncio.create_task)
+    RP->>T: greeting 텍스트 → PCM
+    RP->>Caller: RTP 송출 (인사말)
+    RP->>S: 음원 PCM 변환 (ffmpeg → pydub fallback)
+    RP->>Caller: 음원 루프 송출
+    SIP-->>RP: 200 OK 또는 AI takeover
+    RP->>RP: stop() (RTP 송출 중단, 큐 비움)
+    SIP->>Caller: 통화 연결 / AI 응답 시작

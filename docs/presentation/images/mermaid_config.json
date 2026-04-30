@@ -1,0 +1,13 @@
+{
+  "theme": "default",
+  "themeVariables": {
+    "fontFamily": "Pretendard, 'Noto Sans KR', 'Malgun Gothic', sans-serif",
+    "fontSize": "16px",
+    "edgeLabelBackground": "#ffffff",
+    "textColor": "#000000"
+  },
+  "flowchart": {
+    "htmlLabels": true,
+    "padding": 20
+  }
+}

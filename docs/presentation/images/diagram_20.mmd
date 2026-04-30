@@ -1,0 +1,11 @@
+flowchart LR
+    InMSG["SIP MESSAGE 수신"] --> Gate["chat_relay_settings\nmessage_ai_reply_enabled / 접두어"]
+    Gate -->|허용| Brain["같은 LangGraph 두뇌\n(intent → cache → RAG)"]
+    Brain --> Out["SIP MESSAGE 송출\n(REGISTER 맵 기반 From 헤더)"]
+    Out --> DB[("chat_messages (status, error_code)")]
+    OperConsole["운영자 콘솔 /chat"] --> Send["대화방 전송 / 실패 재전송"]
+    Send --> Out
+    Booking["예약 생성/변경/취소"] --> NotifySvc["booking_notify_service\n(idempotent)"]
+    NotifySvc --> Out
+    EndCall["통화 종료"] --> Sum["LLM 300자 요약\n(KB 인사말 + 예약 블록)"]
+    Sum --> Out

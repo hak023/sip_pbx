@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant SIP as SIP B2BUA
+    participant Pipe as Pipecat
+    participant WS as Socket.IO
+    participant UI as 콘솔
+    participant Op as 운영자
+    SIP->>WS: call_started (call_id, caller, callee)
+    UI-->>Op: 활성 통화 카드 표시
+    Pipe->>WS: stt_interim / stt_final / llm_done / tts_complete
+    UI-->>Op: 실시간 STT/TTS 피드 + 처리 단계
+    Pipe->>WS: hitl_request (confidence < 0.3)
+    UI-->>Op: HITL 패널 알림
+    Op->>WS: operator_message (텍스트)
+    WS->>Pipe: 정제 → TTS → KB 저장
+    SIP->>WS: call_ended → 통화 이력 보드 갱신

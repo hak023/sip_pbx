@@ -1,0 +1,12 @@
+flowchart LR
+    P["고객 발화"] --> V["VAD 발화 감지"]
+    V --> S["Google STT 전사"]
+    S --> R["LangGraph 의도 분류 (17 intents)"]
+    R --> CA["캐시(qa_cache) 적중 검사"]
+    CA -->|HIT 0.1s| G["LLM 응답 생성"]
+    CA -->|MISS| RAG["Adaptive RAG 검색 (테넌트 격리)"]
+    RAG --> G
+    G --> N["한글 숫자 정규화"]
+    N --> T["Streaming TTS"]
+    T --> O["RTP 송출"]
+    O --> L["통화 종료 후 Q&A 자동 추출 → 지식 누적"]

@@ -1,0 +1,47 @@
+* {
+    font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif !important;
+}
+
+.node rect, .node circle, .node ellipse, .node polygon, .node path {
+    stroke-width: 2px !important;
+}
+
+.edgePath .path {
+    stroke-width: 2px !important;
+}
+
+.edgeLabel {
+    font-size: 15px !important;
+    font-weight: bold !important;
+    background-color: #ffffff !important;
+    padding: 3px !important;
+}
+
+.nodeLabel {
+    font-size: 16px !important;
+    font-weight: 600 !important;
+}
+
+.messageText {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+}
+
+.actor {
+    stroke-width: 2px !important;
+}
+
+text.actor > tspan {
+    font-size: 16px !important;
+    font-weight: bold !important;
+}
+
+.labelText {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+}
+
+.loopText > tspan {
+    font-size: 15px !important;
+    font-weight: bold !important;
+}

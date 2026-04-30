@@ -1,0 +1,12 @@
+sequenceDiagram
+    participant Call as 통화
+    participant STT as STT
+    participant Q as Q&A 추출 (LLM)
+    participant D as Dedup
+    participant KB as ChromaDB
+    Call->>STT: 통화 음성
+    Call-->>Q: BYE 후 5초 비동기
+    Q->>Q: 화자 분리 + 인사·잡담 제거 + Q&A 페어 생성 + 메타데이터 부착
+    Q->>D: 후보 Q&A
+    D->>KB: 코사인 유사도 < 0.9 → upsert
+    Note over KB: 다음 통화부터 RAG 검색 대상

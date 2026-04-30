@@ -1,0 +1,15 @@
+flowchart LR
+    INVITE["SIP INVITE"] --> RE["Routing Engine"]
+    RE --> CF["caller_filter\n(VIP / Block / 패턴 매치)"]
+    CF -->|매칭| Force["Forced Action"]
+    CF -->|미매칭| Sch["call_schedules\n(요일·시간대·공휴일)"]
+    Sch --> Rule["call_routing_rules\n(우선순위 정렬)"]
+    Rule --> Action{"RoutingAction"}
+    Action --> Direct["direct (담당자 직접)"]
+    Action --> NoAns["no_answer_ai (N초 무응답 후 AI)"]
+    Action --> Imm["immediate_ai (즉시 AI)"]
+    Action --> Fwd["forward (지정 번호)"]
+    Action --> RG["ring_group (순차 / 동시 링)"]
+    Rule --> Anno["announcement_profiles\n(인사말 오버라이드)"]
+    Action --> Pipe["Pipecat / RTP 처리"]
+    Pipe --> OS["폴백: operator_status (away mode)"]

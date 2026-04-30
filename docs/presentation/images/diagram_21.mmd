@@ -1,0 +1,14 @@
+sequenceDiagram
+    participant C as 고객
+    participant SIP as SIP Endpoint
+    participant Gate as chat_relay_settings
+    participant L as LangGraph
+    participant Out as Outbound MESSAGE
+    C->>SIP: SIP MESSAGE "오늘 영업해요?"
+    SIP->>Gate: message_ai_reply_enabled?
+    Gate-->>SIP: true
+    SIP->>L: 같은 두뇌로 처리
+    L->>L: classify=question → cache → RAG
+    L-->>Out: "오늘은 오후 9시까지 영업합니다"
+    Out-->>C: SIP MESSAGE
+    Note over Out: chat_messages 테이블에 inbound/outbound 모두 저장

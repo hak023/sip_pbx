@@ -1,0 +1,10 @@
+flowchart LR
+    Trig["콘솔 / REST POST /api/outbound\n(callee, purpose, questions)"] --> SIP["SIP B2BUA INVITE"]
+    SIP --> RTP["RTP Worker (outbound)"]
+    RTP --> Pipe["Pipecat Pipeline\n(VAD + STT + RAG-LLM + TTS)\n+ STT 에코 억제"]
+    Pipe --> Greet["2단계 인사\n(Phase1 인사 + Phase2 purpose+첫 질문)"]
+    Greet --> Loop["발화 처리 루프\n(LLM JSON: response/answered/is_answer)"]
+    Loop --> MissionCheck{"모든 questions 답변?"}
+    MissionCheck -->|아니오| Loop
+    MissionCheck -->|예| Bye["KB farewell TTS → BYE"]
+    Bye --> Save["caller/callee/mixed.wav + transcript + metadata.json"]

@@ -1,0 +1,13 @@
+flowchart TD
+    A["① 고객 INVITE 수신"] --> B["② Call Control: 발신자 필터 → 시간 스케줄 → operator_status"]
+    B -->|direct| C1["③ 담당자에게 직접 전달 (Bypass)"]
+    B -->|no_answer_ai| C2["③ N초 무응답 시 AI 인수 + RingbackPlayer Early Media"]
+    B -->|immediate_ai| C3["③ 즉시 AI 응대 (벨소리 없이 AI Pickup)"]
+    B -->|forward| C4["③ SIP REFER / 재INVITE로 지정 번호 전환"]
+    C2 --> D["④ Pipecat Pipeline 기동: VAD → STT → RAG-LLM → TTS"]
+    C3 --> D
+    D --> E["⑤ LangGraph 의도 분류 (17 intents) → 캐시 / RAG / 예약 / 전환 / HITL 분기"]
+    E --> F["⑥ 한글 숫자 정규화 → 스트리밍 TTS → RTP 송출 (첫 음절 1초 내)"]
+    F --> G["⑦ 통화 종료 (BYE) → 녹음 저장(caller/callee/mixed.wav) + 메타데이터"]
+    G --> H["⑧ 5초 후 비동기 Q&A 추출 → 중복 검사 → ChromaDB 저장 (Active RAG)"]
+    G --> I["⑨ 종료 후 요약 SMS / 예약 확인 SMS / Google Calendar 동기화"]

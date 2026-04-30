@@ -1,0 +1,10 @@
+flowchart LR
+    INVITE["INVITE 수신 (Early Bind)"] --> RP["RingbackPlayer\n(asyncio.create_task)"]
+    RP --> TTS["Greeting TTS\n(Google TTS · 16kHz PCM)"]
+    RP --> Loop["Suno 음원 루프\n(MP3 → ffmpeg/pydub → PCM)"]
+    TTS --> RTP["RTP send_ai_audio\n(LINEAR16 → G.711 μ-law)"]
+    Loop --> RTP
+    RP -. stop on 200 OK / AI takeover .-> RTP
+    Console["콘솔 /settings/ringback"] --> Suno["Suno API\n(가사·BPM·길이 입력)"]
+    Suno --> Cache["data/ringback/*.mp3 캐시"]
+    Cache --> Loop

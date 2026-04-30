@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant C as 고객
+    participant L as LLM
+    participant H as HITLManager
+    participant U as 운영자 콘솔
+    participant T as TTS
+    L->>H: confidence < 0.3
+    H->>C: TTS "잠시만 확인해 드리겠습니다"
+    H->>U: hitl_request (call_id, question)
+    U->>H: 텍스트 입력 ("이번 달 말까지")
+    H->>L: 정제 요청
+    L-->>T: "이번 달 말일까지 진행됩니다"
+    T-->>C: 자연스러운 음성 송출
+    H->>H: knowledge_{owner} upsert (source=hitl)
+    Note over H: 통화 종료 시 미저장 건 flush_hitl_kb_for_call

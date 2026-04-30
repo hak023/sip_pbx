@@ -1,0 +1,21 @@
+flowchart TD
+    In["사용자 발화"] --> CI["classify_intent\n키워드 → 규칙 → 페르소나 유사도 → LLM 병합"]
+    CI --> RU["route_utterance"]
+
+    RU -- "소셜 / chitchat / out_of_scope" --> GS["generate_response\n(RAG 스킵)"]
+    RU -- "greeting / farewell" --> GFB["greeting_farewell_kb\n(ChromaDB 직접 조회 ~0.01s)"]
+    RU -- "템플릿 (affirm/deny/repeat/clarification 등)" --> TMPL["template_response\n(LLM 0회)"]
+    RU -- "booking" --> BOOK["booking_agent\n(LLM + Tool Use Loop)"]
+    RU -- "transfer" --> TRF["transfer_handler\n(Contact KB → SIP REFER)"]
+    RU -- "knowledge (question/complaint/help)" --> CC["check_cache\n(qa_cache 시맨틱 검색)"]
+
+    CC -->|HIT ~0.1s| GHIT["generate_response\n(캐시 즉시)"]
+    CC -->|MISS| RW["rewrite_query\n(짧은 발화·대명사 시)"]
+    RW --> RAG["adaptive_rag\n(2-pass + Small-to-Big + 압축)"]
+    RAG --> GEN["generate_response\n(RAG 컨텍스트 최대 3건)"]
+
+    GS --> H["hitl_alert\nconfidence < 0.3"]
+    GHIT --> H
+    GEN --> H
+    BOOK --> H
+    H --> END["update_cache → END"]

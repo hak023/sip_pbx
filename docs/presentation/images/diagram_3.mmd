@@ -1,0 +1,11 @@
+flowchart LR
+    I["SIP INVITE 수신"] --> CF["발신자 필터 (VIP·차단)"]
+    CF -->|매칭| A1["우선 정책 적용"]
+    CF -->|미매칭| Sch["시간 스케줄 + 공휴일 평가"]
+    Sch --> Rule["Routing Rule"]
+    Rule -->|direct| HumanCall["담당자 직접 연결"]
+    Rule -->|no_answer_ai| Wait["N초 대기 → AI 인수"]
+    Rule -->|immediate_ai| AICall["즉시 AI 응대"]
+    Rule -->|forward| Fwd["지정 번호 전환"]
+    Rule -->|ring_group| Group["착신 그룹 호출"]
+    Rule --> Greet["안내 멘트 오버라이드"]

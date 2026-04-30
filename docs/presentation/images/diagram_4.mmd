@@ -1,0 +1,7 @@
+flowchart TB
+    Voice["음성 통화 (INVITE)"] --> Brain
+    Msg["SIP MESSAGE / 문자"] --> Brain
+    Ring["Early Media (통화 연결음)"] --> Brain
+    OB["아웃바운드 미션 트리거"] --> Brain
+    Brain["같은 LangGraph 두뇌\n(의도 분류 · 지식 · 페르소나)"] --> Out
+    Out["채널별 출력\n(TTS · 문자 · 음원 · BYE)"]

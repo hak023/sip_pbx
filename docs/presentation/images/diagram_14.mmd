@@ -1,0 +1,14 @@
+flowchart LR
+    Utt["고객 발화"] --> CI["classify_intent / booking 휴리스틱"]
+    CI --> Agent["booking_agent\n(LLM + Tool Use Loop, 최대 N회)"]
+    Agent --> Tools{"Booking Tools"}
+    Tools --> T1["check_available_slots"]
+    Tools --> T2["create_booking_tool"]
+    Tools --> T3["update_booking_tool / reschedule"]
+    Tools --> T4["cancel_booking_tool"]
+    Tools --> T5["search_my_bookings"]
+    Tools --> T6["get_booking_settings"]
+    Tools --> T7["search_faq"]
+    Tools --> DB[("SQLite booking · booking_domains")]
+    T2 --> Notify["booking_notify\n(SIP MESSAGE 확인 발송)"]
+    T2 --> GCal["Google Calendar Sync\n(gcal_event_map)"]

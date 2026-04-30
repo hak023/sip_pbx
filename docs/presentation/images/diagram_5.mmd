@@ -1,0 +1,8 @@
+flowchart TB
+    SIP["INVITE 착신 내선번호"] --> Owner["owner = tenant 결정"]
+    Owner --> KB["knowledge_{owner}\nqa_cache_{owner}\npersona_{owner}\ncalls_{owner}"]
+    Owner --> Pol["call_control / booking / ringback / contacts (owner별)"]
+    KB --> Console
+    Pol --> Console["Next.js 운영자 콘솔\nREST :8000 + Socket.IO :8001"]
+    Console --> Live["실시간 통화 / HITL"]
+    Console --> Mgmt["지식 / 예약 / 정책 / 연결음 / 연락처 관리"]

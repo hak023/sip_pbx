@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant C as 고객
+    participant L as LangGraph
+    participant Ext as Contact KB
+    participant SIP as SIP Endpoint
+    participant Tgt as 담당자
+    C->>L: "배송팀 연결해주세요"
+    L->>Ext: "배송팀 연결" 벡터 검색 (category=contact)
+    Ext-->>L: {department: 배송팀, phone: 02-1234-5001}
+    L-->>C: TTS "배송팀으로 연결해 드리겠습니다"
+    L->>SIP: SIP INVITE (target)
+    SIP->>Tgt: INVITE
+    Tgt-->>SIP: 200 OK
+    SIP->>SIP: AI Pipeline 종료 → RTP Bridge 모드
+    Note over C,Tgt: 발신자 ↔ 담당자 직통 (<500ms)
+    alt 부재중/486
+        SIP-->>L: AI 모드 자동 복귀
+        L-->>C: "지금 연결이 어렵습니다. 메모 남겨 드릴까요?"
+    end

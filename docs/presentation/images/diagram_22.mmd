@@ -1,0 +1,11 @@
+flowchart LR
+    Utt["고객 발화"] --> CI["classify_intent=transfer 또는\nescalation_mode=transfer"]
+    CI --> Ext["ContactKnowledgeExtractor\n(category=contact 벡터 검색)"]
+    Ext --> Ann["LLM 안내 멘트"]
+    Ann --> TTS["TTS 송출"]
+    TTS --> Refer["SIP REFER / 재INVITE"]
+    Refer --> Bridge["RTP Bridge 모드 전환"]
+    Bridge --> Done["발신자 ↔ 담당자 (<500ms)"]
+    Console["운영자 콘솔"] --> Manual["manual_transfer_request\n(WebSocket)"]
+    Manual --> Refer
+    Refer -. fail .-> AIBack["AI 모드 자동 복귀"]

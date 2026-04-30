@@ -1,0 +1,14 @@
+flowchart LR
+    subgraph In["입력 경로 4종"]
+        A1["통화 종료 후 STT 전문\n→ LLM Q&A 추출"]
+        A2["TXT/문서 업로드\n→ 청킹 + LLM 자동 분류"]
+        A3["HITL 운영자 답변\n→ 정제 후 즉시 저장"]
+        A4["콘솔 직접 입력\n(인사·FAQ·연락처 등)"]
+    end
+    A1 --> Dedup["SemanticDeduplicator\n(코사인 유사도 ≥ 0.9 시 중복 처리)"]
+    A2 --> Dedup
+    A3 --> Dedup
+    A4 --> Dedup
+    Dedup --> KB[("ChromaDB\nknowledge_{owner}\nqa_cache_{owner}\npersona_{owner}")]
+    KB --> Search["RAG 조회 (where=owner)"]
+    Search --> LLM["LLM 응답 생성"]

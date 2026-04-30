@@ -1,0 +1,11 @@
+flowchart LR
+    G["generate_response (LLM)"] --> H["hitl_alert\n(confidence < 0.3 또는 needs_follow_up)"]
+    H --> Mode{"escalation_mode"}
+    Mode -->|hitl| WS["Socket.IO\nhitl_request"]
+    Mode -->|transfer| REFER["SIP REFER → 상담원 내선"]
+    WS --> Op["운영자 콘솔 패널"]
+    Op --> Reply["운영자 텍스트 입력"]
+    Reply --> Format["LLM 정제 (전화용 어투)"]
+    Format --> TTS2["TTS 송출"]
+    Reply --> KB[("ChromaDB knowledge_{owner}\nsource=hitl")]
+    KB --> Reuse["다음 동일 질문은 AI 단독 처리"]

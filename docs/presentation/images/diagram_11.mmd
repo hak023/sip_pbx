@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant C as 고객
+    participant V as VAD
+    participant S as STT
+    participant L as LangGraph + LLM
+    participant T as TTS
+    Note over C,T: 통화 연결 직후 인사말 2단계
+    T->>C: Phase 1 인사 (KB greeting_phase1)
+    T->>C: Phase 2 인사 (KB greeting_phase2)
+    C->>V: "내일 저녁 7시에 4명 가능해요?"
+    V->>S: UserStartedSpeakingFrame → 음성 프레임 전달
+    S->>L: 최종 텍스트 (debounce 병합)
+    L->>L: classify → cache → RAG / booking
+    L-->>T: 첫 문장 청크 즉시 전달 (스트리밍)
+    T-->>C: 첫 음절 송출 (≈1.0s)
+    C->>V: AI 발화 중 끼어들기 ("잠깐, 주차는요?")
+    V->>S: 음성 프레임 전달
+    S->>L: 텍스트 및 길이 평가 (스마트 바지인)
+    L->>T: 유효 끼어들기 판정 → TTS 중단 신호
+    T-->>C: TTS 즉시 중단
+    L->>L: 새 발화 처리

@@ -1,0 +1,7 @@
+flowchart LR
+    INVITE["INVITE 수신"] --> Needle["caller_match_needle\n(canonical phone + 끝 4자리)"]
+    Needle --> Ctx["GET /api/calls/caller-context\n(연락처 + 30d/누적 통계)"]
+    Ctx --> Dock["GlobalCallDock (이중 라인 표시)"]
+    EndCall["통화 종료"] --> AutoFill["caller_contact_autofill\n(예약명 우선 → LLM JSON 추출)"]
+    AutoFill --> CCDB[("caller_contacts\ndisplay_name + tail4")]
+    CCDB --> Tree["Contact Folder Tree (DnD)"]

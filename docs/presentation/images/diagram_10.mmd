@@ -1,0 +1,17 @@
+flowchart LR
+    Mic["고객 RTP 입력"] --> VAD["VAD (Silero)
+발화 시작/종료"]
+    VAD --> STT["Google STT v2
+(telephony, 16kHz LINEAR16,
+중간 결과 + 최종 결과)"]
+    STT --> Deb["STT Debounce
+(짧은 침묵으로 끊긴 문장 병합)"]
+    Deb --> Sup["Supersede
+(새 발화 도착 시 진행 LLM Task 취소)"]
+    Sup --> LG["LangGraph 의도 처리"]
+    LG --> KN["KoreanNumberNormalizer
+(3,500원 → 삼천오백원)"]
+    KN --> TTS["Streaming TTS Chirp3-HD-Kore"]
+    TTS --> RTP["RTP 출력 (첫 음절 ~1s)"]
+    STT -. "스마트 바지인
+(맞장구/끼어들기 판정)" .-> TTS
