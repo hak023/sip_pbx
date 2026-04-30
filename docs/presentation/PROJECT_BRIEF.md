@@ -87,69 +87,24 @@ Agentic AI Callbot은 표준 SIP 기반 통화 제어 위에 실시간 음성 AI
 
 ### 3.2 블록형 아키텍처 (플랫폼·데이터·외부 서비스)
 
-§3.1의 6 레이어를 **역할별 블록**으로 풀어 쓴 것입니다.  
-블록 사이에는 **호출·데이터 흐름을 나타내는 선을 그리지 않았습니다** — 역할 묶음만 구분합니다.
+플랫폼을 **블록형**으로 정리한 그림입니다.  
+**중앙**은 기능을 위→아래로 적층하고(큰 레이어 안에 작은 블록 배치), **좌측**은 Call Control·멀티테넌시 등 운영 공통, **우측**은 외부 AI·연동·저장소를 두었습니다. 6개 레이어 번호 대신 역할에 따라 묶고 구조적 가독성을 높였습니다.
 
-```mermaid
-flowchart TB
-  subgraph ext_ai["외부 AI·음성"]
-    STT["Google Cloud STT"]
-    TTS["Google Cloud TTS"]
-    GEM["Gemini LLM"]
-  end
+![블록형 아키텍처](images/diagram_block_architecture.png)
 
-  subgraph ext_svc["외부 비즈니스·미디어"]
-    GCAL["Google Calendar"]
-    SUNO["Suno 등 연결음·미디어"]
-    MCP["MCP 확장 인터페이스"]
-  end
-
-  subgraph clients["접속·운영"]
-    SIP_EP["SIP 단말 · 트렁크"]
-    WEB["웹 콘솔 · Call Dock"]
-  end
-
-  subgraph sip_layer["② SIP·통화 제어"]
-    B2BUA["B2BUA · 세션 · 전환 · 보류 · SIP MESSAGE"]
-  end
-
-  subgraph media_layer["③ RTP·미디어"]
-    RTP["RTP 브리지 · 코덱 · 녹음 · 연결음"]
-  end
-
-  subgraph voice_layer["④ 실시간 음성 파이프라인"]
-    PIPE["Pipecat · VAD · 바지인 · 스트리밍 TTS 연동"]
-  end
-
-  subgraph ai_layer["⑤ AI 에이전트·지식"]
-    LG["LangGraph · 의도·도구 · Active RAG · 예약·전환·HITL 분기"]
-  end
-
-  subgraph ops_layer["⑥ 운영·API"]
-    API["FastAPI REST"]
-    WS["WebSocket / Socket.IO"]
-    CC["Call Control 정책 · 멀티테넌시 라우팅"]
-  end
-
-  subgraph stores["데이터 저장소"]
-    SQL[("SQLite<br/>예약 · Call Control<br/>통화·연락처 등")]
-    CHROMA[("ChromaDB<br/>벡터 · 멀티테넌시 컬렉션<br/>Active RAG")]
-    FILES["파일 로그 · 녹음 WAV · 구조화 로그"]
-  end
-```
+> PNG 수정 시: `sip-pbx` 루트에서 `python docs/presentation/images/generate_block_arch_diagram.py`  
+> (matplotlib 필요: `pip install matplotlib`)
 
 **블록 요약**
 
 | 구역 | 포함 요소 |
 |------|-----------|
-| **접속·운영** | SIP 네트워크, 운영자 Next.js 콘솔 |
-| **②③** | 표준 SIP 세션과 RTP 미디어 경로 (연결음 RTP 등) |
-| **④** | 실시간 오디오 처리; 외부 STT/TTS 활용 |
-| **⑤** | 대화 상태 그래프, 지식 검색·추가, 도구 호출 |
-| **⑥** | HTTP API, 실시간 이벤트, 착신·시간대 정책 |
-| **데이터** | 관계형 상태는 **SQLite**, 의미 검색·지식 축적은 **ChromaDB**, 감사·트러블슈팅은 **로그·녹음 파일** |
-| **외부 AI** | **STT · TTS · Gemini** (음성 인식·합성·추론) |
-| **외부 연동** | **Calendar**(예약 일정), **Suno**(연결음 등), **MCP**(추가 도구 확장) |
+| **좌측 (운영 정책·공통)** | **Call Control** (착신/시간대/발신 필터), **멀티테넌시·감사** (내선 격리, HITL 로그) |
+| **우측 (외부·데이터 지원)** | **외부 AI/연동** (Google STT/TTS, Gemini, Calendar, Suno), **저장소** (SQLite, ChromaDB) |
+| **중앙 (접속·클라이언트)** | SIP 단말·트렁크, 웹 운영 콘솔 (Next.js, Call Dock) |
+| **중앙 (운영·API)** | FastAPI REST, WebSocket / Socket.IO (실시간 이벤트) |
+| **중앙 (지식·에이전트)** | LangGraph (의도 분류, 도구 호출), Active RAG (동적 지식 주입) |
+| **중앙 (실시간 통화 파이프라인)** | Pipecat 실시간 음성 제어(VAD·바지인), RTP 미디어, SIP 통화 제어(B2BUA) |
 
 설정에 따라 LLM·RAG 요약을 별도 DB에 적재하는 **옵션 로깅(asyncpg 등)** 이 붙을 수 있습니다 — 상세는 배포 환경의 `config` 기준입니다.
 
