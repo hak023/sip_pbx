@@ -113,16 +113,16 @@ def main() -> None:
     draw_component(ax, CX + 0.2, L2_Y + 0.2, cw, 2.5, "AI Voice + Agent", [])
     
     aw = cw - 0.4
-    draw_component(ax, CX + 0.4, L2_Y + 1.3, aw, 0.8, "LangGraph 에이전트", ["17개 의도 분류, 도구 호출", "Active RAG, HITL 분기"])
-    draw_component(ax, CX + 0.4, L2_Y + 0.4, aw, 0.8, "Pipecat 파이프라인", ["VAD, 스마트 바지인 제어", "STT/TTS 양방향 스트리밍"])
+    draw_component(ax, CX + 0.4, L2_Y + 1.4, aw, 0.9, "LangGraph 에이전트", ["17개 의도 분류, 도구 호출", "Active RAG, HITL 분기"])
+    draw_component(ax, CX + 0.4, L2_Y + 0.4, aw, 0.9, "Pipecat 파이프라인", ["VAD, 스마트 바지인 제어", "STT/TTS 양방향 스트리밍"])
 
     # Right Core: SIP / RTP
     draw_component(ax, CX + 0.4 + cw, L2_Y + 0.2, cw, 2.5, "SIP / RTP Core", [])
     
     sw = cw - 0.4
     sx = CX + 0.4 + cw + 0.2
-    draw_component(ax, sx, L2_Y + 1.3, sw, 0.8, "B2BUA Call Control", ["SIP 세션(INVITE) 중계", "호 전환, 보류, 연결음 제어"])
-    draw_component(ax, sx, L2_Y + 0.4, sw, 0.8, "RTP Relay Worker", ["RTP 미디어 브리지", "오디오 믹싱, 녹음 전송"])
+    draw_component(ax, sx, L2_Y + 1.4, sw, 0.9, "B2BUA Call Control", ["SIP 세션(INVITE) 중계", "호 전환, 보류, 연결음 제어"])
+    draw_component(ax, sx, L2_Y + 0.4, sw, 0.9, "RTP Relay Worker", ["RTP 미디어 브리지", "오디오 믹싱, 녹음 전송"])
 
     # 1. Data & External (Bottom)
     L1_Y = 0.6
