@@ -111,7 +111,6 @@ def main() -> None:
     
     # Left Core: AI Voice + Agent
     draw_component(ax, CX + 0.2, L2_Y + 0.2, cw, 2.5, "AI Voice + Agent", [])
-    ax.text(CX + 0.2 + cw/2, L2_Y + 2.5 - 0.25, "AI Voice + Agent", fontsize=10.5, fontweight='bold', color="#1e293b", ha='center', va='center', zorder=4)
     
     aw = cw - 0.4
     draw_component(ax, CX + 0.4, L2_Y + 1.3, aw, 0.8, "LangGraph 에이전트", ["17개 의도 분류, 도구 호출", "Active RAG, HITL 분기"])
@@ -119,7 +118,6 @@ def main() -> None:
 
     # Right Core: SIP / RTP
     draw_component(ax, CX + 0.4 + cw, L2_Y + 0.2, cw, 2.5, "SIP / RTP Core", [])
-    ax.text(CX + 0.4 + cw + cw/2, L2_Y + 2.5 - 0.25, "SIP / RTP Core", fontsize=10.5, fontweight='bold', color="#1e293b", ha='center', va='center', zorder=4)
     
     sw = cw - 0.4
     sx = CX + 0.4 + cw + 0.2
