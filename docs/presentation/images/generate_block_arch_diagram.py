@@ -78,8 +78,8 @@ def main() -> None:
         plt.rcParams["font.family"] = ko
     plt.rcParams["axes.unicode_minus"] = False
 
-    # 캔버스 크기
-    fig, ax = plt.subplots(figsize=(12, 10.5), dpi=200)
+    # 캔버스 크기 (해상도 400 DPI로 상승)
+    fig, ax = plt.subplots(figsize=(12, 10.5), dpi=400)
     ax.set_xlim(0, 12)
     ax.set_ylim(0, 10.5)
     ax.axis("off")
