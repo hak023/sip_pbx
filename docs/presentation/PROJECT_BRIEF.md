@@ -85,27 +85,23 @@ Agentic AI Callbot은 표준 SIP 기반 통화 제어 위에 실시간 음성 AI
 
 ![Diagram 6](images/diagram_6.png)
 
-### 3.2 블록형 아키텍처 (플랫폼·데이터·외부 서비스)
+### 3.2 블록형 아키텍처 (논리적 계층 구조)
 
-플랫폼을 **블록형**으로 정리한 그림입니다.  
-**좌측 주 영역(중앙 스택)**은 핵심 통화 및 AI 기능을 위→아래로 적층하고, **우측 기둥** 한 곳에 외부 연동과 저장소, 그리고 운영 정책·공통 관리를 위아래로 몰아서 배치했습니다.  
-또한 세로로 너무 길어지는 것을 방지하고, **레이어별로 부드러운 파스텔 톤 색상**을 다르게 적용하여 구조적 가독성을 한층 더 높였습니다.
+전체 시스템을 논리적 계층과 역할에 따라 **블록형**으로 구분한 아키텍처입니다.  
+외부 접속부터 데이터 저장소까지 데이터 흐름과 책임 영역을 직관적으로 파악할 수 있도록 4개의 주요 계층(Tier)으로 설계되었습니다.
 
 ![블록형 아키텍처](images/diagram_block_architecture.png)
 
-> PNG 수정 시: `sip-pbx` 루트에서 `python docs/presentation/images/generate_block_arch_diagram.py`  
-> (matplotlib 필요: `pip install matplotlib`)
+> PNG 생성 스크립트: `sip-pbx` 루트에서 `python docs/presentation/images/generate_block_arch_diagram.py` 실행 (matplotlib 필요)
 
-**블록 요약**
+**계층(Tier) 요약**
 
-| 구역 | 색상 톤 | 포함 요소 |
-|------|---------|-----------|
-| **우측 (외부 연동·데이터)** | 🟩 연두 | **외부 AI/연동** (Google STT/TTS, Gemini, Calendar, Suno), **저장소** (SQLite, ChromaDB) |
-| **우측 (운영 정책·관리)** | 🟥 핑크 | **Call Control** (착신/시간대/발신 필터), **멀티테넌시·감사** (내선 격리, HITL 로그) |
-| **좌측 (접속·클라이언트)** | 🟦 파랑 | SIP 단말·트렁크, 웹 운영 콘솔 (Next.js, Call Dock) |
-| **좌측 (운영·API)** | 🩵 청록 | FastAPI REST, WebSocket / Socket.IO (실시간 이벤트) |
-| **좌측 (지식·에이전트)** | 🪻 남색 | LangGraph (의도 분류, 도구 호출), Active RAG (동적 지식 주입) |
-| **좌측 (실시간 음성 파이프라인)** | 🟨 노랑 | Pipecat 실시간 음성 제어(VAD·바지인), RTP 미디어, SIP 통화 제어(B2BUA) |
+| 계층 | 역할 및 주요 구성 요소 |
+|------|------------------------|
+| **Client & External Access** | 사용자와 시스템 간의 접점. SIP 단말/트렁크를 통한 통화 접속과 Next.js 기반의 웹 운영 콘솔(Call Dock)을 포함합니다. |
+| **Application Tier** | 시스템 제어 및 실시간 상태 관리. FastAPI를 통한 REST API(착신 라우팅 설정 등)와 Socket.IO를 통한 실시간 양방향 이벤트 처리를 담당합니다. |
+| **Core Processing Engine** | 시스템의 핵심 로직. **AI Voice + Agent**(LangGraph 의도 분류, Pipecat 음성 파이프라인)와 **SIP / RTP Core**(B2BUA 세션 제어, RTP 브리지)가 상호작용합니다. |
+| **Data Storage & External** | 영속성 데이터 보관 및 외부 연동. SQLite(관계형 DB), ChromaDB(벡터 DB), Google Cloud AI(STT/TTS, Gemini) 모듈이 위치합니다. |
 
 설정에 따라 LLM·RAG 요약을 별도 DB에 적재하는 **옵션 로깅(asyncpg 등)** 이 붙을 수 있습니다 — 상세는 배포 환경의 `config` 기준입니다.
 
