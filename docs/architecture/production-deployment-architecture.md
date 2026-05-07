@@ -115,8 +115,8 @@ flowchart TD
     CM["통화매니저AS"] -->|SIP/2.0 + SDP| WT["WTIMS"]
     WT -->|RTP/RTCP relay| EP["통화 단말"]
     WT -->|RTP Mirror fork| STT["STT Server"]
-    AIR["AI Runtime"] -->|gRPC bidi stream<br/>16k PCM/Opus| STT
-    AIR -->|HTTP/2 gRPC 또는 REST<br/>OpenAI-compatible| LLM["LLM Server"]
+    AIR["AI Runtime"] -->|gRPC bidi · 16k PCM Opus| STT
+    AIR -->|HTTP2 gRPC 또는 REST · OpenAI-compatible| LLM["LLM Server"]
     AIR -->|gRPC/HTTP TTS API| TTS["TTS Server"]
     TTS -->|PCM chunk / RTP payload| WT
     API["API/Realtime"] -->|HTTPS REST JSON| AIR
