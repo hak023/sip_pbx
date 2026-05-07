@@ -8,7 +8,7 @@
 | 용량 목표 | 가입자 10,000명, 50 CPS, 평균 통화 유지 120초 |
 | 동시세션 산정 | `50 CPS x 120s = 6,000 동시 세션` |
 | 기존 자산 | 교환기 N개, 통화매니저AS 2 Pair(A/S), WTIMS RTP 서버, **통화매니저 API(유엔젤·코어)** , **통화매니저 API(바이토·외부)** , 유저 PC Client ↔ 바이토 ↔ 유엔젤 기존 연동 |
-| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 Altibase/VectorDB/**NAS Blob**) · 경계 **AIR GW**(세션 시그널)·**AI API Ingress**(외부→API) · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) |
+| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 Altibase/VectorDB/**NAS Blob**) · 경계 **AIR GW**(세션 시그널)·**AI API Ingress**(유엔젤·바이토·외부→API 단일 진입) · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) |
 | DB 제약 | RDB는 Altibase 사용 필수 |
 
 ---
@@ -45,7 +45,7 @@
 | **세션·미디어 통합 릴레이** | WTIMS → **AIR 연동 접점** → AI Runtime: 통화매니저AS에서 받은 호 세션 정보를 합쳐 전달 + 미디어 레그 바인딩 | 코어는 접점 **단일 주소**만 노출; AIR는 접점 뒤 클러스터(§1.4·§2.2) |
 | **오케스트레이션** | AI Runtime: 의도·정책·HITL·추론 라우팅 | 허브 비대화 방지를 위해 내부 모듈·API 세분화 검토 |
 | **추론 평면** | STT / TTS / LLM | GPU·큐·모델 버전 단위 스케일 |
-| **외부 API** | API/Realtime: **외부**(브라우저·파트너·운영망)에서 접근하는 REST/WSS·SIP MESSAGE 브릿지 | 코어·내부 서비스와 달리 인증·레이트리밋·공격면을 따로 둔다 |
+| **외부 API** | API/Realtime: **AI API Ingress** 뒤에서 **유엔젤·바이토·파트너·운영망**이 REST/WSS로 접근 | 인증·레이트리밋·공격면을 Ingress에 수렴(§1.6) |
 | **데이터 평면** | Altibase·VectorDB·**NAS(파일 공유)** | 트랜잭션·벡터 검색·Blob(파일) 용도 분리 |
 
 **API ↔ Altibase 직접 SQL**은 가능하지만, 스키마·트랜잭션 경계가 AI Runtime 경유와 달라지지 않도록 **읽기 전용 조회·CQRS·권한 모델**을 초기에 고정하는 것을 권장한다.
@@ -98,23 +98,23 @@
 1. **유엔젤 API와 연동** — 코어 통신과 관련된 **설정 반영·상태·정보 조회**가 필요할 때 AI 측 API가 유엔젤 API를 호출하거나, 조직 정책에 따라 **역방향 노티**를 받는다.
 2. **바이토 API와 연동** — **유저 PC Client**에 AI 관련 **정보 전달**(알림·목록·설정 화면 데이터), 사용자의 **설정·정보 조회** 요청을 AI 기능과 매핑할 때 바이토 경유 또는 API/Realtime ↔ 바이토 간 규약으로 처리한다.
 
-즉 **운영 콘솔 웹(문서상 별도)** 과 별개로, **실사용자 UI는 유저 PC Client → 바이토 → 유엔젤** 축이며, AI 기능은 **API/Realtime이 유엔젤·바이토 둘 다**와 계약을 맞춘다.
+**통화매니저 API(유엔젤·바이토) → API/Realtime 호출:** 유엔젤·바이토 서버가 **AI Call Agent의 API/Realtime을 호출**할 때(코어 연계·설정 연동·바이토 경유 트리거 등)에는 **AI API Ingress 단일 VIP/FQDN**으로만 진입한다(§1.6). **반대 방향**인 **API/Realtime → 유엔젤·바이토**(코어 조회·바이토 연계 조회 등 **아웃바운드**)는 존·방화벽 정책에 따라 **Ingress 없이** 서버 간 HTTPS 등으로 직접 허용할 수 있다(동일 규약·mTLS 권장).
 
-### 1.6 외부 서버 → AI Call Agent API 단일 접점
+즉 **운영 콘솔 웹(문서상 별도)** 과 별개로, **실사용자 UI는 유저 PC Client → 바이토 → 유엔젤** 축이며, AI 기능은 **API/Realtime이 유엔젤·바이토와 계약**을 맞추되, **AI로 들어오는 HTTP(S) 호출**은 Ingress로 **한 주소**에 수렴한다.
 
-**통화매니저 바이토·유저 PC**와 별도로, **레거시/파트너/외부 업무 서버**가 AI Call Agent의 **REST·WebSocket·웹훅** 등을 호출해야 하는 경우에도, 코어↔AIR와 같은 이유로 **연동 주소·정책을 한 벌로 고정**하는 것이 유리하다.
+### 1.6 AI API Ingress — 유엔젤·바이토·외부 시스템 → API/Realtime 단일 접점
 
-**권장:** AI Call Agent 경계에 **AI API 연동 접점**(North-South **API Ingress** — L7 LB, Kong/Envoy/APG 등 **API Gateway**, 또는 동등)을 두고, 외부는 **`ai-api.example.com` 단일 VIP/FQDN**만 알면 된다.
+**통화매니저 API 서버(유엔젤·바이토)** , **외부 서버·파트너·레거시** 등 **API/Realtime을 호출하는 모든 북쪽(North) 클라이언트**는 코어↔신규 구역 경계에서 **연동 주소·TLS·인증·레이트리밋을 한 벌**로 맞추기 위해 **동일한 AI API Ingress**(L7 LB, Kong/Envoy/APG 등 **API Gateway**, 또는 동등) **단일 VIP/FQDN**으로 수렴하는 것을 본 설계에서 **확정**한다.
 
 | 요소 | 역할 |
 |------|------|
-| **단일 진입** | 외부 방화벽·WAF·ACL을 **Ingress 한 주소**에만 개방 |
-| **TLS·신뢰** | 공인 인증서 종료, 선택적으로 **mTLS**(파트너 인증서), 내부는 재암호화 또는 평문(폐쇄망) |
+| **단일 진입** | 방화벽·WAF·ACL을 **`ai-api…` 등 Ingress 한 주소**에만 개방; 유엔젤·바이토·파트너가 **같은 목적지**를 바라보게 조직 DNS·라우팅 정리 |
+| **TLS·신뢰** | 공인 또는 사내 인증서 종료, **mTLS**(서버 간 신뢰)·클라이언트 인증서 선택 |
 | **정책** | OAuth2/JWT·API Key·IP 허용목록, **레이트리밋**, 요청 크기 제한 |
 | **라우팅** | Ingress → **API/Realtime 클러스터**로 로드밸런싱(세션형은 스티키 또는 토큰 affinity) |
-| **바이토와의 관계** | 유저 PC·바이토 경로는 §1.5 기존 규약을 유지할 수 있다. **추가되는 외부 시스템**만 Ingress를 통하게 하거나, 장기적으로 바이토→AI 호출도 동일 Ingress로 수렴시키면 운영 단순화 |
+| **아웃바운드(반대 방향)** | **API/Realtime → 유엔젤·바이토** 호출은 별도 존 연동으로 **Ingress 비경유** 가능 — 표 §3.2 |
 
-**내부 소비**(운영 콘솔, 같은 VPC의 마이크로서비스)는 Ingress를 경유하지 않고 **사내 서비스 메시·내부 LB**로 API에 붙어도 된다. 단, **인터넷·타 부서망·레거시 DMZ**에서 오는 호출은 Ingress 단일화를 권장한다.
+**운영 콘솔**(신규 존 동일 망)·**순수 내부 마이크로서비스**만 API를 쓰는 경우에는 조직 정책에 따라 **내부 LB만** 쓸 수 있으나, **통화매니저 API 서버에서 AI로 오는 호출**은 위 단일 Ingress 정책과 맞춘다.
 
 ---
 
@@ -180,11 +180,13 @@ flowchart LR
     AIR -->|gRPC HTTP 스트리밍 합성| TTS
     TTS -->|제어 채널 RTP 페이로드 협의| WT
 
+    UAPI -->|HTTPS AI API 호출 단일 VIP| APIGW
+    BAPI -->|HTTPS AI API 호출 단일 VIP| APIGW
     EXTAPI -->|HTTPS WSS mTLS 단일 진입| APIGW
     APIGW -->|내부 라우팅| API
     API <-->|HTTPS JSON WSS 내부 gRPC| AIR
-    API <-->|HTTPS REST 사내 규약 코어 설정 조회| UAPI
-    API <-->|HTTPS REST 사내 규약 유저 경로| BAPI
+    API -->|아웃바운드 코어 조회 HTTPS| UAPI
+    API -->|아웃바운드 바이토 연계 HTTPS| BAPI
     PCL <-->|기존 클라이언트 API| BAPI
     BAPI <-->|기존 코어 연동 규약| UAPI
 
@@ -230,7 +232,7 @@ flowchart LR
 - 도표상 동일한 박스로 보일 수 있으나, 실제로는 **프로세스형 서버·DBMS·NAS·단말/클라이언트**로 구분한다(§2.0).
 - **WTIMS → AI Runtime**은 기존 코어와 신규 시스템의 **경계**이므로, AIR 노드 다수에 WT가 직접 붙지 않고 **AIR 연동 접점**(단일 VIP/FQDN에 대응하는 LB·게이트웨이)을 두어 **연동 노드·주소를 단일화**한다. 내부 풀(STT·LLM·TTS 등) 간 부하는 동일 구역 내 일반 로드밸런싱으로 처리한다(§2.2).
 - 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와 AI **API/Realtime** 연계는 §1.5 및 본 절 Mermaid를 참고한다.
-- **외부 서버·파트너**가 AI API를 호출할 때는 **AI API Ingress**(단일 VIP, §1.6)를 경유해 방화벽·TLS·레이트리밋을 한곳에서 관리한다. 내부 전용 호출은 Ingress 생략 가능.
+- **유엔젤·바이토·외부 서버·파트너**가 **API/Realtime을 호출**할 때는 **AI API Ingress 단일 VIP**(§1.6)로 수렴한다. **API/Realtime이 유엔젤·바이토를 호출**하는 **아웃바운드**는 Ingress 없이 존 정책에 따라 직접(HTTPS 등) 연결할 수 있다.
 
 ### 2.0 구성요소 유형 (프로세스 서버 · DBMS · NAS)
 
@@ -257,17 +259,17 @@ flowchart LR
 | 외부 | 프로세스형 서버 | 교환기 노드 N개 | SIP Trunk 진입·분산·코어로 라우팅, 외부와 코어 사이 게이트 |
 | 기존 코어 | 프로세스형 서버 | 통화매니저AS | SIP 세션 상태·호 제어·WTIMS로 SDP/미디어 앵커 제어, **호 세션 스냅샷을 WTIMS로 릴레이**해 AI 경로를 단순화 |
 | 기존 코어 | 프로세스형 서버 | WTIMS | RTP/RTCP 릴레이·미러·플레이아웃, STT용 RTP fork, **CM 세션 정보 + 미디어 레그 바인딩을 통합 시그널로 AIR 연동 접점(단일 주소)으로 전달** §2.2 |
-| 기존 코어 | 프로세스형 서버 | 통화매니저 API · 유엔젤 | 코어 망 **REST 등** — 코어 통신 **설정·상태·정보 조회**; AI **API/Realtime**과 연동 |
-| 외부 | 프로세스형 서버 | 통화매니저 API · 바이토 | 외부·중계 구역 API — **유저 PC Client**와 연동, **유엔젤 API**와 기존 연동 |
+| 기존 코어 | 프로세스형 서버 | 통화매니저 API · 유엔젤 | 코어 망 **REST 등** — 코어 통신 **설정·상태·정보 조회**; **AI 호출 시** **AI API Ingress** → API/Realtime §1.6 |
+| 외부 | 프로세스형 서버 | 통화매니저 API · 바이토 | 외부·중계 구역 API — **유저 PC Client**와 연동, **유엔젤 API**와 기존 연동; **AI 호출 시** **AI API Ingress** §1.6 |
 | 외부 | 단말·클라이언트 | 유저 PC Client | 통화매니저 **데스크톱·프론트엔드**; **바이토 API**에 접속 |
 | 외부·관제 | 단말·클라이언트 | 관제 모니터링 PC | **Grafana**(선택 **EMS 관측 Ingress**)로 EMS 모니터링 · TSDB·Loki 직접 접속 금지 §8.1 |
 | AI Call Agent 시스템 | 프로세스형 서버 | AIR 연동 접점 GW | 코어(WT)와 신규(AIR) 구역 **단일 연동 주소** · **세션·통합 시그널만** · RTP 미디어 비경유 §1.4·§2.2 |
-| AI Call Agent 시스템 | 프로세스형 서버 | AI API Ingress | 외부 서버→**API/Realtime** 단일 진입 · TLS·레이트리밋 §1.6 |
+| AI Call Agent 시스템 | 프로세스형 서버 | AI API Ingress | 유엔젤·바이토·외부서버→**API/Realtime** **단일 진입** · TLS·레이트리밋 §1.6 |
 | AI Call Agent 시스템 | 프로세스형 서버 | AI Runtime | 호 단위 오케스트레이션·정책·의도·HITL·추론 라우팅, STT/LLM/TTS 호출·WTIMS 재생 명령·DB/스토리지 연계 · 접점 뒤 N대 확장 §2.2 |
 | AI Call Agent 시스템 | 프로세스형 서버 | STT Server | RTP 미러 또는 오디오 스트림 수신·실시간 문자 변환·부분/최종 텍스트 스트리밍 |
 | AI Call Agent 시스템 | 프로세스형 서버 | LLM Server | 프롬프트 기반 추론·도구/함수 호출 응답·OpenAI 호환 API 제공 |
 | AI Call Agent 시스템 | 프로세스형 서버 | TTS Server | 텍스트→음성 스트리밍 합성·PCM 청크 반환 |
-| AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime | AI Runtime·DB와 연계 · **유엔젤 API**와 코어 설정·조회, **바이토 API**와 유저 PC 경로의 정보·설정 연계 §1.5 · EMS는 별 구역 |
+| AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime | AI Runtime·DB와 연계 · 아웃바운드로 유엔젤·바이토 호출 §1.5 · **인바운드는 Ingress 뒤** §1.6 · EMS는 별 구역 |
 | AI Call Agent 시스템 | 단말·클라이언트 | 운영 콘솔 | 브라우저 UI·모니터링·설정·실시간 이벤트 구독 — **유저 PC Client·바이토와 별 축** |
 | AI Call Agent 시스템 | DBMS | Altibase | 트랜잭션형 세션·정책·이력·권한 등 RDB 권위 데이터 |
 | AI Call Agent 시스템 | DBMS | VectorDB | 지식·임베딩 검색·유사도 기반 조회·업서트 |
@@ -338,10 +340,12 @@ flowchart TD
     end
     PCL <-->|기존 클라이언트 연동| BAPI
     BAPI <-->|기존 코어 연동| UAPI
+    UAPI -->|유엔젤에서 AI 호출| APIGW
+    BAPI -->|바이토에서 AI 호출| APIGW
     EXTAPI -->|HTTPS WSS 단일 진입| APIGW
     APIGW -->|내부 라우팅| API
-    API <-->|코어 설정 정보| UAPI
-    API <-->|유저 알림 설정 조회| BAPI
+    API -->|아웃바운드 코어 조회| UAPI
+    API -->|아웃바운드 바이토 연계| BAPI
     WT -->|통합 시그널 단일 진입| GW
     GW -->|call_id 스티키 로드쉐어| AIR
     WT -->|RTP Mirror 미디어 GW 비경유| STT
@@ -386,10 +390,10 @@ flowchart TD
 | AI Runtime ↔ TTS | gRPC 또는 HTTP 스트리밍 | AIR→TTS | 텍스트 입력·PCM 청크 출력 |
 | TTS → WTIMS | 제어 채널 + 페이로드 | TTS→WT | 재생 슬롯·버퍼 식별자 합의 |
 | API/Realtime ↔ AI Runtime | HTTPS JSON, 내부 gRPC | 양방향 | 운영·세션 제어·조회 |
-| API/Realtime ↔ 통화매니저 API 유엔젤 | HTTPS REST 등·사내 규약 | 양방향 | **코어** 통신 설정·상태·정보 조회·반영 |
-| API/Realtime ↔ 통화매니저 API 바이토 | HTTPS REST 등·사내 규약 | 양방향 | **유저 PC Client** 경로로 정보 전달·설정·조회 연계 |
-| 외부 서버 → AI API Ingress | HTTPS·WSS·mTLS·사내 규약 | 외부→AI | §1.6 단일 VIP; Ingress → API/Realtime 클러스터 |
+| 통화매니저 API 유엔젤·바이토·외부서버 → AI API Ingress | HTTPS·WSS·mTLS | 인바운드→AI | **단일 VIP**; 파트너·레거시·**유엔젤·바이토**가 **API/Realtime 호출** 시 공통 진입 §1.6 |
 | AI API Ingress → API/Realtime | HTTP/2 내부망 | Ingress→API | 라우팅·헬스 기반 LB; 필요 시 쿠키·토큰 스티키 |
+| API/Realtime → 통화매니저 API 유엔젤 | HTTPS REST 등·사내 규약 | **아웃바운드** | **AI가 코어** 설정·상태·정보 **조회·반영** — **Ingress 비경유** 가능 |
+| API/Realtime → 통화매니저 API 바이토 | HTTPS REST 등 | **아웃바운드** | **AI가 바이토**로 유저 경로 연계·조회 — **Ingress 비경유** 가능 |
 | 관제 PC → EMS Grafana | HTTPS TLS · 브라우저 | 외부→EMS | **대표 VIP/FQDN 단일 접점** · VPN 또는 **EMS 관측 Ingress** · **SSO·Viewer RBAC** §8.1 |
 | 관제 PC ⊄ Prometheus/Loki/Tempo 직접 | — | 금지 | 백엔드 UI 포트는 비관제망에서 차단; Grafana 단일 접점 |
 | 유저 PC Client ↔ 통화매니저 API 바이토 | 기존 클라이언트 프로토콜 | 양방향 | 데스크톱 프론트엔드 — AI 확장 전제 유지 |
@@ -565,14 +569,13 @@ NAS는 **S3 presigned URL이 아니라** 서버가 알려 주는 **공유 경로
 
 ### 3.4 연동 규격 제안 (체크리스트)
 
-- **통화매니저 API 유엔젤 ↔ AI API/Realtime**: 코어 설정·조회 스키마·인증·레이트리밋 §1.5
-- **통화매니저 API 바이토 ↔ AI API/Realtime**: 유저 PC 경로 정보·설정 연계 스키마 §1.5
+- **유엔젤·바이토 → AI API Ingress → API/Realtime**(인바운드): 단일 VIP·TLS·레이트리밋 §1.6
+- **API/Realtime → 유엔젤·바이토**(아웃바운드): 코어·바이토 조회 연계 §1.5 — Ingress 비경유 가능
 - **교환기 <-> 통화매니저AS**: SIP Trunk (UDP/TCP/TLS)
 - **통화매니저AS <-> WTIMS**: **SIP 2.0 + SDP + RTP/RTCP**만 사용. 호 세션·스냅샷·생명주기 표현도 **동일 구간의 SIP/SDP·협의 헤더**로 한다(JSON 전용 CM↔WT 채널 없음). AIR 직접 연동 없음
 - **WTIMS → AIR 연동 접점**: 세션 릴레이 + 미디어 레그 바인딩 **통합 시그널**(gRPC/Kafka 등), **단일 주소** · `call_id` 상관·갱신·해제 포함 · **RTP 미디어는 GW 비경유**
 - **AIR 연동 접점 → AI Runtime**: **`call_id` 일관 해시·스티키** 로드쉐어 §2.2
 - **WTIMS -> STT**: RTP mirror stream (codec normalized PCM 16k 권장) · **미디어 평면 직결**
-- **외부 서버 → AI API Ingress → API/Realtime**: TLS·mTLS·레이트리밋 §1.6
 - **AI Runtime <-> STT**: gRPC bidirectional streaming
 - **AI Runtime <-> LLM**: OpenAI-compatible REST 또는 gRPC inference API
 - **AI Runtime <-> TTS**: gRPC streaming synth (chunked PCM 반환)
@@ -671,7 +674,7 @@ sequenceDiagram
 ## 5.5 API/Realtime 서버
 
 - **역할**: REST API, 운영 UI, WebSocket 이벤트, SIP MESSAGE 브릿지
-- **레거시 연동**: 통화매니저 API 유엔젤(코어)·바이토(외부)와 코어 설정·조회 및 유저 PC 경로 알림·설정 연계는 REST 등 규약을 §1.5와 운영 협의로 확정한다.
+- **레거시 연동**: 통화매니저 API 유엔젤(코어)·바이토(외부)와의 **인바운드·아웃바운드** 규약은 §1.5·§1.6과 같이 — **유엔젤·바이토→AI 호출은 AI API Ingress**, **AI→유엔젤·바이토 조회**는 존 정책에 따라 직접 REST 등.
 - **연동규격**: HTTPS(JSON), WSS, 내부 gRPC/HTTP
 - **서버 스펙(노드당)**: 16 vCPU / 32 GB RAM / NVMe 500 GB
 - **처리량 가정**: 2,500 동시 WS + 400 rps
@@ -903,11 +906,11 @@ flowchart LR
 - [ ] 통화매니저AS→WTIMS 호 세션 릴레이 및 WTIMS→**AIR 연동 접점**→AI Runtime **통합 시그널** 규약·순서·`call_id` 상관 검증
 - [ ] WTIMS→**AIR 연동 접점** 단일 주소(VIP/FQDN)·방화벽 홀·인증서 확정; 접점→AIR **`call_id` 로드쉐어** 및 장애 시 세션 정책 검증(§2.2)
 - [ ] **미디어 경로** RTP Mirror·TTS 재생이 GW를 경유하지 않음을 네트워크·방화벽 설계서와 일치 검증(§1.4)
-- [ ] **외부 서버→AI API Ingress** 단일 주소·mTLS 또는 API Key·레이트리밋·Ingress→API/Realtime 라우팅 검증(§1.6)
+- [ ] **유엔젤·바이토·외부서버 → AI API Ingress** 단일 주소·mTLS 또는 API Key·레이트리밋·Ingress→API/Realtime 라우팅 검증(§1.6)
 - [ ] Internal STT/TTS/LLM API 스펙 확정(gRPC/REST)
 - [ ] AI Runtime 장애 격리(서킷브레이커/타임아웃/재시도) 적용
-- [ ] 통화매니저 API 유엔젤 ↔ AI API/Realtime 연동(코어 설정·정보 조회, 인증·레이트리밋) 검증
-- [ ] 통화매니저 API 바이토 ↔ AI API/Realtime 연동(유저 PC Client 정보·설정·조회 경로) 검증
+- [ ] 통화매니저 API 유엔젤 ↔ AI: **인바운드 Ingress**·**아웃바운드 코어 조회** 경로·인증 분리 검증(§1.5·§1.6)
+- [ ] 통화매니저 API 바이토 ↔ AI: **인바운드 Ingress**·**아웃바운드 바이토 연계** 검증(§1.5·§1.6)
 - [ ] Altibase HA 및 백업/복구 리허설 완료
 - [ ] VectorDB 샤딩/복제/캐시 정책 반영
 - [ ] **NAS** 공유·마운트(SMB/NFS)·디렉터리 규칙·쿼터·스냅샷·백업 검증(§7.3)
@@ -920,6 +923,6 @@ flowchart LR
 ## 10) 결론
 
 본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent 시스템**(STT/TTS/LLM/Runtime/API/데이터 — Blob는 **온프레미스 NAS**)과 **EMS**(관측 프로세스 6종 — 배포 구역은 별도)를 내부화해 주권과 확장성을 확보하는 설계다.  
-기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와의 연계는 코어·외부 역할을 분리해 AI **API/Realtime**이 유엔젤로 코어 정보를, 바이토로 유저 단 정보를 오케스트레이션한다(§1.5).  
-핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW→AI Runtime**(세션 시그널만 GW · 미디어 RTP 비경유)·**외부→AI API Ingress**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `6,000 세션 실부하 검증`이다.
+기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와의 연계는 코어·외부 역할을 분리하고, **유엔젤·바이토·외부 시스템 → API/Realtime**은 **AI API Ingress 단일 접점**(§1.6), **API/Realtime → 유엔젤·바이토** 아웃바운드는 Ingress 없이 조회·연계한다(§1.5).  
+핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW→AI Runtime**(세션 시그널만 GW · 미디어 RTP 비경유)·**유엔젤·바이토·외부→AI API Ingress→API/Realtime**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `6,000 세션 실부하 검증`이다.
 
