@@ -1,14 +1,14 @@
 # SmartPBX AI - Production Deployment Architecture
 ## 상용 적용 상세 아키텍처 (기존 교환기/통화매니저AS/WTIMS 활용)
 
-본 문서는 실제 상용 목표 용량을 기준으로, 이미 보유한 통신 노드(교환기, 통화매니저AS, WTIMS)를 활용하여 AI 확장 계층(**AI Call Agent 시스템**: STT/TTS/LLM/API/Runtime/DB 및 객체 저장소)과 **EMS**(관측, 별도 구역)를 설계한다.
+본 문서는 실제 상용 목표 용량을 기준으로, 이미 보유한 통신 노드(교환기, 통화매니저AS, WTIMS)를 활용하여 AI 확장 계층(**AI Call Agent 시스템**: STT/TTS/LLM/API/Runtime/DB 및 **NAS 파일 저장**)과 **EMS**(관측, 별도 구역)를 설계한다.
 
 | 항목 | 내용 |
 |------|------|
 | 용량 목표 | 가입자 10,000명, 50 CPS, 평균 통화 유지 120초 |
 | 동시세션 산정 | `50 CPS x 120s = 6,000 동시 세션` |
 | 기존 자산 | 교환기 N개, 통화매니저AS 2 Pair(A/S), WTIMS RTP 서버, **통화매니저 API(유엔젤·코어)** , **통화매니저 API(바이토·외부)** , 유저 PC Client ↔ 바이토 ↔ 유엔젤 기존 연동 |
-| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 Altibase/VectorDB/Object) · 경계 **AIR GW**(세션 시그널)·**AI API Ingress**(외부→API) · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) |
+| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 Altibase/VectorDB/**NAS Blob**) · 경계 **AIR GW**(세션 시그널)·**AI API Ingress**(외부→API) · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) |
 | DB 제약 | RDB는 Altibase 사용 필수 |
 
 ---
@@ -46,7 +46,7 @@
 | **오케스트레이션** | AI Runtime: 의도·정책·HITL·추론 라우팅 | 허브 비대화 방지를 위해 내부 모듈·API 세분화 검토 |
 | **추론 평면** | STT / TTS / LLM | GPU·큐·모델 버전 단위 스케일 |
 | **외부 API** | API/Realtime: **외부**(브라우저·파트너·운영망)에서 접근하는 REST/WSS·SIP MESSAGE 브릿지 | 코어·내부 서비스와 달리 인증·레이트리밋·공격면을 따로 둔다 |
-| **데이터 평면** | Altibase·VectorDB·Object Storage | 트랜잭션·벡터 검색·Blob 용도 분리 |
+| **데이터 평면** | Altibase·VectorDB·**NAS(파일 공유)** | 트랜잭션·벡터 검색·Blob(파일) 용도 분리 |
 
 **API ↔ Altibase 직접 SQL**은 가능하지만, 스키마·트랜잭션 경계가 AI Runtime 경유와 달라지지 않도록 **읽기 전용 조회·CQRS·권한 모델**을 초기에 고정하는 것을 권장한다.
 
@@ -153,7 +153,7 @@ flowchart LR
         subgraph DATA["데이터 · 유형 구분"]
             ALT["Altibase HA<br/>DBMS"]
             VDB["VectorDB Cluster<br/>DBMS"]
-            OBJ["Object Storage<br/>객체 저장소"]
+            NAS["NAS 파일 공유<br/> SMB NFS"]
         end
     end
 
@@ -191,8 +191,8 @@ flowchart LR
     API <-->|JDBC SQL 커넥션 풀| ALT
     AIR <-->|JDBC SQL 커넥션 풀| ALT
     AIR <-->|HTTP gRPC 벡터 조회 업서트| VDB
-    AIR -->|S3 호환 PUT GET| OBJ
-    API -->|S3 presigned URL| OBJ
+    AIR -->|파일 IO NFS SMB 마운트| NAS
+    API -->|업로드 경로 또는 동일 마운트| NAS
 
     UAPI -->|OTLP 또는 에이전트 Push| OTL
     BAPI -->|OTLP 또는 에이전트 Push| OTL
@@ -207,7 +207,7 @@ flowchart LR
     API -->|OTLP Push| OTL
     ALT -->|익스포터 또는 감사 로그| OTL
     VDB -->|익스포터 또는 로그| OTL
-    OBJ -->|액세스 로그 또는 메트릭| OTL
+    NAS -->|액세스 로그 또는 메트릭| OTL
 
     OTL -->|remote write 등| MTS
     OTL -->|로그 파이프라인| LOG
@@ -222,17 +222,17 @@ flowchart LR
 
 - 교환기 N개가 외부 트래픽을 분산하므로 별도 LB를 두지 않는다.
 - 통화매니저AS는 SIP 세션 상태 머신/호제어를 담당하고, WTIMS는 RTP 실시간 중계를 담당한다.
-- **AI Call Agent 시스템**은 STT·TTS·LLM·AI Runtime·API/Realtime·데이터 계층(Altibase·VectorDB·Object Storage) 등 **신규 서버 모음**을 가리킨다. **EMS**(관측)는 같은 업무 도메인과 연계되지만 **별도 구역**으로 두고, OTel Collector·Metrics TSDB·Log·Trace·Alert·Grafana를 **각각 독립 프로세스**로 배포한다. AI Runtime이 통화 이벤트 기반으로 STT/LLM/TTS를 호출하고, 결과 음성을 다시 WTIMS로 전달한다.
+- **AI Call Agent 시스템**은 STT·TTS·LLM·AI Runtime·API/Realtime·데이터 계층(Altibase·VectorDB·**NAS 파일 저장**) 등 **신규 서버 모음**을 가리킨다. **EMS**(관측)는 같은 업무 도메인과 연계되지만 **별도 구역**으로 두고, OTel Collector·Metrics TSDB·Log·Trace·Alert·Grafana를 **각각 독립 프로세스**로 배포한다. AI Runtime이 통화 이벤트 기반으로 STT/LLM/TTS를 호출하고, 결과 음성을 다시 WTIMS로 전달한다.
 - 호의 **통합 시그널**(세션 스냅샷·`call_id`·레그 바인딩 메타)은 **통화매니저AS → WTIMS → AIR 연동 접점 GW → AI Runtime**으로 릴레이된다. 코어(WT)는 GW **한 주소**만 사용한다(§1.4). **RTP 미디어**(Mirror→STT, TTS→WT 등)는 **GW를 거치지 않고** WTIMS가 STT·AIR·WT 간 직접 경로를 유지한다(§1.4 표).
-- Altibase는 거래성 데이터(세션, 정책, 예약, 이력), VectorDB는 의미 검색, Object Storage는 대용량 비정형·버전 지속 데이터를 담당한다(§7.3).
+- Altibase는 거래성 데이터(세션, 정책, 예약, 이력), VectorDB는 의미 검색, **NAS**는 대용량 비정형·녹음·아티팩트 등 **파일 기반** 데이터를 담당한다(§7.3).
 - 위 Mermaid 화살표 라벨은 **연동 규격**(프로토콜·형식·상관 키)을 요약한 것이며, 세부 필드는 §3 연동 규격표·예제와 일치시킨다.
 - 위 Mermaid 박스는 **첫 줄=이름, 둘째 줄=§2.0 구성요소 유형**을 병기했다. **EMS** 서브그래프는 AI Call Agent 시스템과 **분리**하여 표시한다.
-- 도표상 동일한 박스로 보일 수 있으나, 실제로는 **프로세스형 서버·DBMS·객체 저장소·단말/클라이언트**로 구분한다(§2.0).
+- 도표상 동일한 박스로 보일 수 있으나, 실제로는 **프로세스형 서버·DBMS·NAS·단말/클라이언트**로 구분한다(§2.0).
 - **WTIMS → AI Runtime**은 기존 코어와 신규 시스템의 **경계**이므로, AIR 노드 다수에 WT가 직접 붙지 않고 **AIR 연동 접점**(단일 VIP/FQDN에 대응하는 LB·게이트웨이)을 두어 **연동 노드·주소를 단일화**한다. 내부 풀(STT·LLM·TTS 등) 간 부하는 동일 구역 내 일반 로드밸런싱으로 처리한다(§2.2).
 - 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와 AI **API/Realtime** 연계는 §1.5 및 본 절 Mermaid를 참고한다.
 - **외부 서버·파트너**가 AI API를 호출할 때는 **AI API Ingress**(단일 VIP, §1.6)를 경유해 방화벽·TLS·레이트리밋을 한곳에서 관리한다. 내부 전용 호출은 Ingress 생략 가능.
 
-### 2.0 구성요소 유형 (프로세스 서버 · DBMS · 저장소)
+### 2.0 구성요소 유형 (프로세스 서버 · DBMS · NAS)
 
 아키텍처 다이어그램의 노드는 모두 “서버 한 대”로 읽히기 쉬우므로, 아래 **형태**로 먼저 구분한다.
 
@@ -240,13 +240,13 @@ flowchart LR
 |------|------|---------------------|
 | **프로세스형 서버** | OS 위에 애플리케이션/데몬이 **상시 구동**되는 컴퓨트 노드. CPU·메모리로 요청·스트림을 처리한다. | 교환기 SW, 통화매니저AS, WTIMS, **AIR 연동 접점**(LB/GW), AI Runtime, STT/LLM/TTS, API/Realtime · **EMS**는 동일 형태이나 배포 구역은 별도(§2 도표) |
 | **DBMS** | **데이터베이스 엔진**이 상주하고, 클라이언트는 SQL 또는 전용 API로 접속한다. 트랜잭션·인덱스·질의 최적화가 책임이다. | Altibase RDB, VectorDB |
-| **객체 저장소** | 블롭·파일 단위 저장, **S3 호환 API**로 PUT/GET. 밑단은 분산 스토리지·디스크 풀일 수 있으나, 아키텍처 표기에서는 **저장 서비스 계층**으로 둔다. | Object Storage |
+| **NAS·파일 공유** | **SMB/CIFS·NFS** 등으로 마운트하여 녹음·Blob·아카이브를 **파일 경로**로 저장. 본 설계는 온프레미스·**현재 시스템 규모**에서 **S3 호환 객체 스토어 대신 NAS**를 채택한다(§7.3). | NAS 어플라이언스 또는 파일 서버 |
 | **단말·클라이언트** | 우리 쪽에서 상시 서버 프로세스를 띄우는 대상이 아님. | PSTN/SIP 가입자 단말, 통화 단말, **운영 콘솔** 웹 브라우저, **관제 모니터링 PC**(Grafana 클라이언트, §8.1) |
 
 **구분 시 유의**
 
 - **프로세스형 서버 ≠ “그 안에 DB가 없다”**: 서버 프로세스가 내장 DB를 쓸 수는 있으나, 본 문서에서 **Altibase·VectorDB**는 **별도 DBMS 노드**로 표기한다.
-- **객체 저장소 ≠ SAN/NAS 디스크만**: 물리 디스크·어플라이언스가 아니라 **객체 API를 제공하는 저장 스택**(및 그 클러스터)을 의미한다.
+- **NAS**: 스토리지 풀 위에 **파일 프로토콜**을 제공하는 장비·클러스터. 애플리케이션은 공유 경로·권한·쿼터를 따르며, **대규모 다중 리전 객체 API(S3)** 가 필요해지면 그때 별도 검토한다.
 - **EMS**(Enterprise Monitoring System, 본 문서 통칭): 과거 **관측 서버** 구역을 대신하는 이름이다. 메트릭·로그·트레이스·알람·대시보드를 담당하며, 구성 요소는 **각각 별도 프로세스(데몬)** 로 배치한다(§2 전개도·§8).
 
 ### 2.1 노드·서버별 역할
@@ -271,7 +271,7 @@ flowchart LR
 | AI Call Agent 시스템 | 단말·클라이언트 | 운영 콘솔 | 브라우저 UI·모니터링·설정·실시간 이벤트 구독 — **유저 PC Client·바이토와 별 축** |
 | AI Call Agent 시스템 | DBMS | Altibase | 트랜잭션형 세션·정책·이력·권한 등 RDB 권위 데이터 |
 | AI Call Agent 시스템 | DBMS | VectorDB | 지식·임베딩 검색·유사도 기반 조회·업서트 |
-| AI Call Agent 시스템 | 객체 저장소 | Object Storage | 녹음·아티팩트·캐시·백업 등 Blob·대용량 객체 저장 |
+| AI Call Agent 시스템 | NAS·파일 공유 | NAS(SMB/NFS) | 녹음·아티팩트·캐시·백업 등 Blob·대용량 파일 저장 §7.3 |
 | EMS | 프로세스형 서버 | EMS · OTel Collector | 텔레메트리·로그·트레이스 수집·라우팅 · AI Call Agent 시스템 및 코어에서 OTLP 등으로 인입 |
 | EMS | 프로세스형 서버 | EMS · Metrics TSDB | 메트릭 시계열 저장·쿼리(Prometheus/Mimir 등) |
 | EMS | 프로세스형 서버 | EMS · Log Store | 로그 인입·저장·검색(Loki/ELK 등) |
@@ -334,7 +334,7 @@ flowchart TD
         CON["운영 콘솔<br/>클라이언트 UI"]
         ALT["Altibase<br/>DBMS"]
         VDB["VectorDB<br/>DBMS"]
-        OBJ["Object Storage<br/>객체 저장소"]
+        NASN["NAS 파일 공유<br/>SMB NFS"]
     end
     PCL <-->|기존 클라이언트 연동| BAPI
     BAPI <-->|기존 코어 연동| UAPI
@@ -353,7 +353,8 @@ flowchart TD
     API -->|WSS WebSocket| CON
     AIR -->|SQL/JDBC| ALT
     AIR -->|HTTP/gRPC| VDB
-    AIR -->|S3 API PUT GET| OBJ
+    AIR -->|파일 경로 IO| NASN
+    API -->|마운트 경로 기록| NASN
 ```
 
 ### 3.1 연동 규격의 범위
@@ -371,7 +372,7 @@ flowchart TD
 
 ### 3.2 연동 규격 요약표
 
-연결 **양단의 형태**(프로세스형 서버 / DBMS / 객체 저장소 / 단말)는 §2.0·§2.1과 같다. DBMS·객체 저장소는 **접속 클라이언트가 프로세스형 서버**인 경우가 많다.
+연결 **양단의 형태**(프로세스형 서버 / DBMS / NAS / 단말)는 §2.0·§2.1과 같다. DBMS·NAS는 **접속 클라이언트가 프로세스형 서버**인 경우가 많다.
 
 | 연동 | 프로토콜·형식 | 방향 | 핵심 내용 |
 |------|----------------|------|-----------|
@@ -396,7 +397,7 @@ flowchart TD
 | API/Realtime ↔ 운영 콘솔 | HTTPS, WSS JSON | 양방향 | 구독 토픽·이벤트 페이로드 스키마 |
 | AI Runtime·API ↔ Altibase | JDBC/SQL, 커넥션 풀 | 클라이언트→DB | 트랜잭션 경계·읽기 전용 계정 분리 권장 |
 | AI Runtime ↔ VectorDB | HTTP/gRPC JSON | AIR→VDB | 컬렉션·벡터 차원·메타데이터 |
-| AI Runtime·API ↔ Object Storage | S3 API, presigned URL | 클라이언트→OBJ | 버킷·키 규칙·수명·IAM |
+| AI Runtime·API ↔ NAS | SMB/NFS 마운트 또는 REST가 내부 경로에 기록 | 클라이언트→NAS | 테넌트별 디렉터리·쿼터·백업 스냅샷 정책 §7.3 |
 
 ### 3.3 연동 규격 예제
 
@@ -549,16 +550,16 @@ X-Service-Auth: Bearer ${API_TOKEN}
 
 임베딩 벡터는 차원에 맞는 실수 배열로 전송한다.
 
-#### J. Object Storage presigned PUT 발급 응답 (개념)
+#### J. NAS 기반 파일 저장 — API가 반환하는 업로드 대상 경로 (개념)
+
+NAS는 **S3 presigned URL이 아니라** 서버가 알려 주는 **공유 경로·상대 경로** 또는 사내 REST가 받아 **NAS 마운트에 쓰기**하는 방식으로 맞춘다.
 
 ```json
 {
-  "method": "PUT",
-  "url": "https://obj.example.com/bucket/rec/cm-7f3a9b2c/mix.wav?X-Amz-Algorithm=...",
-  "headers": {
-    "Content-Type": "audio/wav"
-  },
-  "expires_at": "2026-05-07T12:44:56Z"
+  "storage": "nas",
+  "share": "\\\\nas-prod\\recordings",
+  "relative_path": "tenant-01/2026/05/cm-7f3a9b2c/mix.wav",
+  "uri_internal": "https://api.internal/v1/files/upload?call_id=cm-7f3a9b2c"
 }
 ```
 
@@ -578,7 +579,7 @@ X-Service-Auth: Bearer ${API_TOKEN}
 - **API/Realtime <-> 운영 콘솔**: HTTPS REST + WSS 이벤트
 - **AI/API <-> Altibase**: JDBC/ODBC(SQL)
 - **AI <-> VectorDB**: query/upsert API (HTTP/gRPC)
-- **AI/API <-> Object Storage**: S3-compatible API
+- **AI/API ↔ NAS**: SMB/NFS 마운트 또는 내부 파일 업로드 API §7.3
 - **관제 PC → Grafana / EMS 관측 Ingress**: HTTPS · **대표 VIP 단일 접점** · SSO · Viewer RBAC §8.1
 
 ---
@@ -692,7 +693,7 @@ sequenceDiagram
 | AI Call Agent 시스템 | API/Realtime | 10,000 user, 6,000 WS peak | 2,500 WS/노드 | 4 | 4 Active + 1 Standby |
 | AI Call Agent 시스템 | Altibase | 세션/정책/이력 | DB HA 기준 | 2 | Primary + Standby + Read Replica(권장) |
 | AI Call Agent 시스템 | VectorDB | 고QPS 검색/업서트 | 200 QPS/샤드 가정 | 4 샤드 | 4 Active + 2 Replica |
-| AI Call Agent 시스템 | Object Storage | 녹음/아티팩트 저장 | 대역폭 중심 | 2 | 2 Active 또는 관리형 |
+| AI Call Agent 시스템 | NAS 파일 공유 | 녹음/아티팩트 저장 | 스토리지 팀 표준 | 이중 컨트롤러 등 | 조직 NAS 스펙 · 스냅샷 HA |
 | EMS | EMS · OTel Collector | 전 계층 텔레메트리 인입 | 수집 파이프 처리량 | 2 | 2 Active + 1 Standby |
 | EMS | EMS · Metrics TSDB | 메트릭 장기 저장·알람 입력 | 시계열 카드널리티 | 2 | HA 페어 권장 |
 | EMS | EMS · Log Store | 로그 인입·보관 | 초당 로그량·보존기간 | 2 | 샤딩·복제 |
@@ -717,7 +718,7 @@ sequenceDiagram
 | AI Call Agent 시스템 | API/Realtime | 4 + 1 | 16 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | REST/WSS 게이트웨이 |
 | AI Call Agent 시스템 | Altibase | 2 + 1(읽기복제) | 24 vCPU | 128 GB | - | NVMe 2 TB (고IOPS) | 10 Gbps | Primary/Standby/Read |
 | AI Call Agent 시스템 | VectorDB | 4 + 2 | 24 vCPU | 128 GB | 선택(0~1) | NVMe 2 TB | 10 Gbps | 샤드+레플리카 |
-| AI Call Agent 시스템 | Object Storage | 2 이상 | 16 vCPU | 64 GB | - | HDD 20 TB + SSD Cache | 10 Gbps | S3 API 호환 |
+| AI Call Agent 시스템 | NAS(전용 스토리지) | 페어 또는 클러스터 | 스토리지 어플라이언스 표준 | 제품별 | 용량·티어링 스토리지 팀 산정 | 10 Gbps+ | SMB NFS · 스냅샷 |
 | EMS | EMS · OTel Collector | 2 + 1 | 8 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | 수집·배압·라우팅 |
 | EMS | EMS · Metrics TSDB | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Prom/Mimir 등 |
 | EMS | EMS · Log Store | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Loki/ELK 등 |
@@ -750,9 +751,11 @@ sequenceDiagram
   - Chroma 사용 시 샤딩/리드 레플리카/캐시 계층 필수
   - 고부하 검색이 핵심이면 Milvus/Qdrant 계열 PoC 병행 권장
 
-### 7.3 Object Storage 역할
+### 7.3 NAS 파일 저장(Blob 계층) — 설계 확정
 
-**단순 통화 녹음 전용이 아니다.** Blob·대용량·장기 보관에 적합한 객체를 두는 계층으로, 녹음 외에도 AI 파이프라인 부산물·캐시·아카이브·백업을 포괄한다. RDB·벡터DB와 역할이 겹치지 않게 **“파일 단위·버전·대용량”** 을 기준으로 둔다.
+**온프레미스**이며, **현재 시스템을 고려한 성능·용량 범위**에서는 **S3 호환 객체 스토어(MinIO 등)까지 필요한 초대규모 트래픽이 아니라고 판단**하여, 대용량 파일 계층은 **NAS(SMB/NFS 파일 공유)** 로 설계한다. 운영 복잡도(전용 객체 스토어 프로세스·클러스터) 대비 이점이 제한적일 때 **성숙한 파일 공유·스냅샷·복제**로 요구를 충족한다.
+
+**단순 통화 녹음 전용이 아니다.** 녹음 외에도 AI 파이프라인 부산물·캐시·아카이브·백업을 포괄한다. RDB·벡터DB와 역할이 겹치지 않게 **“파일 단위·대용량”** 을 기준으로 둔다.
 
 | 용도 | 설명 |
 |------|------|
@@ -760,10 +763,12 @@ sequenceDiagram
 | STT 부산물 | 세그먼트 JSON, 화자 분리 청크 등 재처리·디버깅용 중간물 |
 | TTS 캐시 | 동일 문구 반복 시 합성 결과 재사용·비용 절감 |
 | 모델 입출력 아카이브 | 규정 준수 범위 내 프롬프트·응답·로그 스냅샷 보관 |
-| 아티팩트·프로비저닝 | 지식 파일 업로드, 배치 임포트 원본 등 API에서 presigned URL로 오프로드 |
-| 백업·스냅샷 | DB 덤프 아닌 **객체 단위** 장기 보관·재해 복구 보조 |
+| 아티팩트·프로비저닝 | 지식 파일 업로드, 배치 임포트 원본 — API는 **NAS 마운트 경로에 쓰기** 또는 업로드 스트림을 파일로 저장 |
+| 백업·스냅샷 | NAS 스냅샷·복제·오프사이트 복사 등 **파일 단위** 장기 보관 |
 
-요약하면 Object Storage는 **“통화 파일 저장소”가 아니라 AI·운영 데이터의 Blob 계층**이며, 세션의 권위 있는 상태는 Altibase, 의미 검색은 VectorDB가 담당한다.
+**연동:** AI Runtime·API 서버는 **NAS를 동일 마운트 포인트로 마운트**하거나, 조직 표준에 따라 **전용 파일 게이트웨이 REST**만 노출한다. **향후** 트래픽·다중 데이터센터·S3와의 연동 요구가 커지면 **객체 스토어 도입**을 별도 과제로 검토한다.
+
+요약하면 본 문서 범위에서 Blob 계층은 **NAS 파일 공유**이며, 세션의 권위 있는 상태는 Altibase, 의미 검색은 VectorDB가 담당한다.
 
 ---
 
@@ -849,7 +854,7 @@ flowchart LR
       TTS["TTS<br/>프로세스형 서버"]
       LLM["LLM<br/>프로세스형 서버"]
       API["API/Realtime<br/>프로세스형 서버"]
-      DB["데이터 계층<br/>DBMS·객체 저장소"]
+      DB["데이터 계층<br/>DBMS·NAS"]
     end
 
     subgraph EMS["EMS · 관측 구역 별도"]
@@ -905,6 +910,7 @@ flowchart LR
 - [ ] 통화매니저 API 바이토 ↔ AI API/Realtime 연동(유저 PC Client 정보·설정·조회 경로) 검증
 - [ ] Altibase HA 및 백업/복구 리허설 완료
 - [ ] VectorDB 샤딩/복제/캐시 정책 반영
+- [ ] **NAS** 공유·마운트(SMB/NFS)·디렉터리 규칙·쿼터·스냅샷·백업 검증(§7.3)
 - [ ] 6,000 동시세션 + 50 CPS 부하테스트 통과
 - [ ] EMS 대시보드·알람 임계치 운영팀 인수(Grafana·Alert Manager 등)
 - [ ] **외부 관제 PC** → **EMS 관측 대표 IP(VIP) 단일 접점**·Grafana(또는 **EMS 관측 Ingress** 동일 FQDN)·VPN/ZTNA·TLS·SSO·Grafana RBAC·백엔드 직접 포트 차단 검증(§8.1)
@@ -913,7 +919,7 @@ flowchart LR
 
 ## 10) 결론
 
-본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent 시스템**(STT/TTS/LLM/Runtime/API/데이터)과 **EMS**(관측 프로세스 6종 — 배포 구역은 별도)를 내부화해 주권과 확장성을 확보하는 설계다.  
+본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent 시스템**(STT/TTS/LLM/Runtime/API/데이터 — Blob는 **온프레미스 NAS**)과 **EMS**(관측 프로세스 6종 — 배포 구역은 별도)를 내부화해 주권과 확장성을 확보하는 설계다.  
 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와의 연계는 코어·외부 역할을 분리해 AI **API/Realtime**이 유엔젤로 코어 정보를, 바이토로 유저 단 정보를 오케스트레이션한다(§1.5).  
 핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW→AI Runtime**(세션 시그널만 GW · 미디어 RTP 비경유)·**외부→AI API Ingress**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `6,000 세션 실부하 검증`이다.
 
