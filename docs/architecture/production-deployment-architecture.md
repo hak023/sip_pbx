@@ -8,7 +8,7 @@
 | 용량 목표 | 가입자 100,000명, **20 CPS(보수)**, 평균 통화 유지 120초 |
 | 동시세션 산정 | `약 20.8 CPS x 120s ≈ 2,500 동시 세션` |
 | 기존 자산 | 교환기 N개, 통화매니저AS 2 Pair(A/S), WTIMS RTP 서버, **통화매니저 API(유엔젤·코어)** , **통화매니저 API(바이토·외부)** , 유저 PC Client ↔ 바이토 ↔ 유엔젤 기존 연동 |
-| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 PostgreSQL/**Qdrant**) · 경계 **AIR GW**·**API/Realtime 단일 접점(Active/Standby)** · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) — **공유 파일 스토리지(NAS)는 초기 생략** §7.3 |
+| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 PostgreSQL/**Qdrant**) · 경계 **AIR GW**·**API/Realtime 단일 접점(VIP) + L4/L7 LB 뒤 All-Active** · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) — **공유 파일 스토리지(NAS)는 초기 생략** §7.3 |
 | DB 제약 | RDB는 **PostgreSQL HA(최소 Primary+Standby)** 기준, 필요 시 Read Replica로 읽기 분산 |
 
 ---
@@ -19,11 +19,11 @@
 
 - **동시세션**: 2,500호 (Busy Hour 기준)
 - **CPS**: 약 20 INVITE/s 지속 유입(보수 20)
-- **AI 적용률 가정**: 70% (나머지는 단순 연결/전달/정책 처리)
+- **AI 적용률 가정**: 100% (WTIMS에서 AI 응대 호만 전달)
 - **실시간 AI 활성 구간 가정**:
-  - STT 활성 스트림: `2,500 x 0.7 = 1,750`
-  - TTS 활성 채널: `2,500 x 0.7 x 0.6 = 1,050`
-  - LLM 동시 생성 요청: `2,500 x 0.7 x 0.15 ≈ 260`
+  - STT 활성 세션: `2,500` (AI 호 기준 상시 점유)
+  - TTS 동시 합성 기준: 서버 처리량 기준으로 산정(`1,000 세션/노드`, 3 Active = 3,000)
+  - LLM 동시 생성 요청: §5.3 계산식 기준(발화 빈도·질의수 가정)
 
 ### 1.2 기존 노드 활용 원칙
 
@@ -45,7 +45,7 @@
 | **세션·미디어 통합 릴레이** | WTIMS → **AIR 연동 접점** → AI Runtime: 통화매니저AS에서 받은 호 세션 정보를 합쳐 전달 + 미디어 레그 바인딩 | 코어는 접점 **단일 주소**만 노출; AIR는 접점 뒤 클러스터(§1.4·§2.2) |
 | **오케스트레이션** | AI Runtime: 의도·정책·HITL·추론 라우팅 | 허브 비대화 방지를 위해 내부 모듈·API 세분화 검토 |
 | **추론 평면** | STT / TTS / LLM | GPU·큐·모델 버전 단위 스케일 |
-| **외부 API** | API/Realtime: **단일 접점 VIP/FQDN(Active/Standby)** 으로 유엔젤·바이토·파트너·운영망이 REST/WSS 접근 | 인증·레이트리밋·노출면을 단일 접점에 수렴(§1.6) |
+| **외부 API** | API/Realtime: **단일 접점 VIP/FQDN + L4/L7 LB 뒤 All-Active** 로 유엔젤·바이토·운영망이 REST/WSS 접근 | 인증·레이트리밋·노출면을 단일 접점에 수렴(§1.6) |
 | **데이터 평면** | PostgreSQL·**Qdrant(VectorDB)** + **노드 로컬 임시**(캐시·부산물) | 트랜잭션·벡터 검색; **통화 녹음은 WTIMS** · 공유 NAS는 **선택** §7.3 |
 
 **API ↔ PostgreSQL 직접 SQL**은 가능하지만, 스키마·트랜잭션 경계가 AI Runtime 경유와 달라지지 않도록 **읽기 전용 조회·CQRS·권한 모델**을 초기에 고정하는 것을 권장한다.
@@ -98,20 +98,21 @@
 1. **유엔젤 API와 연동** — 코어 통신과 관련된 **설정 반영·상태·정보 조회**가 필요할 때 AI 측 API가 유엔젤 API를 호출하거나, 조직 정책에 따라 **역방향 노티**를 받는다.
 2. **바이토 API와 연동** — **유저 PC Client**에 AI 관련 **정보 전달**(알림·목록·설정 화면 데이터), 사용자의 **설정·정보 조회** 요청을 AI 기능과 매핑할 때 바이토 경유 또는 API/Realtime ↔ 바이토 간 규약으로 처리한다.
 
-**통화매니저 API(유엔젤·바이토) → API/Realtime 호출:** 유엔젤·바이토 서버가 **AI Call Agent의 API/Realtime을 호출**할 때(코어 연계·설정 연동·바이토 경유 트리거 등)에는 **API/Realtime 단일 접점 VIP/FQDN(Active/Standby)** 으로만 진입한다(§1.6). **반대 방향**인 **API/Realtime → 유엔젤·바이토**(코어 조회·바이토 연계 조회 등 **아웃바운드**)는 존·방화벽 정책에 따라 서버 간 HTTPS 등으로 직접 허용할 수 있다(동일 규약·mTLS 권장).
+**통화매니저 API(유엔젤·바이토) → API/Realtime 호출:** 유엔젤·바이토 서버가 **AI Call Agent의 API/Realtime을 호출**할 때(코어 연계·설정 연동·바이토 경유 트리거 등)에는 **API/Realtime 단일 접점 VIP/FQDN** 으로만 진입하고, 뒤쪽은 **L4/L7 LB를 거쳐 All-Active API/Realtime 노드**로 분산한다(§1.6). **반대 방향**인 **API/Realtime → 유엔젤·바이토**(코어 조회·바이토 연계 조회 등 **아웃바운드**)는 존·방화벽 정책에 따라 서버 간 HTTPS 등으로 직접 허용할 수 있다(동일 규약·mTLS 권장).
 
 즉 **운영 콘솔 웹(문서상 별도)** 과 별개로, **실사용자 UI는 유저 PC Client → 바이토 → 유엔젤** 축이며, AI 기능은 **API/Realtime이 유엔젤·바이토와 계약**을 맞춘다. AI로 들어오는 HTTP(S)/WSS 호출은 **API/Realtime 단일 접점 VIP 한 주소**에 수렴한다.
 
-### 1.6 API/Realtime 단일 접점(Active/Standby) — 유엔젤·바이토·외부 시스템 공통 진입
+### 1.6 API/Realtime 단일 접점(VIP) + L4/L7 LB + All-Active
 
-**통화매니저 API 서버(유엔젤·바이토)** , **외부 서버·파트너·레거시** 등 **API/Realtime을 호출하는 모든 북쪽(North) 클라이언트**는 코어↔신규 구역 경계에서 연동 주소·TLS·인증·레이트리밋을 한 벌로 맞추기 위해 **API/Realtime 단일 접점(VIP/FQDN 1개, Active/Standby)** 으로 수렴한다.
+**통화매니저 API 서버(유엔젤·바이토)** 가 API/Realtime을 호출할 때, 코어↔신규 구역 경계에서 연동 주소·TLS·인증·레이트리밋을 한 벌로 맞추기 위해 **API/Realtime 단일 접점(VIP/FQDN 1개)** 으로 수렴한다. VIP 뒤에는 **L4 LB + (선택) L7/API Gateway**를 두고 API/Realtime 노드는 **All-Active**로 운영한다.
 
 | 요소 | 역할 |
 |------|------|
-| **단일 진입** | 방화벽·WAF·ACL을 **API/Realtime 단일 접점 주소**에만 개방; 유엔젤·바이토·파트너가 **같은 목적지**를 바라보게 조직 DNS·라우팅 정리 |
+| **단일 진입** | 방화벽·WAF·ACL을 **API/Realtime 단일 접점 주소**에만 개방; 유엔젤·바이토가 **같은 목적지**를 바라보게 조직 DNS·라우팅 정리 |
 | **TLS·신뢰** | 공인 또는 사내 인증서 종료, **mTLS**(서버 간 신뢰)·클라이언트 인증서 선택 |
 | **정책** | OAuth2/JWT·API Key·IP 허용목록, **레이트리밋**, 요청 크기 제한 |
-| **라우팅** | 단일 접점 노드(Active/Standby)에서 **API/Realtime 서비스**로 전달(세션형은 스티키 또는 토큰 affinity) |
+| **라우팅** | 단일 VIP 뒤 **L4 LB(TCP pass-through)** + 필요 시 **L7(인증/레이트리밋/WAF)** 로 전달. API/Realtime 노드는 **All-Active**로 분산(세션형은 스티키 또는 토큰 affinity) |
+| **구현 원칙** | **LB 직접 개발은 비권장**. 상용/오픈소스 검증 LB(HAProxy, NGINX, Envoy, 클라우드 LB 등) 사용 권장 |
 | **아웃바운드(반대 방향)** | **API/Realtime → 유엔젤·바이토** 호출은 별도 존 연동으로 직접 허용 — 표 §3.2 |
 
 **운영 콘솔**(신규 존 동일 망)·**순수 내부 마이크로서비스**만 API를 쓰는 경우에는 조직 정책에 따라 내부 LB만 쓸 수 있으나, **통화매니저 API 서버에서 AI로 오는 호출**은 위 **단일 접점 정책**과 맞춘다.
@@ -127,7 +128,6 @@ flowchart LR
         EX["교환기 노드 N개<br/>프로세스형 서버"]
         PCL["유저 PC Client<br/>통화매니저 프론트엔드"]
         BAPI["통화매니저 API<br/>바이토 · 외부"]
-        EXTAPI["외부 서버·파트너<br/>레거시 연동"]
     end
 
     subgraph CORE["기존 코어 통신 영역 · 프로세스형 서버"]
@@ -146,7 +146,7 @@ flowchart LR
         end
 
         subgraph APP["업무/API"]
-            API["API/Realtime Cluster<br/>단일 접점 VIP(FQDN) · Active/Standby"]
+            API["API/Realtime Cluster<br/>단일 VIP + L4/L7 LB · All-Active"]
         end
 
         subgraph DATA["데이터 · 유형 구분"]
@@ -185,12 +185,11 @@ flowchart LR
 
     UAPI -->|HTTPS API 호출 단일 VIP| API
     BAPI -->|HTTPS API 호출 단일 VIP| API
-    EXTAPI -->|HTTPS WSS mTLS 단일 진입| API
     API <-->|HTTPS JSON WSS 내부 gRPC<br/>STT TTS 상태 이벤트| AIR
     API -->|아웃바운드 코어 조회 HTTPS| UAPI
     API -->|Realtime 이벤트 릴레이<br/>STT TTS 상태 푸시| BAPI
-    PCL <-->|기존 클라이언트 API WSS<br/>실시간 STT TTS 표시| BAPI
-    BAPI <-->|기존 코어 연동 규약| UAPI
+    PCL <-->|기존 클라이언트 API WSS<br/>실시간 STT TTS 표시| BAPI;
+    BAPI <-->|기존 코어 연동 규약| UAPI;
 
     API <-->|JDBC SQL 커넥션 풀| ALT
     AIR <-->|JDBC SQL 커넥션 풀| ALT
@@ -233,8 +232,49 @@ flowchart LR
 - 도표상 동일한 박스로 보일 수 있으나, 실제로는 **프로세스형 서버·DBMS·단말/클라이언트**로 구분한다(§2.0).
 - **WTIMS → AI Runtime**은 기존 코어와 신규 시스템의 **경계**이므로, AIR 노드 다수에 WT가 직접 붙지 않고 **AIR 연동 접점**(단일 VIP/FQDN에 대응하는 LB·게이트웨이)을 두어 **연동 노드·주소를 단일화**한다. 내부 풀(STT·LLM·TTS 등) 간 부하는 동일 구역 내 일반 로드밸런싱으로 처리한다(§2.2).
 - 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와 AI **API/Realtime** 연계는 §1.5 및 본 절 Mermaid를 참고한다.
-- **유엔젤·바이토·외부 서버·파트너**가 **API/Realtime을 호출**할 때는 **API/Realtime 단일 접점 VIP/FQDN**(§1.6)으로 수렴한다. **API/Realtime이 유엔젤·바이토를 호출**하는 **아웃바운드**는 존 정책에 따라 직접(HTTPS 등) 연결할 수 있다.
+- **유엔젤·바이토**가 **API/Realtime을 호출**할 때는 **API/Realtime 단일 접점 VIP/FQDN**(§1.6)으로 수렴한다. **API/Realtime이 유엔젤·바이토를 호출**하는 **아웃바운드**는 존 정책에 따라 직접(HTTPS 등) 연결할 수 있다.
 - **관제 모니터링 PC**는 EMS 백엔드(OTel/TSDB/Log/Trace)에 직접 붙지 않고, **EMS 관측 대표 VIP/FQDN(또는 EMS 관측 Ingress)** 을 거쳐 **Grafana**로만 접근한다(§8.1).
+
+### 2.3 EMS 제외 옵션(대안 배포도)
+
+EMS를 외부 공용 관제나 기존 전사 관제로 대체하는 경우, 아래처럼 **코어 + AI Call Agent 시스템**만으로도 운영할 수 있다.
+
+```mermaid
+flowchart LR
+    subgraph EXT["외부 통신 영역"]
+        EX["교환기 노드 N개"]
+        PCL["유저 PC Client"]
+        BAPI["통화매니저 API 바이토"]
+    end
+    subgraph CORE["기존 코어"]
+        CM["통화매니저AS"]
+        WT["WTIMS"]
+        UAPI["통화매니저 API 유엔젤"]
+    end
+    subgraph ACA["AI Call Agent 시스템"]
+        GW["AIR 연동 접점 GW"]
+        AIR["AI Runtime"]
+        STT["STT"]
+        TTS["TTS"]
+        LLM["LLM"]
+        API["API/Realtime<br/>VIP + L4/L7 LB + All-Active"]
+        PG["PostgreSQL"]
+        QD["Qdrant"]
+    end
+    EX --> CM --> WT
+    WT --> GW --> AIR
+    WT --> STT
+    AIR --> STT
+    AIR --> TTS --> WT
+    AIR --> LLM
+    UAPI --> API
+    BAPI --> API
+    API --> UAPI
+    API --> BAPI
+    BAPI --> PCL
+    AIR --> PG
+    AIR --> QD
+```
 
 ### 2.0 구성요소 유형 (프로세스 서버 · DBMS)
 
@@ -265,15 +305,15 @@ flowchart LR
 | 외부 | 단말·클라이언트 | 유저 PC Client | 통화매니저 **데스크톱·프론트엔드**; **바이토 API**에 접속 |
 | 외부·관제 | 단말·클라이언트 | 관제 모니터링 PC | **Grafana**(선택 **EMS 관측 Ingress**)로 EMS 모니터링 · TSDB·Loki 직접 접속 금지 §8.1 |
 | AI Call Agent 시스템 | 프로세스형 서버 | AIR 연동 접점 GW | 코어(WT)와 신규(AIR) 구역 **단일 연동 주소** · **세션·통합 시그널만** · RTP 미디어 비경유 §1.4·§2.2 |
-| AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime 단일 접점(A/S) | 유엔젤·바이토·외부서버→**API/Realtime** **단일 진입** · TLS·레이트리밋 §1.6 |
+| AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime 단일 접점(VIP+LB) | 유엔젤·바이토→**API/Realtime** **단일 진입** · LB 뒤 All-Active · TLS·레이트리밋 §1.6 |
 | AI Call Agent 시스템 | 프로세스형 서버 | AI Runtime | 호 단위 오케스트레이션·정책·의도·HITL·추론 라우팅, STT/LLM/TTS 호출·WTIMS 재생 명령·DB/스토리지 연계 · 접점 뒤 N대 확장 §2.2 |
 | AI Call Agent 시스템 | 프로세스형 서버 | STT Server | RTP 미러 또는 오디오 스트림 수신·실시간 문자 변환·부분/최종 텍스트 스트리밍 |
 | AI Call Agent 시스템 | 프로세스형 서버 | LLM Server | 프롬프트 기반 추론·도구/함수 호출 응답·OpenAI 호환 API 제공 |
 | AI Call Agent 시스템 | 프로세스형 서버 | TTS Server | 텍스트→음성 스트리밍 합성·PCM 청크 반환 |
-| AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime | AI Runtime·DB와 연계 · 아웃바운드로 유엔젤·바이토 호출 §1.5 · **인바운드는 단일 접점(A/S)** §1.6 · EMS는 별 구역 |
+| AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime | AI Runtime·DB와 연계 · 아웃바운드로 유엔젤·바이토 호출 §1.5 · **인바운드는 단일 접점(VIP+LB) 뒤 All-Active** §1.6 · EMS는 별 구역 |
 | AI Call Agent 시스템 | 단말·클라이언트 | 운영 콘솔 | 브라우저 UI·모니터링·설정·실시간 이벤트 구독 — **유저 PC Client·바이토와 별 축** |
 | AI Call Agent 시스템 | DBMS | PostgreSQL HA | 트랜잭션형 세션·정책·이력·권한 등 RDB 권위 데이터 · **최소 2노드(Primary/Standby)** |
-| AI Call Agent 시스템 | DBMS | Qdrant Cluster | 지식·임베딩 검색·유사도 기반 조회·업서트 · **최소 3노드 HA** |
+| AI Call Agent 시스템 | DBMS | Qdrant Cluster | 지식·임베딩 검색·유사도 기반 조회·업서트 · **최소 2 Active** |
 | EMS | 프로세스형 서버 | EMS · OTel Collector | 텔레메트리·로그·트레이스 수집·라우팅 · AI Call Agent 시스템 및 코어에서 OTLP 등으로 인입 |
 | EMS | 프로세스형 서버 | EMS · Metrics TSDB | 메트릭 시계열 저장·쿼리(Prometheus/Mimir 등) |
 | EMS | 프로세스형 서버 | EMS · Log Store | 로그 인입·저장·검색(Loki/ELK 등) |
@@ -317,7 +357,6 @@ flowchart TD
     subgraph EXT_LEGACY["외부 · 기존 클라이언트/API"]
         PCL["유저 PC Client<br/>단말·클라이언트"]
         BAPI["통화매니저 API 바이토<br/>프로세스형 서버"]
-        EXTAPI["외부 서버·파트너<br/>레거시 연동"]
     end
     subgraph CORE["기존 코어 · 프로세스형 서버"]
         CM["통화매니저AS<br/>프로세스형 서버"] -->|SIP 2.0 + SDP| WT["WTIMS<br/>프로세스형 서버"]
@@ -331,16 +370,15 @@ flowchart TD
         AIR["AI Runtime<br/>프로세스형 서버"]
         LLM["LLM Server<br/>프로세스형 서버"]
         TTS["TTS Server<br/>프로세스형 서버"]
-        API["API/Realtime<br/>단일 접점 VIP · Active/Standby"]
+        API["API/Realtime<br/>단일 VIP + L4/L7 LB · All-Active"]
         CON["운영 콘솔<br/>클라이언트 UI"]
         ALT["PostgreSQL<br/>DBMS"]
         VDB["Qdrant<br/>VectorDB"]
     end
-    PCL <-->|기존 클라이언트 연동(조회 명령)| BAPI
-    BAPI <-->|기존 코어 연동| UAPI
+    PCL <-->|기존 클라이언트 연동 조회명령| BAPI;
+    BAPI <-->|기존 코어 연동| UAPI;
     UAPI -->|유엔젤에서 AI 호출| API
     BAPI -->|바이토에서 AI 호출| API
-    EXTAPI -->|HTTPS WSS 단일 진입| API
     API -->|아웃바운드 코어 조회| UAPI
     API -->|Realtime 이벤트 릴레이<br/>STT TTS 상태 푸시| BAPI
     WT -->|통합 시그널 단일 진입| GW
@@ -386,7 +424,7 @@ flowchart TD
 | AI Runtime ↔ TTS | gRPC 또는 HTTP 스트리밍 | AIR→TTS | 텍스트 입력·PCM 청크 출력 |
 | TTS → WTIMS | 제어 채널 + 페이로드 | TTS→WT | 재생 슬롯·버퍼 식별자 합의 |
 | API/Realtime ↔ AI Runtime | HTTPS JSON, 내부 gRPC | 양방향 | 운영·세션 제어·조회 |
-| 통화매니저 API 유엔젤·바이토·외부서버 → API/Realtime 단일 접점(A/S) | HTTPS·WSS·mTLS | 인바운드→AI | **단일 VIP/FQDN**; 파트너·레거시·**유엔젤·바이토**가 **API/Realtime 호출** 시 공통 진입 §1.6 |
+| 통화매니저 API 유엔젤·바이토 → API/Realtime 단일 접점(VIP+LB) | HTTPS·WSS·mTLS | 인바운드→AI | **단일 VIP/FQDN**; LB 뒤 **All-Active** API/Realtime 노드로 공통 진입 §1.6 |
 | API/Realtime → 통화매니저 API 유엔젤 | HTTPS REST 등·사내 규약 | **아웃바운드** | **AI가 코어** 설정·상태·정보 **조회·반영** |
 | API/Realtime → 통화매니저 API 바이토 | HTTPS REST 등 | **아웃바운드** | **AI가 바이토**로 유저 경로 연계·조회 |
 | 관제 PC → EMS Grafana | HTTPS TLS · 브라우저 | 외부→EMS | **대표 VIP/FQDN 단일 접점** · VPN 또는 **EMS 관측 Ingress** · **SSO·Viewer RBAC** §8.1 |
@@ -565,7 +603,7 @@ X-Service-Auth: Bearer ${API_TOKEN}
 
 ### 3.4 연동 규격 제안 (체크리스트)
 
-- **유엔젤·바이토·외부 → API/Realtime 단일 접점(A/S)**(인바운드): 단일 VIP·TLS·레이트리밋 §1.6
+- **유엔젤·바이토 → API/Realtime 단일 접점(VIP+LB)**(인바운드): 단일 VIP·TLS·레이트리밋 · LB 뒤 All-Active §1.6
 - **API/Realtime → 유엔젤·바이토**(아웃바운드): 코어·바이토 조회 연계 §1.5
 - **교환기 <-> 통화매니저AS**: SIP Trunk (UDP/TCP/TLS)
 - **통화매니저AS <-> WTIMS**: **SIP 2.0 + SDP + RTP/RTCP**만 사용. 호 세션·스냅샷·생명주기 표현도 **동일 구간의 SIP/SDP·협의 헤더**로 한다(JSON 전용 CM↔WT 채널 없음). AIR 직접 연동 없음
@@ -641,7 +679,8 @@ sequenceDiagram
   - 2순위: `Whisper-large-v3-turbo` (추론 최적화 필요)
 - **권장 형태**: GPU inference + gRPC streaming
 - **서버 스펙(노드당)**: 32 vCPU / 128 GB RAM / GPU L40S 1장 이상 / NVMe 1 TB
-- **처리량 가정**: 600 동시 스트림/노드
+- **처리량 가정(벤치)**: **625 동시세션/노드**
+- **기준 구분**: 위 처리량은 **벤치 기준치**이며, 운영 시에는 목표 상한을 **80% 이내(권장 500/노드)** 로 관리한다.
 
 ## 5.2 TTS 서버 (내부 구축)
 
@@ -650,7 +689,8 @@ sequenceDiagram
   - 2순위: `VITS 계열` (자연스러움 우선)
 - **권장 형태**: gRPC streaming synth + 캐시
 - **서버 스펙(노드당)**: 24 vCPU / 96 GB RAM / GPU L40S 1장 / NVMe 1 TB
-- **처리량 가정**: 500 동시 합성 채널/노드
+- **처리량 가정(벤치)**: **1,000 동시세션/노드**
+- **기준 구분**: 위 처리량은 **벤치 기준치**이며, 운영 시에는 목표 상한을 **80% 이내(권장 800/노드)** 로 관리한다.
 
 ## 5.3 LLM 서버 (내부 구축)
 
@@ -660,20 +700,36 @@ sequenceDiagram
 - **권장 형태**: OpenAI-compatible endpoint + vLLM/TGI
 - **서버 스펙(노드당)**: 32 vCPU / 256 GB RAM / GPU L40S 2장 이상 / NVMe 2 TB
 - **처리량 가정**: 80 동시 생성 요청/노드 (평균 128~256 tokens)
+- **발화/질의 가정(120초/호 기준)**:
+  - `가정1` 유저 발화 1회당 LLM 질의 **1.2회**(직접 응답 1회 + 일부 턴 재질의 평균)
+  - `가정2` 유저 발화 간격 **6초/회**(평균)
+  - `가정3` 평균 통화시간 **120초/호**
+- **계산 예시(2,500 동시세션, 20 CPS)**:
+  - 호당 발화 수: `120 / 6 = 20`
+  - 호당 LLM 질의 수: `20 x 1.2 = 24`
+  - 클러스터 LLM 질의율: `20 CPS x 24 = 480 QPS`
+  - 평균 응답시간 0.6초 가정 시 동시 생성: `480 x 0.6 = 288`
+  - 노드당 80 동시 생성 기준 필요 Active: `ceil(288/80)=4`
 
 ## 5.4 AI Runtime 서버
 
 - **역할**: 세션 오케스트레이션, 정책 판단, HITL, 도구 호출, STT/TTS/LLM 라우팅. WTIMS는 **AIR 연동 접점**을 통해서만 유입(§1.4·§2.2).
 - **서버 스펙(노드당)**: 16 vCPU / 64 GB RAM / NVMe 500 GB
-- **처리량 가정**: 1,200 동시 세션/노드
+- **처리량 가정**: 2,500 동시 세션/노드(경량 오케스트레이션 기준)
+- **배치 원칙**: `call_id` 스티키를 유지한 **All-Active 2노드 이상** 권장(롤링 배포/장애 전환 시 세션 분산)
 
 ## 5.5 API/Realtime 서버
 
 - **역할**: REST API, 운영 UI, WebSocket 이벤트, SIP MESSAGE 브릿지
-- **레거시 연동**: 통화매니저 API 유엔젤(코어)·바이토(외부)와의 **인바운드·아웃바운드** 규약은 §1.5·§1.6과 같이 — **유엔젤·바이토→AI 호출은 API/Realtime 단일 접점(A/S)**, **AI→유엔젤·바이토 조회**는 존 정책에 따라 직접 REST 등.
+- **레거시 연동**: 통화매니저 API 유엔젤(코어)·바이토(외부)와의 **인바운드·아웃바운드** 규약은 §1.5·§1.6과 같이 — **유엔젤·바이토→AI 호출은 API/Realtime 단일 접점(VIP+LB)**, **AI→유엔젤·바이토 조회**는 존 정책에 따라 직접 REST 등.
 - **연동규격**: HTTPS(JSON), WSS, 내부 gRPC/HTTP
 - **서버 스펙(노드당)**: 16 vCPU / 32 GB RAM / NVMe 500 GB
 - **처리량 가정**: 2,500 동시 WS + 400 rps
+- **권장 접점 구성**: VIP 1개 + L4 LB(필수) + L7 정책 계층(선택), 백엔드는 **All-Active 2노드 이상**
+- **장애 전환 운용(경량 권장)**:
+  - 클라이언트 WSS 재연결은 지수 백오프 + 지터(예: 1s → 2s → 4s, 최대 10s)
+  - 재연결 직후 `last_seq` 기반 누락 이벤트 재동기화 API 제공(최근 이벤트 재조회)
+  - 페일오버 드릴 기준: reconnect 성공률, p95 재연결 시간, 누락 이벤트 복구율을 운영 SLI로 관리
 
 ---
 
@@ -684,13 +740,13 @@ sequenceDiagram
 | 기존 코어 | 통화매니저AS | 기존 코어 사용 | 기존 Pair 용량 기준 | 기존 2 Pair 활용 | 추가 구축 없음 |
 | 기존 코어 | WTIMS RTP | 2,500 RTP 세션 | 800 세션/노드 | 4 | 4 Active + 1 Standby |
 | AI Call Agent 시스템 | AIR 연동 접점 GW | 코어→신규 단일 진입 · 통합 시그널만 | 제품·프로파일별 처리량 | 1 | 1 Active + 1 Standby |
-| AI Call Agent 시스템 | STT | 1,750 스트림 | 600/노드 | 3 | 3 Active + 1 Standby |
-| AI Call Agent 시스템 | TTS | 1,050 채널 | 500/노드 | 3 | 3 Active + 1 Standby |
-| AI Call Agent 시스템 | LLM | 260 동시 생성 | 80/노드 | 4 | 4 Active + 1 Standby |
-| AI Call Agent 시스템 | AI Runtime | 2,500 세션 | 1,200/노드 | 3 | 3 Active + 1 Standby · 접점 뒤 로드쉐어 §2.2 |
-| AI Call Agent 시스템 | API/Realtime | 2,500 WS peak + 400 rps | 2,500 WS/노드 + 400 rps | 1 | **1 Active + 1 Standby(단일 접점 A/S)** |
+| AI Call Agent 시스템 | STT | 2,500 세션(상시 점유) | **625/노드(벤치)** | 4 | **4 Active + 1 Standby** |
+| AI Call Agent 시스템 | TTS | 2,500 세션 기준 합성 부하 | **1,000/노드(벤치)** | 3 | **3 Active + 1 Standby** |
+| AI Call Agent 시스템 | LLM | 480 QPS / 288 동시 생성(가정) | 80 동시 생성/노드 | 4 | 4 Active + 1 Standby |
+| AI Call Agent 시스템 | AI Runtime | 2,500 세션 | 2,500/노드 | 1 | **2 Active(All-Active)** · `call_id` 스티키 분산 §2.2 |
+| AI Call Agent 시스템 | API/Realtime | 2,500 WS peak + 400 rps | 2,500 WS/노드 + 400 rps | 1 | **2 Active(All-Active)** · VIP+LB 단일 접점 §1.6 |
 | AI Call Agent 시스템 | PostgreSQL HA | 세션/정책/이력 | 쓰기 Primary 기준 · 읽기 Replica 오프로딩(선택) | 2 | **최소** Primary + Standby(HA) · **권장** Read Replica 1대 추가 |
-| AI Call Agent 시스템 | Qdrant(VectorDB) HA | **10만 고객 지식베이스 + 2,500 동시세션 조회/업서트** | 250 QPS/노드(보수) | 3 | **최소 3 Active(Quorum HA)** · 필요 시 4번째 노드 증설 |
+| AI Call Agent 시스템 | Qdrant(VectorDB) | **10만 고객 지식베이스 + 2,500 동시세션 조회/업서트** | 100 QPS/노드(보수) | 2 | **최소 2 Active** · 여유 필요 시 3번째 노드 증설 |
 | EMS | EMS · OTel Collector | 전 계층 텔레메트리 인입 | 수집 파이프 처리량 | 2 | 2 Active + 1 Standby |
 | EMS | EMS · Metrics TSDB | 메트릭 장기 저장·알람 입력 | 시계열 카드널리티 | 2 | HA 페어 권장 |
 | EMS | EMS · Log Store | 로그 인입·보관 | 초당 로그량·보존기간 | 2 | 샤딩·복제 |
@@ -699,6 +755,8 @@ sequenceDiagram
 | EMS | EMS · Grafana | 대시보드·조회 UI | 동시 조회·패널 수 | 2 | Active 이중화 또는 무중단 배포 |
 
 > 상기 수치는 초기 계획치이며, 반드시 스테이징에서 **20 CPS/120초/2,500 동시세션** 부하로 재검증한다.
+> **표의 노드당 처리량 값은 벤치 기준치**이며, 운영 상한은 기본적으로 **80% 이내**로 관리한다(장애 전환·피크 구간은 일시 초과 허용).
+> STT/TTS 노드 수는 사용자가 확정한 **벤치 수용량(STT 625/노드, TTS 1,000/노드)** 기준으로 산정했다.
 
 ### 6.1 서버 스펙 최종 요약표 (권장)
 
@@ -707,13 +765,13 @@ sequenceDiagram
 | 기존 코어 | 통화매니저AS | 기존 2 Pair 활용 | 기존 사양 | 기존 사양 | - | 기존 사양 | 기존 사양 | 신규 구축 없음 |
 | 기존 코어 | WTIMS RTP | 4 + 1 | 24 vCPU | 64 GB | - | NVMe 1 TB | 10 Gbps | RTP Relay + RTP Mirror |
 | AI Call Agent 시스템 | AIR 연동 접점 GW | 1 + 1 | 8 vCPU | 32 GB | - | NVMe 200 GB | 10 Gbps | 세션 시그널만 · VIP 이중화 §2.2 |
-| AI Call Agent 시스템 | STT Server | 3 + 1 | 32 vCPU | 128 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming ASR |
-| AI Call Agent 시스템 | TTS Server | 3 + 1 | 24 vCPU | 96 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming TTS |
+| AI Call Agent 시스템 | STT Server | 4 + 1 | 32 vCPU | 128 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming ASR · 625/노드(벤치) |
+| AI Call Agent 시스템 | TTS Server | 3 + 1 | 24 vCPU | 96 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming TTS · 1,000/노드(벤치) |
 | AI Call Agent 시스템 | LLM Server | 4 + 1 | 32 vCPU | 256 GB | L40S x2 | NVMe 2 TB | 25 Gbps | vLLM/TGI 추론 풀 |
-| AI Call Agent 시스템 | AI Runtime | 3 + 1 | 16 vCPU | 64 GB | - | NVMe 500 GB | 10 Gbps | 세션 오케스트레이션 · §2.2 |
-| AI Call Agent 시스템 | API/Realtime 단일 접점(A/S) | 1 + 1 | 16 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | REST/WSS 게이트웨이 · 병목 2,500 WS |
+| AI Call Agent 시스템 | AI Runtime | 2 + 0(All-Active) | 16 vCPU | 64 GB | - | NVMe 500 GB | 10 Gbps | 세션 오케스트레이션 · `call_id` 스티키 분산 §2.2 |
+| AI Call Agent 시스템 | API/Realtime (VIP+LB) | 2 + 0(All-Active) | 16 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | REST/WSS 게이트웨이 · 1노드 장애 시 2,500 WS 유지 |
 | AI Call Agent 시스템 | PostgreSQL HA | 2 + 0(최소) / 2 + 1(읽기분산) | 24 vCPU | 128 GB | - | NVMe 2 TB (고IOPS) | 10 Gbps | Primary/Standby + (선택) Read Replica |
-| AI Call Agent 시스템 | Qdrant(VectorDB) | 3 + 0(최소 HA) / 3 + 1(여유) | 16 vCPU | 64 GB | - | NVMe 1 TB | 10 Gbps | 3노드 Quorum · RF=2 권장 |
+| AI Call Agent 시스템 | Qdrant(VectorDB) | 2 + 0(최소) / 3 + 0(권장) | 16 vCPU | 64 GB | - | NVMe 1 TB | 10 Gbps | 2 Active 시작, 장애내성 강화 시 3노드 권장 |
 | EMS | EMS · OTel Collector | 2 + 1 | 8 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | 수집·배압·라우팅 |
 | EMS | EMS · Metrics TSDB | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Prom/Mimir 등 |
 | EMS | EMS · Log Store | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Loki/ELK 등 |
@@ -724,11 +782,30 @@ sequenceDiagram
 ### 6.2 목표 용량 대비 계산 체크
 
 - 동시세션 목표: `2,500`
-- API/Realtime 유효 수용량: `1 active x 2,500 WS = 2,500` (**시스템 병목 기준**)
+- API/Realtime 유효 수용량: `2 active x 2,500 WS = 5,000` (정상 시), `1노드 장애 시 2,500 WS` 유지
 - WTIMS 유효 수용량: `4 active x 800 = 3,200` (여유 확보, standby 별도)
-- STT 유효 수용량: `3 active x 600 = 1,800` (AI 적용률 70% 가정과 정합)
-- TTS 유효 수용량: `3 active x 500 = 1,500` (동시 합성 1,050 가정 대비 여유)
-- LLM 유효 수용량: `4 active x 80 = 320` (동시 생성 260 가정 대비 여유)
+- STT 유효 수용량(벤치): `4 active x 625 = 2,500` (요구 동시세션과 정합)
+- TTS 유효 수용량(벤치): `3 active x 1,000 = 3,000` (요구 동시세션 대비 여유)
+- LLM 유효 수용량: `4 active x 80 = 320` (계산 동시생성 288 가정 대비 여유)
+- AI Runtime 유효 수용량: `2 active x 2,500 = 5,000` (정상 시), `1노드 장애 시 2,500` 유지
+
+### 6.3 EMS 제외 시 서버 산정(옵션)
+
+EMS를 본 시스템 범위에서 제외하면(외부 관제/기존 관제 사용), 아래처럼 **AI Call Agent 시스템 + 코어 필수 노드**만 산정한다.
+
+| 구분 | 서버 역할 | 권장 대수 |
+|------|-----------|-----------|
+| 기존 코어 | WTIMS RTP | 4 + 1 |
+| AI Call Agent 시스템 | AIR 연동 접점 GW | 1 + 1 |
+| AI Call Agent 시스템 | STT Server | 4 + 1 |
+| AI Call Agent 시스템 | TTS Server | 3 + 1 |
+| AI Call Agent 시스템 | LLM Server | 4 + 1 |
+| AI Call Agent 시스템 | AI Runtime | 2 + 0 |
+| AI Call Agent 시스템 | API/Realtime (VIP+LB) | 2 + 0 |
+| AI Call Agent 시스템 | PostgreSQL HA | 2 + 0 |
+| AI Call Agent 시스템 | Qdrant(VectorDB) | 2 + 0 |
+
+> 참고: 위 옵션은 EMS 전용 노드(Collector/TSDB/Log/Trace/Alert/Grafana) 15대를 제외한 구성이다.
 
 ---
 
@@ -741,12 +818,13 @@ sequenceDiagram
 - 읽기/쓰기 분산: **쓰기=Primary 고정**, **읽기=Read Replica(선택)** 로 분리 가능. 초기에는 2대로 시작하고 조회 부하가 커지면 Replica 1대 추가 권장
 - 요구사항: WAL 아카이브·백업, 장애 전환 자동화, PITR 리허설, 연결 풀러(PgBouncer 등) 적용
 
-### 7.2 VectorDB 선정: Qdrant (10만 고객·HA 최소 구성)
+### 7.2 VectorDB 선정: Qdrant (10만 고객·최소 구성)
 
 - **선정 DB:** Qdrant를 VectorDB 표준으로 확정한다.
-- **선정 이유:** 10만 고객 규모 지식/임베딩 데이터와 2,500 동시세션 환경에서, 운영 복잡도 대비 성능·가용성 균형이 좋고 3노드 Quorum 기반 HA를 최소 구성으로 가져가기 쉽다.
-- **최소 HA 구성:** **Qdrant 3노드(모두 Active)**, 컬렉션은 `replication_factor=2` 권장. 1노드 장애 시에도 서비스 연속성을 유지한다.
-- **용량 기준(초기):** 노드당 250 QPS(검색+업서트 혼합, 보수 가정)로 산정해 클러스터 약 750 QPS. 지연 목표(p95) 초과 시 4번째 노드를 추가한다.
+- **선정 이유:** 10만 고객 규모 지식/임베딩 데이터와 2,500 동시세션 환경에서, 운영 복잡도 대비 성능·가용성 균형이 좋다.
+- **최소 구성:** **Qdrant 2노드(모두 Active)** 로 시작한다. 초기 목표는 비용 최소화이며, 장애내성(합의/쿼럼) 강화를 원하면 3노드로 증설한다.
+- **용량 기준(초기):** 노드당 100 QPS(검색+업서트 혼합, 보수 가정)로 산정해 클러스터 약 200 QPS. 지연 목표(p95) 초과 또는 장애내성 강화 필요 시 3번째 노드를 추가한다.
+- **주의:** 2노드 구성은 장애내성/합의 측면에서 제한이 있으므로, 무중단 가용성 요구가 높아지면 3노드 전환을 우선한다.
 - **운영 규칙:** 핫 컬렉션 분리, 스냅샷/복구 리허설, 인덱스 재구성 창구 분리(업무시간 외) 정책을 기본으로 둔다.
 
 ### 7.3 파일·Blob 계층 — 초기: 전용 NAS/Blob 없음
@@ -887,6 +965,7 @@ flowchart LR
 - LLM: TTFT, tokens/sec, queue depth, error ratio
 - AI Runtime: 세션당 처리시간, HITL 전환율, 실패 복구율
 - API/WS: rps, ws fanout delay, reconnect rate
+- API/WS Failover: reconnect p95, reconnect success ratio, 이벤트 누락 복구율(`last_seq` 재동기화)
 - DB: query p95, lock wait, replication lag
 
 ---
@@ -898,14 +977,17 @@ flowchart LR
 - [ ] 통화매니저AS→WTIMS 호 세션 릴레이 및 WTIMS→**AIR 연동 접점**→AI Runtime **통합 시그널** 규약·순서·`call_id` 상관 검증
 - [ ] WTIMS→**AIR 연동 접점** 단일 주소(VIP/FQDN)·방화벽 홀·인증서 확정; 접점→AIR **`call_id` 로드쉐어** 및 장애 시 세션 정책 검증(§2.2)
 - [ ] **미디어 경로** RTP Mirror·TTS 재생이 GW를 경유하지 않음을 네트워크·방화벽 설계서와 일치 검증(§1.4)
-- [ ] **유엔젤·바이토·외부서버 → API/Realtime 단일 접점(A/S)** 단일 주소·mTLS 또는 API Key·레이트리밋·VIP 라우팅 검증(§1.6)
+- [ ] **유엔젤·바이토 → API/Realtime 단일 접점(VIP+LB)** 단일 주소·mTLS 또는 API Key·레이트리밋·LB 라우팅 검증(§1.6)
 - [ ] Internal STT/TTS/LLM API 스펙 확정(gRPC/REST)
 - [ ] AI Runtime 장애 격리(서킷브레이커/타임아웃/재시도) 적용
-- [ ] 통화매니저 API 유엔젤 ↔ AI: **인바운드 단일 접점(A/S)**·**아웃바운드 코어 조회** 경로·인증 분리 검증(§1.5·§1.6)
-- [ ] 통화매니저 API 바이토 ↔ AI: **인바운드 단일 접점(A/S)**·**아웃바운드 바이토 연계** 검증(§1.5·§1.6)
+- [ ] 통화매니저 API 유엔젤 ↔ AI: **인바운드 단일 접점(VIP+LB)**·**아웃바운드 코어 조회** 경로·인증 분리 검증(§1.5·§1.6)
+- [ ] 통화매니저 API 바이토 ↔ AI: **인바운드 단일 접점(VIP+LB)**·**아웃바운드 바이토 연계** 검증(§1.5·§1.6)
+- [ ] API/Realtime 장애 전환 시 WSS 재연결 백오프/지터 정책 검증(재접속 폭주 방지)
+- [ ] `last_seq` 기반 이벤트 재동기화 API(누락 복구) 검증
+- [ ] API/Realtime All-Active + LB 장애 전환 드릴: reconnect p95·성공률·누락 복구율 기준 통과
 - [ ] PostgreSQL HA(Primary/Standby) 및 백업/복구·장애전환 리허설 완료
 - [ ] PostgreSQL Read/Write 라우팅 정책(쓰기 Primary 고정, 읽기 Replica 선택) 적용·검증
-- [ ] Qdrant 3노드 HA(Quorum, `replication_factor=2`) 및 스냅샷/복구 리허설 완료
+- [ ] Qdrant 2 Active 운영 기준 성능(100 QPS/노드 가정) 및 스냅샷/복구 리허설 완료
 - [ ] **로컬 임시 스토리지**: AIR·STT·API 등 노드별 디스크 쿼터·경로 규칙·보존·정리 정책 검증; **녹음은 WTIMS**(§7.3)
 - [ ] 2,500 동시세션 + 20 CPS 부하테스트 통과
 - [ ] EMS 대시보드·알람 임계치 운영팀 인수(Grafana·Alert Manager 등)
@@ -916,6 +998,47 @@ flowchart LR
 ## 10) 결론
 
 본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent 시스템**(STT/TTS/LLM/Runtime/API/데이터 — **통화 녹음은 WTIMS**, 파일 부산물은 **노드 로컬 임시**·§7.3)과 **EMS**(관측 프로세스 6종 — 배포 구역은 별도)를 내부화해 주권과 확장성을 확보하는 설계다.  
-기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와의 연계는 코어·외부 역할을 분리하고, **유엔젤·바이토·외부 시스템 → API/Realtime**은 **단일 접점(A/S)**(§1.6), **API/Realtime → 유엔젤·바이토** 아웃바운드는 직접 조회·연계한다(§1.5).  
-핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW→AI Runtime**(세션 시그널만 GW · 미디어 RTP 비경유)·**유엔젤·바이토·외부→API/Realtime 단일 접점(A/S)**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `2,500 세션 실부하 검증`이다.
+기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와의 연계는 코어·외부 역할을 분리하고, **유엔젤·바이토 → API/Realtime**은 **단일 접점(VIP+LB)**(§1.6), **API/Realtime → 유엔젤·바이토** 아웃바운드는 직접 조회·연계한다(§1.5).  
+핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW→AI Runtime**(세션 시그널만 GW · 미디어 RTP 비경유)·**유엔젤·바이토→API/Realtime 단일 접점(VIP+LB)**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `2,500 세션 실부하 검증`이다.
+
+---
+
+## 11) AI Call Agent 비용 산출(부품가 리서치 기반)
+
+아래 비용은 **EMS 제외**, **AI Call Agent 시스템만** 대상으로, 2026-05 시점 웹 공개가를 기준으로 한 **러프오더(ROM) CAPEX**다.
+
+### 11.1 단가 가정(USD)
+
+- GPU: NVIDIA L40S 1장 **$9,000** (시장가 기준)
+- CPU: AMD EPYC 9354 1개 **$2,700 ~ $3,400** (중앙값 $3,000 적용)
+- 메모리: DDR5 ECC RDIMM 128GB 모듈 **$1,400** 수준
+- 엔터프라이즈 NVMe(U.2) 1.6~1.9TB **$900 ~ $1,300** 구간
+- 2U 서버 베어본(섀시+보드+이중 PSU) **$1,850 ~ $3,150** (중앙값 $2,500 적용)
+- 환율: **1 USD = 1,471 KRW**(2026년 5월 초 레퍼런스)
+
+### 11.2 역할별 서버 비용(EMS 제외)
+
+| 구분 | 수량 | 노드당 단가(USD, 가정) | 합계(USD) | 합계(KRW, 1,471) |
+|------|------|--------------------------|-----------|------------------|
+| AIR 연동 접점 GW (CPU only) | 2 | $4,000 | $8,000 | 약 11,768,000원 |
+| STT Server (L40S x1) | 5 | $16,600 | $83,000 | 약 122,093,000원 |
+| TTS Server (L40S x1) | 4 | $16,000 | $64,000 | 약 94,144,000원 |
+| LLM Server (L40S x2) | 5 | $28,200 | $141,000 | 약 207,411,000원 |
+| AI Runtime (CPU only) | 2 | $6,800 | $13,600 | 약 20,005,600원 |
+| API/Realtime (CPU only) | 2 | $6,800 | $13,600 | 약 20,005,600원 |
+| PostgreSQL HA | 2 | $8,800 | $17,600 | 약 25,889,600원 |
+| Qdrant(VectorDB) | 2 | $6,100 | $12,200 | 약 17,946,200원 |
+| **총계(EMS 제외, AI Call Agent만)** | **24노드** | - | **$353,000** | **약 519,263,000원** |
+
+> 범위 권고: 부품 단가 변동(리셀러/재고/환율/유지보수 포함 여부) 때문에 실제 발주가는 보통 **±20%** 편차가 발생한다.  
+> 따라서 본 총액의 현실적 구매 범위는 **약 $282K ~ $424K (약 4.15억 ~ 6.24억원)**로 본다.
+
+### 11.3 단가 출처(웹 리서치)
+
+- NVIDIA L40S 가격 참고: [GPUCost L40S](https://gpucost.org/gpu/l40s), [Hyperscalers L40S](https://www.hyperscalers.com/NVIDIA-L40S-GP-GPU-ADA-Lovelace-architecture-AI-Omniverse-Enterprise-Rendering-3D-Data-Science-Workstations), [Newegg L40S 검색](https://www.newegg.com/p/pl?d=l40s)
+- AMD EPYC 9354 가격 참고: [AMD 제품 페이지](https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9354.html), [Newegg EPYC 9354](https://www.newegg.com/amd-epyc-9354-socket-sp5/p/1WK-0184-00068), [CDW EPYC 9354](https://www.cdw.com/product/amd-epyc-9354-3.25-ghz-processor-oem/8275725)
+- 메모리 가격 참고: [CDW 128GB DDR5 ECC RDIMM](https://www.cdw.com/product/128gb-ddr5-5600-2rx4-ecc-rdimm/8193650)
+- NVMe 가격 참고: [CDW Solidigm 1.6TB U.2](https://www.cdw.com/product/solidigm-ssd-1.6-tb-u.2-pcie-4.0-x4-nvme/8560167), [CDW Cisco 1.9TB U.2](https://www.cdw.com/product/cisco-ssd-high-performance-medium-endurance-1.9-tb-u.2-pcie-nvme/8191598)
+- 서버 베어본 가격 참고: [MITXPC Supermicro 6029P-TR](https://mitxpc.com/products/6029p-tr), [eBizPC Supermicro 6029P-TR](https://www.ebizpc.com/Supermicro-SYS-6029P-TR-SuperServer-p/sys-6029p-tr.htm), [RackmountPro 6029P-WTRT](https://www.rackmountpro.com/product/2549/6029P-WTRT.html)
+- 환율 참고: [Exchange-Rates.org USD/KRW 2026](https://www.exchange-rates.org/exchange-rate-history/usd-krw-2026), [XE USD/KRW](https://www.xe.com/en/currencyconverter/convert/?Amount=1&From=USD&To=KRW)
 
