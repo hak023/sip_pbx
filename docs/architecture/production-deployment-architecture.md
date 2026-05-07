@@ -30,7 +30,7 @@
 1. **LB 없음**: 외부 교환기 N개가 분산 진입점 역할 수행
 2. **SIP Core 신규 구축 없음**: 통화매니저AS(Active/Standby 2 Pair) 활용
 3. **RTP Core 신규 구축 없음**: WTIMS가 RTP Relay 수행
-4. **신규 개발 포인트**: WTIMS RTP 복제(fork/mirror) -> STT 파이프라인 연계 + **미디어 레그 바인딩 시그널** -> AI Runtime 연계(호 처리 시작 시 미디어·세션 상관관계 확보)
+4. **신규 개발 포인트**: 통화매니저AS → WTIMS **호 세션 릴레이** + WTIMS RTP 복제 fork/mirror → STT + **WTIMS → AI Runtime 통합 시그널**(세션·미디어)로 호 컨텍스트 단일 진입
 
 ---
 
@@ -42,7 +42,7 @@
 |------|-----------|------|
 | **미디어 평면** | WTIMS: RTP relay/mirror, 플레이아웃 슬롯, 코덱·타임스탬프 단위 제어 | 지연·버퍼·패킷 손실에 민감 |
 | **세션·시그널 평면** | 통화매니저AS: SIP 상태·호 진행, 세션 ID 권위 | 권위 있는 호 생명주기 이벤트 |
-| **미디어 바인딩 시그널** | WTIMS → AI Runtime: 미디어 레그 준비·갱신·해제, mirror/STT/TTS와 연결할 식별자 | SIP 전체를 복제하지 않고 **미디어 관점 스냅샷**만 전달 |
+| **세션·미디어 통합 릴레이** | WTIMS → AI Runtime만 단일 진입: 통화매니저AS에서 받은 호 세션 정보를 합쳐 전달 + 미디어 레그 바인딩 | AI Runtime은 **WTIMS 한 경로**만 구독하면 됨(§1.4) |
 | **오케스트레이션** | AI Runtime: 의도·정책·HITL·추론 라우팅 | 허브 비대화 방지를 위해 내부 모듈·API 세분화 검토 |
 | **추론 평면** | STT / TTS / LLM | GPU·큐·모델 버전 단위 스케일 |
 | **북남 API** | API/Realtime: REST/WSS·운영 UI·SIP MESSAGE 브릿지 | 인증·레이트리밋·공격면이 코어와 다름 |
@@ -52,22 +52,20 @@
 
 ---
 
-### 1.4 호 처리 시작: 세션 시그널과 미디어 시그널 (WTIMS → AI Runtime)
+### 1.4 호 처리: 통화매니저AS → WTIMS → AI Runtime 릴레이
 
-현재 문서는 **WTIMS → STT(RTP mirror)** 미디어 경로가 명시되어 있다. 실제 호 처리에서는 AI Runtime이 **호 단위 컨텍스트**(어떤 세션의 어떤 미디어 레그인지, 어떤 mirror 엔드포인트와 상관되는지)를 먼저 알아야 STT·TTS·정책이 같은 호에 매핑된다.
+호 **세션 권위**는 통화매니저AS에 있고, **미디어 앵커·mirror·코덱** 권위는 WTIMS에 있다. AI Runtime이 두 소스를 **각각 직접** 구독하면 연동 지점이 늘고, 이벤트 순서·역전을 AIR에서 병합해야 한다.
 
-**제안: 통화매니저AS 이벤트와 WTIMS 시그널을 함께 쓴다.**
+**본 문서의 확정 설계:** 통화매니저AS가 AI Runtime에 **직접 연결하지 않는다.** 호에 대한 세션·정책 정보는 **통화매니저AS → WTIMS**로 먼저 전달·릴레이되고, **WTIMS → AI Runtime** 단일 경로로 **세션 필드 + 미디어 레그 바인딩**을 합친 시그널을 보낸다.
 
-| 출처 | 역할 | AI Runtime이 받는 정보 예시 |
-|------|------|------------------------------|
-| **통화매니저AS → AI Runtime** | 호 생명주기 권위·비즈니스 세션 | `call_id`/`dialog_id`, 방향, 서비스 플래그, 정책 이벤트, 종료 |
-| **WTIMS → AI Runtime** | 미디어 레그 준비·갱신·해제 | mirror 대상 SSRC/포트·코덱·레그 키, STT로 붙일 스트림 식별자, TTS 삽입 슬롯 식별자, 세션 상관 ID·CM 이벤트와 동일 키 |
+| 단계 | 역할 |
+|------|------|
+| **통화매니저AS → WTIMS** | SIP/SDP 제어에 더해, AI에 필요한 호 스냅샷·생명주기·정책 식별자를 **내부 연동**으로 WTIMS에 전달한다. 구현은 사내 RPC·이벤트·SIP 확장 등으로 결정한다. |
+| **WTIMS → AI Runtime** | CM에서 받은 세션 컨텍스트와, WT가 아는 mirror·STT·TTS 슬롯 메타를 **한 페이로드 또는 동일 스트림**으로 AIR에 전달한다. AIR의 북쪽 연동은 **WT 한 곳**으로 단순화된다. |
 
-**왜 WTIMS에서 보내는가:** 미디어 앵커·포크 타이밍·코덱 협상 결과는 **WTIMS가 최종적으로 안다**. CM 이벤트만으로는 “mirror가 실제로 언제 유효한가”“어떤 RTP 레그가 STT와 1:1인가”를 보장하기 어렵다.
+**장점:** AI Runtime 연동·보안·버저닝·재시도 정책을 **WT→AIR 한 계약**으로 모을 수 있고, CM/AIR 이벤트 역전 문제를 **WT 내부에서 정렬**할 여지가 생긴다.
 
-**연동 형태(초안):** gRPC 스트리밍 또는 이벤트 버스에 **정렬 가능한 세션 키**(CM과 동일한 `call_id` 등)를 포함. 순서는 **호 단위로 직렬화**(같은 호의 CM 이벤트와 WT 이벤트가 서로 앞서지 않도록 파티션 키 설계).
-
-**주의:** CM 이벤트와 WT 이벤트가 **중복·역전**할 수 있으므로, AI Runtime은 **상태 머신**(예: `signaled` → `media_ready` → `active` → `closing`)으로 병합하고, 미디어 미준비 시 STT 구독을 지연한다.
+**주의:** WTIMS는 세션 정보를 **CM으로부터 받아 릴레이**하는 책임을 갖는다. WT 장애 시 AIR로 가는 통합 시그널도 영향을 받으므로 WT HA·백프레셔를 설계한다. 미디어 미준비 시에는 AIR가 STT 구독을 지연하는 등 **상태 머신**은 그대로 유지한다.
 
 ---
 
@@ -76,46 +74,46 @@
 ```mermaid
 flowchart LR
     subgraph EXT["외부 통신 영역"]
-        CUST["PSTN/SIP 가입자 (10,000 users)"]
-        EX["교환기 노드 N개<br/>SIP Trunk"]
+        CUST["PSTN/SIP 가입자<br/>단말·클라이언트"]
+        EX["교환기 노드 N개<br/>프로세스형 서버"]
     end
 
-    subgraph CORE["기존 코어 통신 영역 (기존 자산)"]
-        CM["통화매니저AS Pair-1/2<br/>Active/Standby x 2"]
-        WT["WTIMS RTP Cluster<br/>RTP Relay + RTP Mirror"]
+    subgraph CORE["기존 코어 통신 영역 · 프로세스형 서버"]
+        CM["통화매니저AS Pair<br/>프로세스형 서버"]
+        WT["WTIMS RTP Cluster<br/>프로세스형 서버"]
     end
 
     subgraph ACA["AI Call Agent 서버 · 신규 계획"]
-        subgraph AI["AI 처리"]
-            AIR["AI Runtime Cluster<br/>Session Orchestrator / Intent / Policy / HITL"]
-            STT["STT Server Pool<br/>Streaming ASR"]
-            LLM["LLM Inference Pool<br/>Agent/Tool Reasoning"]
-            TTS["TTS Server Pool<br/>Streaming TTS"]
+        subgraph AI["AI 처리 · 프로세스형 서버"]
+            AIR["AI Runtime Cluster<br/>프로세스형 서버"]
+            STT["STT Server Pool<br/>프로세스형 서버"]
+            LLM["LLM Inference Pool<br/>프로세스형 서버"]
+            TTS["TTS Server Pool<br/>프로세스형 서버"]
         end
 
         subgraph APP["업무/API"]
-            API["API/Realtime Cluster<br/>REST + WebSocket + SIP MESSAGE Bridge"]
+            API["API/Realtime Cluster<br/>프로세스형 서버"]
         end
 
-        subgraph DATA["데이터"]
-            ALT["Altibase HA<br/>RDB (필수)"]
-            VDB["VectorDB Cluster<br/>Chroma(샤딩/복제) 또는 대체 엔진"]
-            OBJ["Object Storage<br/>Recordings/Transcripts/Artifacts/Backups"]
+        subgraph DATA["데이터 · 유형 구분"]
+            ALT["Altibase HA<br/>DBMS"]
+            VDB["VectorDB Cluster<br/>DBMS"]
+            OBJ["Object Storage<br/>객체 저장소"]
         end
 
-        subgraph OBS["관측"]
-            OBSV["Observability Cluster<br/>Metrics/Logs/Traces/Alerting"]
+        subgraph OBS["관측 · 프로세스형 묶음"]
+            OBSV["Observability Cluster<br/>프로세스형 서버 묶음"]
         end
     end
 
     CUST -->|SIP/RTP| EX
     EX -->|SIP INVITE/UPDATE/BYE| CM
-    CM -->|SIP+SDP Session Control| WT
+    CM -->|SIP SDP 세션 제어| WT
+    CM -.->|호 세션 정보 릴레이| WT
     WT -->|RTP Relay| CUST
     WT -->|RTP Mirror SRTP RTP fork| STT
-    WT -->|미디어 레그 바인딩 시그널 gRPC| AIR
+    WT -->|세션 릴레이 + 미디어 바인딩 gRPC| AIR
 
-    CM -->|Session Event gRPC Kafka| AIR
     AIR -->|gRPC Streaming ASR| STT
     AIR -->|OpenAI-compatible HTTP/gRPC| LLM
     AIR -->|gRPC/HTTP TTS synth| TTS
@@ -144,8 +142,9 @@ flowchart LR
 - 교환기 N개가 외부 트래픽을 분산하므로 별도 LB를 두지 않는다.
 - 통화매니저AS는 SIP 세션 상태 머신/호제어를 담당하고, WTIMS는 RTP 실시간 중계를 담당한다.
 - **AI Call Agent 서버**는 STT·TTS·LLM·AI Runtime·API/Realtime·데이터 계층·관측 계층을 하나의 신규 구축 묶음으로 본다. 그 안에서 AI Runtime이 통화 이벤트 기반으로 STT/LLM/TTS를 호출하고, 결과 음성을 다시 WTIMS로 전달한다.
-- 호 처리 시작 시에는 **통화매니저AS의 세션 이벤트**와 **WTIMS의 미디어 레그 바인딩 시그널**을 함께 받아 호 단위 컨텍스트를 맞춘다(§1.4).
+- 호 처리 시 세션·미디어 컨텍스트는 **통화매니저AS → WTIMS → AI Runtime**으로 릴레이된다. AI Runtime은 **WTIMS 한 진입점**만 구독한다(§1.4).
 - Altibase는 거래성 데이터(세션, 정책, 예약, 이력), VectorDB는 의미 검색, Object Storage는 대용량 비정형·버전 지속 데이터를 담당한다(§7.3).
+- 위 Mermaid 박스는 **첫 줄=이름, 둘째 줄=§2.0 구성요소 유형**을 병기했다. EXT/CORE/ACA·데이터·관측 서브그래프 제목에도 유형 힌트를 넣었다.
 - 도표상 동일한 박스로 보일 수 있으나, 실제로는 **프로세스형 서버·DBMS·객체 저장소·단말/클라이언트**로 구분한다(§2.0).
 
 ### 2.0 구성요소 유형 (프로세스 서버 · DBMS · 저장소)
@@ -171,8 +170,8 @@ flowchart LR
 |------|------|-----------|-----------|
 | 외부 | 단말·클라이언트 | PSTN/SIP 가입자 | 발신·착신 호·미디어 단말 |
 | 외부 | 프로세스형 서버 | 교환기 노드 N개 | SIP Trunk 진입·분산·코어로 라우팅, 외부와 코어 사이 게이트 |
-| 기존 코어 | 프로세스형 서버 | 통화매니저AS | SIP 세션 상태·호 제어·WTIMS로 SDP/미디어 앵커 제어, AI Runtime으로 호 생명주기 이벤트 발행 |
-| 기존 코어 | 프로세스형 서버 | WTIMS | RTP/RTCP 릴레이·미러·플레이아웃, 단말↔네트워크 실시간 미디어, STT용 RTP fork·AI Runtime으로 미디어 레그 바인딩 시그널 |
+| 기존 코어 | 프로세스형 서버 | 통화매니저AS | SIP 세션 상태·호 제어·WTIMS로 SDP/미디어 앵커 제어, **호 세션 스냅샷을 WTIMS로 릴레이**해 AI 경로를 단순화 |
+| 기존 코어 | 프로세스형 서버 | WTIMS | RTP/RTCP 릴레이·미러·플레이아웃, STT용 RTP fork, **CM 세션 정보 + 미디어 레그 바인딩을 통합하여 AI Runtime에 단일 시그널** |
 | AI Call Agent | 프로세스형 서버 | AI Runtime | 호 단위 오케스트레이션·정책·의도·HITL·추론 라우팅, STT/LLM/TTS 호출·WTIMS 재생 명령·DB/스토리지 연계 |
 | AI Call Agent | 프로세스형 서버 | STT Server | RTP 미러 또는 오디오 스트림 수신·실시간 문자 변환·부분/최종 텍스트 스트리밍 |
 | AI Call Agent | 프로세스형 서버 | LLM Server | 프롬프트 기반 추론·도구/함수 호출 응답·OpenAI 호환 API 제공 |
@@ -192,22 +191,23 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    subgraph CORE["기존 코어"]
-        CM["통화매니저AS"] -->|SIP/2.0 + SDP| WT["WTIMS"]
-        WT -->|RTP/RTCP relay| EP["통화 단말"]
+    subgraph CORE["기존 코어 · 프로세스형 서버"]
+        CM["통화매니저AS<br/>프로세스형 서버"] -->|SIP 2.0 + SDP| WT["WTIMS<br/>프로세스형 서버"]
+        CM -.->|호 세션 스냅샷 릴레이| WT
+        WT -->|RTP RTCP relay| EP["통화 단말<br/>단말·클라이언트"]
     end
-    subgraph ACA["AI Call Agent 서버"]
-        STT["STT Server"]
-        AIR["AI Runtime"]
-        LLM["LLM Server"]
-        TTS["TTS Server"]
-        API["API/Realtime"]
-        CON["운영 콘솔"]
-        ALT["Altibase"]
-        VDB["VectorDB"]
-        OBJ["Object Storage"]
+    subgraph ACA["AI Call Agent 서버 · 유형 표기"]
+        STT["STT Server<br/>프로세스형 서버"]
+        AIR["AI Runtime<br/>프로세스형 서버"]
+        LLM["LLM Server<br/>프로세스형 서버"]
+        TTS["TTS Server<br/>프로세스형 서버"]
+        API["API/Realtime<br/>프로세스형 서버"]
+        CON["운영 콘솔<br/>클라이언트 UI"]
+        ALT["Altibase<br/>DBMS"]
+        VDB["VectorDB<br/>DBMS"]
+        OBJ["Object Storage<br/>객체 저장소"]
     end
-    WT -->|미디어 레그 바인딩 시그널| AIR
+    WT -->|세션 릴레이 + 미디어 바인딩| AIR
     WT -->|RTP Mirror fork| STT
     AIR -->|gRPC bidi · 16k PCM Opus| STT
     AIR -->|HTTP2 gRPC 또는 REST · OpenAI-compatible| LLM
@@ -241,8 +241,8 @@ flowchart TD
 |------|----------------|------|-----------|
 | 교환기 ↔ 통화매니저AS | SIP 2.0, SDP, UDP/TCP/TLS | 양방향 | Trunk, INVITE/ACK/BYE, 코덱·미디어 협상 |
 | 통화매니저AS ↔ WTIMS | SIP·SDP 제어, RTP/RTCP | 양방향 | 미디어 앵커·세션 제어 |
-| 통화매니저AS → AI Runtime | gRPC streaming 또는 Kafka + 스키마 등록 JSON | CM→AIR | 호 시작·종료·정책 이벤트, `call_id` 필수 |
-| WTIMS → AI Runtime | gRPC 또는 Kafka JSON | WT→AIR | 미디어 레그 준비·갱신·해제, CM과 동일 `call_id` |
+| 통화매니저AS → WTIMS | 내부 연동·사내 규약 | CM→WT | AI에 필요한 호 세션 스냅샷·생명주기를 WT가 수신해 AIR용으로 합성 |
+| WTIMS → AI Runtime | gRPC 또는 Kafka JSON 스트림 | WT→AIR | **세션 릴레이 필드 + 미디어 레그 바인딩** 통합, `call_id` 필수. AIR는 CM 직접 연동 없음 |
 | WTIMS → STT | RTP 또는 SRTP 미러 | WT→STT | PCM 16 kHz mono 등 사전 합의 코덱 |
 | AI Runtime ↔ STT | gRPC bidi, 오디오 프레임 + 메타 | 양방향 | 세션 메타 첫 프레임·부분/최종 텍스트 스트림 |
 | AI Runtime ↔ LLM | HTTPS JSON OpenAI 호환 또는 gRPC | AIR→LLM | `/v1/chat/completions` 등, 스트리밍 옵션 |
@@ -256,9 +256,9 @@ flowchart TD
 
 ### 3.3 연동 규격 예제
 
-#### A. 통화매니저AS → AI Runtime 세션 이벤트 (Kafka JSON 예시)
+#### A. 통화매니저AS → WTIMS 호 세션 스냅샷 릴레이 (내부 연동 JSON 예시)
 
-호 생명주기를 주제 단위로 발행할 때의 페이로드 예이다.
+AI Runtime으로 나가기 전, 통화매니저AS가 WTIMS에 넘기는 **세션 권위 정보** 예이다. 실제 채널은 사내 RPC·버스·SIP 확장 등으로 구현한다.
 
 ```json
 {
@@ -273,15 +273,22 @@ flowchart TD
 }
 ```
 
-#### B. WTIMS → AI Runtime 미디어 레그 바인딩 (HTTP POST 또는 gRPC 동등 필드)
+#### B. WTIMS → AI Runtime 통합 시그널 (세션 릴레이 + 미디어 레그)
 
-미디어가 앵커되어 mirror·TTS 슬롯을 쓸 수 있을 때 전송한다.
+WTIMS가 CM에서 받은 세션 필드와 자체 미디어 메타를 **한 페이로드**로 AIR에 전달하는 예이다. 미디어 미준비 구간은 `media` 생략 또는 `state`로 표현할 수 있다.
 
 ```json
 {
   "schema_version": "1.0",
-  "event_type": "media_leg.ready",
+  "event_type": "call.context_and_media",
+  "occurred_at": "2026-05-07T12:34:56.801Z",
   "call_id": "cm-7f3a9b2c-001",
+  "session_relay": {
+    "direction": "inbound",
+    "service_profile": "ai_voice_agent",
+    "dnis": "023331234",
+    "tenant_id": "tenant-01"
+  },
   "leg_id": "wt-leg-a1",
   "mirror": {
     "stt_stream_key": "stt-stream-9x4k",
@@ -405,8 +412,8 @@ X-Service-Auth: Bearer ${API_TOKEN}
 
 - **교환기 <-> 통화매니저AS**: SIP Trunk (UDP/TCP/TLS)
 - **통화매니저AS <-> WTIMS**: SIP/SDP 제어 + RTP/RTCP
-- **통화매니저AS -> AI Runtime**: 세션·호 생명주기 이벤트(gRPC/Kafka 등), `call_id` 등 상관 식별자
-- **WTIMS -> AI Runtime**: 미디어 레그 바인딩·갱신·해제 시그널(gRPC 권장), CM 이벤트와 동일 상관 키·mirror/STT/TTS 바인딩 메타데이터
+- **통화매니저AS -> WTIMS**: 호 세션 스냅샷·생명주기 내부 릴레이(AIR 직접 연동 없음)
+- **WTIMS -> AI Runtime**: 세션 릴레이 + 미디어 레그 바인딩 **통합 시그널**(gRPC/Kafka 등), `call_id` 상관·갱신·해제 포함
 - **WTIMS -> STT**: RTP mirror stream (codec normalized PCM 16k 권장)
 - **AI Runtime <-> STT**: gRPC bidirectional streaming
 - **AI Runtime <-> LLM**: OpenAI-compatible REST 또는 gRPC inference API
@@ -442,8 +449,8 @@ sequenceDiagram
 
     U->>WT: RTP 음성
     WT->>STT: RTP mirror stream
-    CM->>AIR: call_started event
-    WT->>AIR: media leg binding snapshot
+    CM->>WT: 호 세션 스냅샷 릴레이
+    WT->>AIR: 세션 + 미디어 통합 시그널
     STT-->>AIR: partial/final transcript (stream)
     AIR->>LLM: inference request (intent/context/tool)
     LLM-->>AIR: answer + action
@@ -455,7 +462,8 @@ sequenceDiagram
     U->>EX: BYE
     EX->>CM: SIP BYE
     CM->>WT: release media
-    CM->>AIR: call_ended event
+    CM->>WT: 호 종료 세션 릴레이
+    WT->>AIR: 호 종료 통합 시그널
 ```
 
 ---
@@ -586,19 +594,19 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    subgraph CORE["기존 코어"]
-      CM["통화매니저AS"]
-      WT["WTIMS"]
+    subgraph CORE["기존 코어 · 프로세스형 서버"]
+      CM["통화매니저AS<br/>프로세스형 서버"]
+      WT["WTIMS<br/>프로세스형 서버"]
     end
 
-    subgraph ACA["AI Call Agent 서버"]
-      AIR["AI Runtime"]
-      STT["STT"]
-      TTS["TTS"]
-      LLM["LLM"]
-      API["API/Realtime"]
-      DB["Altibase/VectorDB/Object"]
-      subgraph OBS["관측 스택"]
+    subgraph ACA["AI Call Agent 서버 · 유형 표기"]
+      AIR["AI Runtime<br/>프로세스형 서버"]
+      STT["STT<br/>프로세스형 서버"]
+      TTS["TTS<br/>프로세스형 서버"]
+      LLM["LLM<br/>프로세스형 서버"]
+      API["API/Realtime<br/>프로세스형 서버"]
+      DB["데이터 계층<br/>DBMS·객체 저장소"]
+      subgraph OBS["관측 스택 · 프로세스형 묶음"]
         OTL["OTel Collector"]
         MTS["Metrics TSDB (Prometheus/Mimir)"]
         LOG["Log Store (Loki/ELK)"]
@@ -642,7 +650,7 @@ flowchart LR
 
 - [ ] 교환기 N개 -> 통화매니저AS 라우팅 정책 검증
 - [ ] WTIMS RTP mirror 기능 개발/검증 완료
-- [ ] WTIMS → AI Runtime 미디어 레그 바인딩 시그널 규약·순서·상관 ID 검증
+- [ ] 통화매니저AS→WTIMS 호 세션 릴레이 및 WTIMS→AI Runtime **통합 시그널** 규약·순서·`call_id` 상관 검증
 - [ ] Internal STT/TTS/LLM API 스펙 확정(gRPC/REST)
 - [ ] AI Runtime 장애 격리(서킷브레이커/타임아웃/재시도) 적용
 - [ ] Altibase HA 및 백업/복구 리허설 완료
@@ -655,5 +663,5 @@ flowchart LR
 ## 10) 결론
 
 본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent 서버** 묶음(STT/TTS/LLM/Runtime/API/데이터/관측)을 내부화해 주권과 확장성을 확보하는 설계다.  
-핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **WTIMS→AI Runtime 미디어 레그 시그널과 통화매니저AS 세션 이벤트의 상관**, `AI Call Agent 서버 프로토콜 표준화`, `6,000 세션 실부하 검증`이다.
+핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AI Runtime 세션 릴레이 및 WT→AIR 통합 시그널 규약**, `AI Call Agent 서버 프로토콜 표준화`, `6,000 세션 실부하 검증`이다.
 
