@@ -1,14 +1,14 @@
 # SmartPBX AI - Production Deployment Architecture
 ## 상용 적용 상세 아키텍처 (기존 교환기/통화매니저AS/WTIMS 활용)
 
-본 문서는 실제 상용 목표 용량을 기준으로, 이미 보유한 통신 노드(교환기, 통화매니저AS, WTIMS)를 활용하여 AI 확장 계층(STT/TTS/LLM/API/Runtime/DB/**EMS**)을 설계한다.
+본 문서는 실제 상용 목표 용량을 기준으로, 이미 보유한 통신 노드(교환기, 통화매니저AS, WTIMS)를 활용하여 AI 확장 계층(**AI Call Agent 시스템**: STT/TTS/LLM/API/Runtime/DB 및 객체 저장소)과 **EMS**(관측, 별도 구역)를 설계한다.
 
 | 항목 | 내용 |
 |------|------|
 | 용량 목표 | 가입자 10,000명, 50 CPS, 평균 통화 유지 120초 |
 | 동시세션 산정 | `50 CPS x 120s = 6,000 동시 세션` |
 | 기존 자산 | 교환기 N개, 통화매니저AS 2 Pair(A/S), WTIMS RTP 서버, **통화매니저 API(유엔젤·코어)** , **통화매니저 API(바이토·외부)** , 유저 PC Client ↔ 바이토 ↔ 유엔젤 기존 연동 |
-| 신규 구축 | **AI Call Agent** 신규 계층: STT, TTS, LLM, AI Runtime, API/Realtime, 데이터(Altibase/VectorDB/Object), **EMS**(관측·모니터링 — OTel Collector·Metrics TSDB·Log Store·Trace Store·Alert Manager·Grafana **각각 별도 프로세스**) |
+| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 Altibase/VectorDB/Object) · 경계 **AIR GW**(세션 시그널)·**AI API Ingress**(외부→API) · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) |
 | DB 제약 | RDB는 Altibase 사용 필수 |
 
 ---
@@ -30,19 +30,19 @@
 1. **LB 없음**: 외부 교환기 N개가 분산 진입점 역할 수행
 2. **SIP Core 신규 구축 없음**: 통화매니저AS(Active/Standby 2 Pair) 활용
 3. **RTP Core 신규 구축 없음**: WTIMS가 RTP Relay 수행
-4. **신규 개발 포인트**: 통화매니저AS → WTIMS **호 세션 릴레이** + WTIMS RTP 복제 fork/mirror → STT + **WTIMS → AI Runtime 통합 시그널**(세션·미디어)로 호 컨텍스트 단일 진입
+4. **신규 개발 포인트**: 통화매니저AS → WTIMS **호 세션 릴레이** + WTIMS RTP 복제 fork/mirror → STT + **WTIMS → AIR 연동 접점 → AI Runtime 통합 시그널**(세션·미디어)로 호 컨텍스트 단일 진입
 
 ---
 
 ### 1.3 런타임 경계·책임 분리 (초안)
 
-배포 단위 **AI Call Agent 서버** 안에서도, 운영·장애·스케일 관점에서 다음 **런타임 경계**를 구분해 두면 추후 서비스 분할·팀 경계·릴리즈 전략을 정하기 쉽다.
+배포 단위 **AI Call Agent 시스템**(서버 모음) 안에서도, 운영·장애·스케일 관점에서 다음 **런타임 경계**를 구분해 두면 추후 서비스 분할·팀 경계·릴리즈 전략을 정하기 쉽다.
 
 | 경계 | 주요 책임 | 비고 |
 |------|-----------|------|
 | **미디어 평면** | WTIMS: RTP relay/mirror, 플레이아웃 슬롯, 코덱·타임스탬프 단위 제어 | 지연·버퍼·패킷 손실에 민감 |
 | **세션·시그널 평면** | 통화매니저AS: SIP 상태·호 진행, 세션 ID 권위 | 권위 있는 호 생명주기 이벤트 |
-| **세션·미디어 통합 릴레이** | WTIMS → AI Runtime만 단일 진입: 통화매니저AS에서 받은 호 세션 정보를 합쳐 전달 + 미디어 레그 바인딩 | AI Runtime은 **WTIMS 한 경로**만 구독하면 됨(§1.4) |
+| **세션·미디어 통합 릴레이** | WTIMS → **AIR 연동 접점** → AI Runtime: 통화매니저AS에서 받은 호 세션 정보를 합쳐 전달 + 미디어 레그 바인딩 | 코어는 접점 **단일 주소**만 노출; AIR는 접점 뒤 클러스터(§1.4·§2.2) |
 | **오케스트레이션** | AI Runtime: 의도·정책·HITL·추론 라우팅 | 허브 비대화 방지를 위해 내부 모듈·API 세분화 검토 |
 | **추론 평면** | STT / TTS / LLM | GPU·큐·모델 버전 단위 스케일 |
 | **외부 API** | API/Realtime: **외부**(브라우저·파트너·운영망)에서 접근하는 REST/WSS·SIP MESSAGE 브릿지 | 코어·내부 서비스와 달리 인증·레이트리밋·공격면을 따로 둔다 |
@@ -56,16 +56,28 @@
 
 호 **세션 권위**는 통화매니저AS에 있고, **미디어 앵커·mirror·코덱** 권위는 WTIMS에 있다. AI Runtime이 두 소스를 **각각 직접** 구독하면 연동 지점이 늘고, 이벤트 순서·역전을 AIR에서 병합해야 한다.
 
-**본 문서의 확정 설계:** 통화매니저AS가 AI Runtime에 **직접 연결하지 않는다.** 호에 대한 세션·정책 정보는 **통화매니저AS → WTIMS**로 먼저 전달·릴레이되고, **WTIMS → AI Runtime** 단일 경로로 **세션 필드 + 미디어 레그 바인딩**을 합친 시그널을 보낸다.
+**본 문서의 확정 설계:** 통화매니저AS가 AI Runtime에 **직접 연결하지 않는다.** 호에 대한 세션·정책 정보는 **통화매니저AS → WTIMS**로 먼저 전달·릴레이되고, **WTIMS → AI Runtime** 경로로 **세션 필드 + 미디어 레그 바인딩**을 합친 시그널을 보낸다.
+
+**코어 통신 영역 ↔ AI Call Agent 시스템 접점:** WTIMS는 AI Runtime 노드 목록을 직접 들고 **개별 노드로 분산 발신하지 않는다.** 두 구역 사이에는 **단일 연동 접점**(VIP·FQDN 한 벌에 대응하는 **AIR 연동 계층**: L4/L7 LB, gRPC/HTTP 게이트웨이, 또는 동등한 **로드쉐어**)을 두어, WT는 그 접점에만 붙고 접점이 **`call_id` 기준 스티키·일관 해시**로 AIR 클러스터에 부하를 나눈다(§2.2). AI Call Agent **내부**(예: AIR→STT/LLM/TTS, API→AIR)는 동일 구역 내 단순 로드밸런싱을 적용할 수 있다.
 
 | 단계 | 역할 |
 |------|------|
 | **통화매니저AS → WTIMS** | **SIP 2.0 + SDP + RTP/RTCP**만으로 호·미디어 세션을 제어한다. AI에 필요한 스냅샷·생명주기·정책 식별자는 **JSON 채널이 아니라** SIP 메시지·SDP 본문·**협의된 SIP/SDP 확장**으로 WTIMS에 전달한다. |
-| **WTIMS → AI Runtime** | **SIP/SDP로 CM과 맺은 세션**에서 해석한 컨텍스트와, WT의 mirror·STT·TTS 슬롯 메타를 **한 페이로드 또는 동일 스트림**으로 AIR에 전달한다. 외부 API는 **WT→AIR 한 경로**로 단순화한다. |
+| **WTIMS → AIR 연동 접점 → AI Runtime** | **SIP/SDP로 CM과 맺은 세션**에서 해석한 컨텍스트와, WT의 mirror·STT·TTS 슬롯 메타를 **한 페이로드 또는 동일 스트림**으로 **단일 연동 접점**에 보내고, 접점이 규약에 따라 **적절한 AIR 인스턴스**로 전달한다. 외부 API는 **WT→AIR 한 계약**으로 단순화한다. |
 
-**장점:** AI Runtime 연동·보안·버저닝·재시도 정책을 **WT→AIR 한 계약**으로 모을 수 있고, CM/AIR 이벤트 역전 문제를 **WT 내부에서 정렬**할 여지가 생긴다.
+**장점:** AI Runtime 연동·보안·버저닝·재시도 정책을 **WT→AIR 한 계약**으로 모을 수 있고, CM/AIR 이벤트 역전 문제를 **WT 내부에서 정렬**할 여지가 생긴다. 구역 경계에는 **연동 주소 단일화**로 운영·방화벽·장애 전환을 단순화한다.
 
 **주의:** WTIMS는 세션 정보를 **CM으로부터 받아 릴레이**하는 책임을 갖는다. WT 장애 시 AIR로 가는 통합 시그널도 영향을 받으므로 WT HA·백프레셔를 설계한다. 미디어 미준비 시에는 AIR가 STT 구독을 지연하는 등 **상태 머신**은 그대로 유지한다.
+
+**제어·통합 시그널 평면 vs 미디어(RTP) 평면 (GW 적용 범위)**
+
+| 평면 | 내용 | GW(AIR 연동 접점) 경유 여부 |
+|------|------|------------------------------|
+| **통합 시그널** | `call_id`·세션 스냅샷·미디어 **레그 바인딩 메타**(키·슬롯 ID·코덱 요약 등) — 저대역·저빈도 gRPC/Kafka 스트림 | **경유** — 코어↔신규 구역 **단일 주소·로드쉐어** 목적 |
+| **미디어(RTP/PCM 대역)** | RTP Mirror → STT, TTS 재생 → WTIMS 등 **초당 수 kb~Mb 스루풋** | **비경유** — WTIMS는 이미 §2 도표처럼 **STT·WT와 직접** 미디어 경로를 유지하고, GW에 RTP를 끌고 오지 않는다 |
+| **AIR↔STT gRPC** | 오디오 스트림·부분 텍스트 — AIR가 STT 풀과 **내부 구역**에서 직접 | GW와 무관 |
+
+이 구분은 일반적인 **SBC/미디어 프록시 vs 시그널링** 분리와 같다. GW를 미디어까지 통과시키면 **이중 홉 지연·버퍼·단일 장애점·대역폭 비용**만 커지므로, **세션 오케스트레이션 메시지만 GW**, **페이로드 미디어는 기존 미디어 앵커·풀 직결**이 타당하다.
 
 ---
 
@@ -88,6 +100,22 @@
 
 즉 **운영 콘솔 웹(문서상 별도)** 과 별개로, **실사용자 UI는 유저 PC Client → 바이토 → 유엔젤** 축이며, AI 기능은 **API/Realtime이 유엔젤·바이토 둘 다**와 계약을 맞춘다.
 
+### 1.6 외부 서버 → AI Call Agent API 단일 접점
+
+**통화매니저 바이토·유저 PC**와 별도로, **레거시/파트너/외부 업무 서버**가 AI Call Agent의 **REST·WebSocket·웹훅** 등을 호출해야 하는 경우에도, 코어↔AIR와 같은 이유로 **연동 주소·정책을 한 벌로 고정**하는 것이 유리하다.
+
+**권장:** AI Call Agent 경계에 **AI API 연동 접점**(North-South **API Ingress** — L7 LB, Kong/Envoy/APG 등 **API Gateway**, 또는 동등)을 두고, 외부는 **`ai-api.example.com` 단일 VIP/FQDN**만 알면 된다.
+
+| 요소 | 역할 |
+|------|------|
+| **단일 진입** | 외부 방화벽·WAF·ACL을 **Ingress 한 주소**에만 개방 |
+| **TLS·신뢰** | 공인 인증서 종료, 선택적으로 **mTLS**(파트너 인증서), 내부는 재암호화 또는 평문(폐쇄망) |
+| **정책** | OAuth2/JWT·API Key·IP 허용목록, **레이트리밋**, 요청 크기 제한 |
+| **라우팅** | Ingress → **API/Realtime 클러스터**로 로드밸런싱(세션형은 스티키 또는 토큰 affinity) |
+| **바이토와의 관계** | 유저 PC·바이토 경로는 §1.5 기존 규약을 유지할 수 있다. **추가되는 외부 시스템**만 Ingress를 통하게 하거나, 장기적으로 바이토→AI 호출도 동일 Ingress로 수렴시키면 운영 단순화 |
+
+**내부 소비**(운영 콘솔, 같은 VPC의 마이크로서비스)는 Ingress를 경유하지 않고 **사내 서비스 메시·내부 LB**로 API에 붙어도 된다. 단, **인터넷·타 부서망·레거시 DMZ**에서 오는 호출은 Ingress 단일화를 권장한다.
+
 ---
 
 ## 2) 전체 배포 구조 (Mermaid)
@@ -99,6 +127,7 @@ flowchart LR
         EX["교환기 노드 N개<br/>프로세스형 서버"]
         PCL["유저 PC Client<br/>통화매니저 프론트엔드"]
         BAPI["통화매니저 API<br/>바이토 · 외부"]
+        EXTAPI["외부 서버·파트너<br/>레거시 연동"]
     end
 
     subgraph CORE["기존 코어 통신 영역 · 프로세스형 서버"]
@@ -107,7 +136,8 @@ flowchart LR
         UAPI["통화매니저 API<br/>유엔젤 · 코어"]
     end
 
-    subgraph ACA["AI Call Agent 서버 · 신규 계획"]
+    subgraph ACA["AI Call Agent 시스템 · 신규 계획"]
+        GW["AIR 연동 접점 GW<br/>세션·통합 시그널 전용<br/>미디어 RTP 비경유"]
         subgraph AI["AI 처리 · 프로세스형 서버"]
             AIR["AI Runtime Cluster<br/>프로세스형 서버"]
             STT["STT Server Pool<br/>프로세스형 서버"]
@@ -116,6 +146,7 @@ flowchart LR
         end
 
         subgraph APP["업무/API"]
+            APIGW["AI API Ingress<br/>단일 VIP TLS 정책"]
             API["API/Realtime Cluster<br/>프로세스형 서버"]
         end
 
@@ -124,7 +155,9 @@ flowchart LR
             VDB["VectorDB Cluster<br/>DBMS"]
             OBJ["Object Storage<br/>객체 저장소"]
         end
+    end
 
+    subgraph EMS["EMS · 관측 구역 별도"]
         OTL["EMS OTel Collector<br/>텔레메트리·로그·트레이스 수집·배압·라우팅 프로세스"]
         MTS["EMS Metrics TSDB<br/>메트릭 시계열 저장·쿼리 프로세스"]
         LOG["EMS Log Store<br/>로그 인입·색인·검색 프로세스"]
@@ -133,63 +166,71 @@ flowchart LR
         GRA["EMS Grafana<br/>대시보드·탐색·시각화 프로세스"]
     end
 
-    CUST -->|SIP/RTP| EX
-    EX -->|SIP INVITE/UPDATE/BYE| CM
-    CM -->|SIP SDP 세션 제어| WT
-    CM -.->|호 세션 정보 릴레이| WT
-    WT -->|RTP Relay| CUST
-    WT -->|RTP Mirror SRTP RTP fork| STT
-    WT -->|세션 릴레이 + 미디어 바인딩 gRPC| AIR
+    CUST -->|SIP RTP UDP TCP TLS| EX
+    EX -->|SIP 2.0 Trunk INVITE 등| CM
+    CM -->|SIP 2.0 SDP RTP RTCP 제어| WT
+    CM -.->|SIP SDP 호 세션 스냅샷 릴레이| WT
+    WT -->|RTP RTCP Relay| CUST
+    WT -->|RTP Mirror 미디어 평면 GW 비경유| STT
+    WT -->|통합 시그널만 단일 FQDN VIP| GW
+    GW -->|call_id 로드쉐어| AIR
 
-    AIR -->|gRPC Streaming ASR| STT
-    AIR -->|OpenAI-compatible HTTP/gRPC| LLM
-    AIR -->|gRPC/HTTP TTS synth| TTS
-    TTS -->|PCM/RTP payload| WT
+    AIR -->|gRPC bidi 스트리밍 ASR| STT
+    AIR -->|HTTPS JSON 또는 gRPC OpenAI 호환| LLM
+    AIR -->|gRPC HTTP 스트리밍 합성| TTS
+    TTS -->|제어 채널 RTP 페이로드 협의| WT
 
-    API <-->|HTTPS REST / WSS| AIR
-    API <-->|코어 설정·정보 HTTPS| UAPI
-    API <-->|유저 채널 HTTPS| BAPI
+    EXTAPI -->|HTTPS WSS mTLS 단일 진입| APIGW
+    APIGW -->|내부 라우팅| API
+    API <-->|HTTPS JSON WSS 내부 gRPC| AIR
+    API <-->|HTTPS REST 사내 규약 코어 설정 조회| UAPI
+    API <-->|HTTPS REST 사내 규약 유저 경로| BAPI
     PCL <-->|기존 클라이언트 API| BAPI
-    BAPI <-->|기존 연동| UAPI
+    BAPI <-->|기존 코어 연동 규약| UAPI
 
-    API <-->|SQL| ALT
-    AIR <-->|SQL| ALT
-    AIR <-->|Vector Query/Upsert| VDB
-    AIR -->|Object PUT/GET| OBJ
-    API -->|Object presigned URL| OBJ
+    API <-->|JDBC SQL 커넥션 풀| ALT
+    AIR <-->|JDBC SQL 커넥션 풀| ALT
+    AIR <-->|HTTP gRPC 벡터 조회 업서트| VDB
+    AIR -->|S3 호환 PUT GET| OBJ
+    API -->|S3 presigned URL| OBJ
 
-    UAPI --> OTL
-    BAPI --> OTL
-    CM --> OTL
-    WT --> OTL
-    AIR --> OTL
-    STT --> OTL
-    LLM --> OTL
-    TTS --> OTL
-    API --> OTL
-    ALT --> OTL
-    VDB --> OTL
-    OBJ --> OTL
+    UAPI -->|OTLP 또는 에이전트 Push| OTL
+    BAPI -->|OTLP 또는 에이전트 Push| OTL
+    CM -->|OTLP 또는 호스트 에이전트| OTL
+    WT -->|OTLP 또는 호스트 에이전트| OTL
+    GW -->|OTLP 또는 LB 메트릭| OTL
+    APIGW -->|OTLP 또는 게이트웨이 메트릭| OTL
+    AIR -->|OTLP Push| OTL
+    STT -->|OTLP Push| OTL
+    LLM -->|OTLP Push| OTL
+    TTS -->|OTLP Push| OTL
+    API -->|OTLP Push| OTL
+    ALT -->|익스포터 또는 감사 로그| OTL
+    VDB -->|익스포터 또는 로그| OTL
+    OBJ -->|액세스 로그 또는 메트릭| OTL
 
-    OTL --> MTS
-    OTL --> LOG
-    OTL --> TRC
-    MTS --> ALR
-    LOG --> GRA
-    TRC --> GRA
-    MTS --> GRA
+    OTL -->|remote write 등| MTS
+    OTL -->|로그 파이프라인| LOG
+    OTL -->|트레이스 파이프라인| TRC
+    MTS -->|알람 규칙 Eval 입력| ALR
+    LOG -->|데이터 소스| GRA
+    TRC -->|데이터 소스| GRA
+    MTS -->|PromQL 등 쿼리| GRA
 ```
 
 ### 구조 설명
 
 - 교환기 N개가 외부 트래픽을 분산하므로 별도 LB를 두지 않는다.
 - 통화매니저AS는 SIP 세션 상태 머신/호제어를 담당하고, WTIMS는 RTP 실시간 중계를 담당한다.
-- **AI Call Agent 서버** 범위에는 STT·TTS·LLM·AI Runtime·API/Realtime·데이터 계층·**EMS**가 포함된다. **EMS**는 예전 **관측 서버** 역할을 대신하는 명칭이며, **한 박스가 아니라** OTel·Metrics TSDB·Log·Trace·Alert·Grafana **각각을 독립 프로세스**로 둔다. AI Runtime이 통화 이벤트 기반으로 STT/LLM/TTS를 호출하고, 결과 음성을 다시 WTIMS로 전달한다.
-- 호 처리 시 세션·미디어 컨텍스트는 **통화매니저AS → WTIMS → AI Runtime**으로 릴레이된다. AI Runtime은 **WTIMS 한 진입점**만 구독한다(§1.4).
+- **AI Call Agent 시스템**은 STT·TTS·LLM·AI Runtime·API/Realtime·데이터 계층(Altibase·VectorDB·Object Storage) 등 **신규 서버 모음**을 가리킨다. **EMS**(관측)는 같은 업무 도메인과 연계되지만 **별도 구역**으로 두고, OTel Collector·Metrics TSDB·Log·Trace·Alert·Grafana를 **각각 독립 프로세스**로 배포한다. AI Runtime이 통화 이벤트 기반으로 STT/LLM/TTS를 호출하고, 결과 음성을 다시 WTIMS로 전달한다.
+- 호의 **통합 시그널**(세션 스냅샷·`call_id`·레그 바인딩 메타)은 **통화매니저AS → WTIMS → AIR 연동 접점 GW → AI Runtime**으로 릴레이된다. 코어(WT)는 GW **한 주소**만 사용한다(§1.4). **RTP 미디어**(Mirror→STT, TTS→WT 등)는 **GW를 거치지 않고** WTIMS가 STT·AIR·WT 간 직접 경로를 유지한다(§1.4 표).
 - Altibase는 거래성 데이터(세션, 정책, 예약, 이력), VectorDB는 의미 검색, Object Storage는 대용량 비정형·버전 지속 데이터를 담당한다(§7.3).
-- 위 Mermaid 박스는 **첫 줄=이름, 둘째 줄=§2.0 구성요소 유형**을 병기했다. **EMS**는 OTel Collector·Metrics TSDB·Log·Trace·Alert·Grafana를 **각각 별도 노드**로 표시한다.
+- 위 Mermaid 화살표 라벨은 **연동 규격**(프로토콜·형식·상관 키)을 요약한 것이며, 세부 필드는 §3 연동 규격표·예제와 일치시킨다.
+- 위 Mermaid 박스는 **첫 줄=이름, 둘째 줄=§2.0 구성요소 유형**을 병기했다. **EMS** 서브그래프는 AI Call Agent 시스템과 **분리**하여 표시한다.
 - 도표상 동일한 박스로 보일 수 있으나, 실제로는 **프로세스형 서버·DBMS·객체 저장소·단말/클라이언트**로 구분한다(§2.0).
+- **WTIMS → AI Runtime**은 기존 코어와 신규 시스템의 **경계**이므로, AIR 노드 다수에 WT가 직접 붙지 않고 **AIR 연동 접점**(단일 VIP/FQDN에 대응하는 LB·게이트웨이)을 두어 **연동 노드·주소를 단일화**한다. 내부 풀(STT·LLM·TTS 등) 간 부하는 동일 구역 내 일반 로드밸런싱으로 처리한다(§2.2).
 - 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와 AI **API/Realtime** 연계는 §1.5 및 본 절 Mermaid를 참고한다.
+- **외부 서버·파트너**가 AI API를 호출할 때는 **AI API Ingress**(단일 VIP, §1.6)를 경유해 방화벽·TLS·레이트리밋을 한곳에서 관리한다. 내부 전용 호출은 Ingress 생략 가능.
 
 ### 2.0 구성요소 유형 (프로세스 서버 · DBMS · 저장소)
 
@@ -197,10 +238,10 @@ flowchart LR
 
 | 형태 | 설명 | 해당 예시 (본 문서) |
 |------|------|---------------------|
-| **프로세스형 서버** | OS 위에 애플리케이션/데몬이 **상시 구동**되는 컴퓨트 노드. CPU·메모리로 요청·스트림을 처리한다. | 교환기 SW, 통화매니저AS, WTIMS, AI Runtime, STT/LLM/TTS, API/Realtime, **EMS**(OTel·TSDB·Log·Trace·Alert·Grafana 각각) |
+| **프로세스형 서버** | OS 위에 애플리케이션/데몬이 **상시 구동**되는 컴퓨트 노드. CPU·메모리로 요청·스트림을 처리한다. | 교환기 SW, 통화매니저AS, WTIMS, **AIR 연동 접점**(LB/GW), AI Runtime, STT/LLM/TTS, API/Realtime · **EMS**는 동일 형태이나 배포 구역은 별도(§2 도표) |
 | **DBMS** | **데이터베이스 엔진**이 상주하고, 클라이언트는 SQL 또는 전용 API로 접속한다. 트랜잭션·인덱스·질의 최적화가 책임이다. | Altibase RDB, VectorDB |
 | **객체 저장소** | 블롭·파일 단위 저장, **S3 호환 API**로 PUT/GET. 밑단은 분산 스토리지·디스크 풀일 수 있으나, 아키텍처 표기에서는 **저장 서비스 계층**으로 둔다. | Object Storage |
-| **단말·클라이언트** | 우리 쪽에서 상시 서버 프로세스를 띄우는 대상이 아님. | PSTN/SIP 가입자 단말, 통화 단말, **운영 콘솔** 웹 브라우저 |
+| **단말·클라이언트** | 우리 쪽에서 상시 서버 프로세스를 띄우는 대상이 아님. | PSTN/SIP 가입자 단말, 통화 단말, **운영 콘솔** 웹 브라우저, **관제 모니터링 PC**(Grafana 클라이언트, §8.1) |
 
 **구분 시 유의**
 
@@ -215,27 +256,55 @@ flowchart LR
 | 외부 | 단말·클라이언트 | PSTN/SIP 가입자 | 발신·착신 호·미디어 단말 |
 | 외부 | 프로세스형 서버 | 교환기 노드 N개 | SIP Trunk 진입·분산·코어로 라우팅, 외부와 코어 사이 게이트 |
 | 기존 코어 | 프로세스형 서버 | 통화매니저AS | SIP 세션 상태·호 제어·WTIMS로 SDP/미디어 앵커 제어, **호 세션 스냅샷을 WTIMS로 릴레이**해 AI 경로를 단순화 |
-| 기존 코어 | 프로세스형 서버 | WTIMS | RTP/RTCP 릴레이·미러·플레이아웃, STT용 RTP fork, **CM 세션 정보 + 미디어 레그 바인딩을 통합하여 AI Runtime에 단일 시그널** |
+| 기존 코어 | 프로세스형 서버 | WTIMS | RTP/RTCP 릴레이·미러·플레이아웃, STT용 RTP fork, **CM 세션 정보 + 미디어 레그 바인딩을 통합 시그널로 AIR 연동 접점(단일 주소)으로 전달** §2.2 |
 | 기존 코어 | 프로세스형 서버 | 통화매니저 API · 유엔젤 | 코어 망 **REST 등** — 코어 통신 **설정·상태·정보 조회**; AI **API/Realtime**과 연동 |
 | 외부 | 프로세스형 서버 | 통화매니저 API · 바이토 | 외부·중계 구역 API — **유저 PC Client**와 연동, **유엔젤 API**와 기존 연동 |
 | 외부 | 단말·클라이언트 | 유저 PC Client | 통화매니저 **데스크톱·프론트엔드**; **바이토 API**에 접속 |
-| AI Call Agent | 프로세스형 서버 | AI Runtime | 호 단위 오케스트레이션·정책·의도·HITL·추론 라우팅, STT/LLM/TTS 호출·WTIMS 재생 명령·DB/스토리지 연계 |
-| AI Call Agent | 프로세스형 서버 | STT Server | RTP 미러 또는 오디오 스트림 수신·실시간 문자 변환·부분/최종 텍스트 스트리밍 |
-| AI Call Agent | 프로세스형 서버 | LLM Server | 프롬프트 기반 추론·도구/함수 호출 응답·OpenAI 호환 API 제공 |
-| AI Call Agent | 프로세스형 서버 | TTS Server | 텍스트→음성 스트리밍 합성·PCM 청크 반환 |
-| AI Call Agent | 프로세스형 서버 | API/Realtime | AI Runtime·DB·EMS와 연계; **유엔젤 API**와 코어 설정·조회, **바이토 API**와 유저 PC 경로의 정보·설정 연계 §1.5 |
-| AI Call Agent | 단말·클라이언트 | 운영 콘솔 | 브라우저 UI·모니터링·설정·실시간 이벤트 구독 — **유저 PC Client·바이토와 별 축** |
-| AI Call Agent | DBMS | Altibase | 트랜잭션형 세션·정책·이력·권한 등 RDB 권위 데이터 |
-| AI Call Agent | DBMS | VectorDB | 지식·임베딩 검색·유사도 기반 조회·업서트 |
-| AI Call Agent | 객체 저장소 | Object Storage | 녹음·아티팩트·캐시·백업 등 Blob·대용량 객체 저장 |
-| AI Call Agent | 프로세스형 서버 | EMS · OTel Collector | 텔레메트리·로그·트레이스 수집·라우팅 |
-| AI Call Agent | 프로세스형 서버 | EMS · Metrics TSDB | 메트릭 시계열 저장·쿼리(Prometheus/Mimir 등) |
-| AI Call Agent | 프로세스형 서버 | EMS · Log Store | 로그 인입·저장·검색(Loki/ELK 등) |
-| AI Call Agent | 프로세스형 서버 | EMS · Trace Store | 분산 트레이스 저장·조회(Tempo/Jaeger 등) |
-| AI Call Agent | 프로세스형 서버 | EMS · Alert Manager | 알람 라우팅·억제 |
-| AI Call Agent | 프로세스형 서버 | EMS · Grafana | 대시보드·시각화 |
+| 외부·관제 | 단말·클라이언트 | 관제 모니터링 PC | **Grafana**(선택 **EMS 관측 Ingress**)로 EMS 모니터링 · TSDB·Loki 직접 접속 금지 §8.1 |
+| AI Call Agent 시스템 | 프로세스형 서버 | AIR 연동 접점 GW | 코어(WT)와 신규(AIR) 구역 **단일 연동 주소** · **세션·통합 시그널만** · RTP 미디어 비경유 §1.4·§2.2 |
+| AI Call Agent 시스템 | 프로세스형 서버 | AI API Ingress | 외부 서버→**API/Realtime** 단일 진입 · TLS·레이트리밋 §1.6 |
+| AI Call Agent 시스템 | 프로세스형 서버 | AI Runtime | 호 단위 오케스트레이션·정책·의도·HITL·추론 라우팅, STT/LLM/TTS 호출·WTIMS 재생 명령·DB/스토리지 연계 · 접점 뒤 N대 확장 §2.2 |
+| AI Call Agent 시스템 | 프로세스형 서버 | STT Server | RTP 미러 또는 오디오 스트림 수신·실시간 문자 변환·부분/최종 텍스트 스트리밍 |
+| AI Call Agent 시스템 | 프로세스형 서버 | LLM Server | 프롬프트 기반 추론·도구/함수 호출 응답·OpenAI 호환 API 제공 |
+| AI Call Agent 시스템 | 프로세스형 서버 | TTS Server | 텍스트→음성 스트리밍 합성·PCM 청크 반환 |
+| AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime | AI Runtime·DB와 연계 · **유엔젤 API**와 코어 설정·조회, **바이토 API**와 유저 PC 경로의 정보·설정 연계 §1.5 · EMS는 별 구역 |
+| AI Call Agent 시스템 | 단말·클라이언트 | 운영 콘솔 | 브라우저 UI·모니터링·설정·실시간 이벤트 구독 — **유저 PC Client·바이토와 별 축** |
+| AI Call Agent 시스템 | DBMS | Altibase | 트랜잭션형 세션·정책·이력·권한 등 RDB 권위 데이터 |
+| AI Call Agent 시스템 | DBMS | VectorDB | 지식·임베딩 검색·유사도 기반 조회·업서트 |
+| AI Call Agent 시스템 | 객체 저장소 | Object Storage | 녹음·아티팩트·캐시·백업 등 Blob·대용량 객체 저장 |
+| EMS | 프로세스형 서버 | EMS · OTel Collector | 텔레메트리·로그·트레이스 수집·라우팅 · AI Call Agent 시스템 및 코어에서 OTLP 등으로 인입 |
+| EMS | 프로세스형 서버 | EMS · Metrics TSDB | 메트릭 시계열 저장·쿼리(Prometheus/Mimir 등) |
+| EMS | 프로세스형 서버 | EMS · Log Store | 로그 인입·저장·검색(Loki/ELK 등) |
+| EMS | 프로세스형 서버 | EMS · Trace Store | 분산 트레이스 저장·조회(Tempo/Jaeger 등) |
+| EMS | 프로세스형 서버 | EMS · Alert Manager | 알람 라우팅·억제 |
+| EMS | 프로세스형 서버 | EMS · Grafana | 대시보드·시각화 |
 
 상세 모델·스펙은 §5, 스토리지 용도는 §7 참고.
+
+### 2.2 부하분산: 구역 경계(WTIMS→AIR)와 내부 풀
+
+**원칙**
+
+- **내부 노드 간**(AI Call Agent 시스템 안에서 AIR→STT·LLM·TTS, API→AIR 등)은 동일 보안·네트워크 존 안에서 **일반적인 로드밸런싱**(라운드로빈·최소 연결·헬스 기반)을 적용할 수 있다.
+- **기존 코어 통신 영역 ↔ AI Call Agent 시스템** 접점인 **WTIMS → AI Runtime**은 연동 주소·계약·방화벽 홀을 **한 벌로 고정**할 필요가 있으므로, **AIR 연동 접점**을 두어 **단일화**한다. WTIMS는 이 접점의 **FQDN/VIP 한 개만** 알면 되고, 다수 AIR 인스턴스로의 **로드쉐어**는 접점에서 수행한다.
+
+**AIR 연동 접점(권장 구조)**
+
+| 요소 | 역할 |
+|------|------|
+| **단일 진입 주소** | WT 클러스터가 바라보는 **하나의 VIP 또는 FQDN**(예: `air-ingest.prod.internal`) — 코어↔신규 구역 방화벽·ACL도 이 주소만 허용하면 된다. |
+| **로드쉐어 계층** | L4/L7 LB, **Envoy/nginx Plus**, 전용 **gRPC 게이트웨이**, 또는 동등 기능 — **`call_id`(또는 동등 세션 키) 기준 일관 해시·세션 스티키**로 AIR N대에 분산 |
+| **AIR 클러스터** | 접점 뒤에서만 수평 확장; WT는 AIR IP 목록을 보유하지 않음 |
+
+**미디어 평면은 GW 비경유:** GW는 **통합 시그널·저대역 스트림**만 처리한다. RTP Mirror·PCM 파이프는 **WTIMS ↔ STT**(및 TTS 재생 경로)가 직접 이어지며, §2 도표의 `WT→STT` 엣지가 그 역할이다. 이렇게 해야 지연·버퍼·대역폭 낭비를 피한다.
+
+**호 단위 고정:** 한 통화는 **`call_id`당 단일 AIR 인스턴스**에 바인딩한다. 접점이 동일 `call_id`를 항상 동일 AIR로 보내도록 해 **세션 상태·미디어 오케스트레이션**이 한 노드에 머문다.
+
+**비권장(경계 구간):** WT 프로세스가 AIR 목록을 직접 들고 호마다 노드를 고르는 방식은 **연동 지점이 WT 전 노드에 분산**되어 방화벽·버저닝·장애 시 공조가 어렵다. 불가피할 경우에만 검토하고, 그래도 **논리 주소는 단일 접점으로 노출**하는 편이 운영에 유리하다.
+
+**AIR 장애 시:** 접점에서 헬스 체크 후 다른 AIR로 보내면 세션 연속성이 깨질 수 있으므로, **동일 호 재바인딩 정책**(짧은 재시도·세션 복구 스키마)을 계약에 포함하거나, 상태를 Altibase 등에 두는 **완화 스티키**와 트레이드오프를 명시한다(§3).
+
+STT·LLM·TTS 풀은 AIR가 **동일 호에 대해** 저지연으로 호출할 수 있도록 같은 존 또는 근접 네트워크에 두고, AIR 간 부하는 **세션 수 기준**으로 산정한다(§6).
 
 ---
 
@@ -246,6 +315,7 @@ flowchart TD
     subgraph EXT_LEGACY["외부 · 기존 클라이언트/API"]
         PCL["유저 PC Client<br/>단말·클라이언트"]
         BAPI["통화매니저 API 바이토<br/>프로세스형 서버"]
+        EXTAPI["외부 서버·파트너<br/>레거시 연동"]
     end
     subgraph CORE["기존 코어 · 프로세스형 서버"]
         CM["통화매니저AS<br/>프로세스형 서버"] -->|SIP 2.0 + SDP| WT["WTIMS<br/>프로세스형 서버"]
@@ -253,11 +323,13 @@ flowchart TD
         WT -->|RTP RTCP relay| EP["통화 단말<br/>단말·클라이언트"]
         UAPI["통화매니저 API 유엔젤<br/>프로세스형 서버"]
     end
-    subgraph ACA["AI Call Agent 서버 · 유형 표기"]
+    subgraph ACA["AI Call Agent 시스템 · 유형 표기"]
+        GW["AIR 연동 접점<br/>세션 시그널 전용"]
         STT["STT Server<br/>프로세스형 서버"]
         AIR["AI Runtime<br/>프로세스형 서버"]
         LLM["LLM Server<br/>프로세스형 서버"]
         TTS["TTS Server<br/>프로세스형 서버"]
+        APIGW["AI API Ingress<br/>외부→API 단일 진입"]
         API["API/Realtime<br/>프로세스형 서버"]
         CON["운영 콘솔<br/>클라이언트 UI"]
         ALT["Altibase<br/>DBMS"]
@@ -266,10 +338,13 @@ flowchart TD
     end
     PCL <-->|기존 클라이언트 연동| BAPI
     BAPI <-->|기존 코어 연동| UAPI
+    EXTAPI -->|HTTPS WSS 단일 진입| APIGW
+    APIGW -->|내부 라우팅| API
     API <-->|코어 설정 정보| UAPI
     API <-->|유저 알림 설정 조회| BAPI
-    WT -->|세션 릴레이 + 미디어 바인딩| AIR
-    WT -->|RTP Mirror fork| STT
+    WT -->|통합 시그널 단일 진입| GW
+    GW -->|call_id 스티키 로드쉐어| AIR
+    WT -->|RTP Mirror 미디어 GW 비경유| STT
     AIR -->|gRPC bidi · 16k PCM Opus| STT
     AIR -->|HTTP2 gRPC 또는 REST · OpenAI-compatible| LLM
     AIR -->|gRPC/HTTP TTS API| TTS
@@ -301,8 +376,9 @@ flowchart TD
 | 연동 | 프로토콜·형식 | 방향 | 핵심 내용 |
 |------|----------------|------|-----------|
 | 교환기 ↔ 통화매니저AS | SIP 2.0, SDP, UDP/TCP/TLS | 양방향 | Trunk, INVITE/ACK/BYE, 코덱·미디어 협상 |
-| 통화매니저AS ↔ WTIMS | **SIP 2.0 + SDP + RTP/RTCP** | 양방향 | 미디어 앵커·세션 제어; 호 상관·테넌트 등 AI 연계 메타는 **SIP 헤더·SDP 속성·협의된 SDP 필드** 등으로 전달. **CM↔WT 구간은 JSON 페이로드 규격으로 두지 않는다.** WT는 여기서 확보한 세션 정보와 미디어 메타를 합쳐 AIR로 내보낸다 |
-| WTIMS → AI Runtime | gRPC 또는 Kafka JSON 스트림 | WT→AIR | **세션 릴레이 필드 + 미디어 레그 바인딩** 통합, `call_id` 필수. AIR는 CM 직접 연동 없음 |
+| 통화매니저AS ↔ WTIMS | **SIP 2.0 + SDP + RTP/RTCP** | 양방향 | 미디어 앵커·세션 제어; 호 상관·테넌트 등 AI 연계 메타는 **SIP 헤더·SDP 속성·협의된 SDP 필드** 등으로 전달. **CM↔WT 구간은 JSON 페이로드 규격으로 두지 않는다.** WT는 여기서 확보한 세션 정보와 미디어 메타를 합쳐 **AIR 연동 접점**으로 내보낸다 |
+| WTIMS → AIR 연동 접점 | gRPC 또는 Kafka 등 §3 예제와 동일 규약 | WT→GW | **코어↔신규 구역 단일 주소**(VIP/FQDN); WT는 AIR 노드 목록 미보유 |
+| AIR 연동 접점 → AI Runtime | 동상 내부 전달 | GW→AIR | **`call_id` 일관 해시·세션 스티키**로 AIR N대 로드쉐어 §2.2 |
 | WTIMS → STT | RTP 또는 SRTP 미러 | WT→STT | PCM 16 kHz mono 등 사전 합의 코덱 |
 | AI Runtime ↔ STT | gRPC bidi, 오디오 프레임 + 메타 | 양방향 | 세션 메타 첫 프레임·부분/최종 텍스트 스트림 |
 | AI Runtime ↔ LLM | HTTPS JSON OpenAI 호환 또는 gRPC | AIR→LLM | `/v1/chat/completions` 등, 스트리밍 옵션 |
@@ -311,6 +387,10 @@ flowchart TD
 | API/Realtime ↔ AI Runtime | HTTPS JSON, 내부 gRPC | 양방향 | 운영·세션 제어·조회 |
 | API/Realtime ↔ 통화매니저 API 유엔젤 | HTTPS REST 등·사내 규약 | 양방향 | **코어** 통신 설정·상태·정보 조회·반영 |
 | API/Realtime ↔ 통화매니저 API 바이토 | HTTPS REST 등·사내 규약 | 양방향 | **유저 PC Client** 경로로 정보 전달·설정·조회 연계 |
+| 외부 서버 → AI API Ingress | HTTPS·WSS·mTLS·사내 규약 | 외부→AI | §1.6 단일 VIP; Ingress → API/Realtime 클러스터 |
+| AI API Ingress → API/Realtime | HTTP/2 내부망 | Ingress→API | 라우팅·헬스 기반 LB; 필요 시 쿠키·토큰 스티키 |
+| 관제 PC → EMS Grafana | HTTPS TLS · 브라우저 | 외부→EMS | **대표 VIP/FQDN 단일 접점** · VPN 또는 **EMS 관측 Ingress** · **SSO·Viewer RBAC** §8.1 |
+| 관제 PC ⊄ Prometheus/Loki/Tempo 직접 | — | 금지 | 백엔드 UI 포트는 비관제망에서 차단; Grafana 단일 접점 |
 | 유저 PC Client ↔ 통화매니저 API 바이토 | 기존 클라이언트 프로토콜 | 양방향 | 데스크톱 프론트엔드 — AI 확장 전제 유지 |
 | 통화매니저 API 바이토 ↔ 유엔젤 | 기존 연동 규약 | 양방향 | 조직 내 표준 유지 |
 | API/Realtime ↔ 운영 콘솔 | HTTPS, WSS JSON | 양방향 | 구독 토픽·이벤트 페이로드 스키마 |
@@ -347,9 +427,9 @@ a=rtpmap:0 PCMU/8000
 
 DNIS·서비스 프로파일 등은 **별도 JSON 파일이 아니라** SIP `Request-URI`/`To`, `P-` 또는 사내 확장 헤더·SDP `a=` 라인 등으로 옮길지 정책으로 확정한다.
 
-#### B. WTIMS → AI Runtime 통합 시그널 (세션 릴레이 + 미디어 레그)
+#### B. WTIMS → AIR 연동 접점 → AI Runtime 통합 시그널 (세션 릴레이 + 미디어 레그)
 
-WTIMS가 **SIP/SDP로 CM과 맺은 세션**에서 해석한 필드와 자체 미디어 메타를 **한 페이로드**로 AIR에 전달하는 예이다(gRPC·Kafka 등 **WT→AIR만 JSON/바이너리 규약**). 미디어 미준비 구간은 `media` 생략 또는 `state`로 표현할 수 있다.
+WTIMS가 **SIP/SDP로 CM과 맺은 세션**에서 해석한 필드와 자체 미디어 메타를 **한 페이로드**로 **AIR 연동 접점**에 보내고, 접점이 **`call_id` 로드쉐어**로 적절한 AIR 인스턴스에 전달한다(gRPC·Kafka 등 **WT→GW 구간 JSON/바이너리 규약**). 미디어 미준비 구간은 `media` 생략 또는 `state`로 표현할 수 있다.
 
 ```json
 {
@@ -488,8 +568,10 @@ X-Service-Auth: Bearer ${API_TOKEN}
 - **통화매니저 API 바이토 ↔ AI API/Realtime**: 유저 PC 경로 정보·설정 연계 스키마 §1.5
 - **교환기 <-> 통화매니저AS**: SIP Trunk (UDP/TCP/TLS)
 - **통화매니저AS <-> WTIMS**: **SIP 2.0 + SDP + RTP/RTCP**만 사용. 호 세션·스냅샷·생명주기 표현도 **동일 구간의 SIP/SDP·협의 헤더**로 한다(JSON 전용 CM↔WT 채널 없음). AIR 직접 연동 없음
-- **WTIMS -> AI Runtime**: 세션 릴레이 + 미디어 레그 바인딩 **통합 시그널**(gRPC/Kafka 등), `call_id` 상관·갱신·해제 포함
-- **WTIMS -> STT**: RTP mirror stream (codec normalized PCM 16k 권장)
+- **WTIMS → AIR 연동 접점**: 세션 릴레이 + 미디어 레그 바인딩 **통합 시그널**(gRPC/Kafka 등), **단일 주소** · `call_id` 상관·갱신·해제 포함 · **RTP 미디어는 GW 비경유**
+- **AIR 연동 접점 → AI Runtime**: **`call_id` 일관 해시·스티키** 로드쉐어 §2.2
+- **WTIMS -> STT**: RTP mirror stream (codec normalized PCM 16k 권장) · **미디어 평면 직결**
+- **외부 서버 → AI API Ingress → API/Realtime**: TLS·mTLS·레이트리밋 §1.6
 - **AI Runtime <-> STT**: gRPC bidirectional streaming
 - **AI Runtime <-> LLM**: OpenAI-compatible REST 또는 gRPC inference API
 - **AI Runtime <-> TTS**: gRPC streaming synth (chunked PCM 반환)
@@ -497,12 +579,13 @@ X-Service-Auth: Bearer ${API_TOKEN}
 - **AI/API <-> Altibase**: JDBC/ODBC(SQL)
 - **AI <-> VectorDB**: query/upsert API (HTTP/gRPC)
 - **AI/API <-> Object Storage**: S3-compatible API
+- **관제 PC → Grafana / EMS 관측 Ingress**: HTTPS · **대표 VIP 단일 접점** · SSO · Viewer RBAC §8.1
 
 ---
 
 ## 4) 통화 처리 시퀀스 (Mermaid Sequence)
 
-STT·LLM·TTS·AI Runtime 참여자는 **AI Call Agent 서버** 소속 컴포넌트로 본다. 교환기·통화매니저AS·WTIMS는 기존 코어다.
+STT·LLM·TTS·AI Runtime 참여자는 **AI Call Agent 시스템** 소속 컴포넌트로 본다. 교환기·통화매니저AS·WTIMS는 기존 코어다. 아래 시퀀스에서 **AIR 연동 접점**(LB/GW)은 WT와 AIR 클러스터 사이 **단일 논리 진입**으로 표기했으며, 실제 배포는 §2·§2.2와 같다.
 
 ```mermaid
 sequenceDiagram
@@ -510,6 +593,7 @@ sequenceDiagram
     participant EX as 교환기
     participant CM as 통화매니저AS
     participant WT as WTIMS
+    participant GW as AIR 연동 접점
     participant AIR as AI Runtime
     participant STT as STT
     participant LLM as LLM
@@ -525,7 +609,8 @@ sequenceDiagram
     U->>WT: RTP 음성
     WT->>STT: RTP mirror stream
     CM->>WT: 호 세션 스냅샷 릴레이
-    WT->>AIR: 세션 + 미디어 통합 시그널
+    WT->>GW: 세션 + 미디어 통합 시그널
+    GW->>AIR: 로드쉐어 call_id 스티키
     STT-->>AIR: partial/final transcript (stream)
     AIR->>LLM: inference request (intent/context/tool)
     LLM-->>AIR: answer + action
@@ -538,14 +623,15 @@ sequenceDiagram
     EX->>CM: SIP BYE
     CM->>WT: release media
     CM->>WT: 호 종료 세션 릴레이
-    WT->>AIR: 호 종료 통합 시그널
+    WT->>GW: 호 종료 통합 시그널
+    GW->>AIR: 전달
 ```
 
 ---
 
 ## 5) 서버 역할별 권장 모델 및 스펙
 
-아래 역할군은 **AI Call Agent 서버**를 구성하는 신규 계획 노드다. 기존 코어(교환기·통화매니저AS·WTIMS)는 제외한다.  
+아래 역할군은 **AI Call Agent 시스템**을 구성하는 신규 계획 노드다. 기존 코어(교환기·통화매니저AS·WTIMS)는 제외한다.  
 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**는 §1.5 기존 자산이며 본 절 노드 스펙 표에는 포함하지 않는다.
 
 ## 5.1 STT 서버 (내부 구축)
@@ -577,7 +663,7 @@ sequenceDiagram
 
 ## 5.4 AI Runtime 서버
 
-- **역할**: 세션 오케스트레이션, 정책 판단, HITL, 도구 호출, STT/TTS/LLM 라우팅
+- **역할**: 세션 오케스트레이션, 정책 판단, HITL, 도구 호출, STT/TTS/LLM 라우팅. WTIMS는 **AIR 연동 접점**을 통해서만 유입(§1.4·§2.2).
 - **서버 스펙(노드당)**: 16 vCPU / 64 GB RAM / NVMe 500 GB
 - **처리량 가정**: 1,200 동시 세션/노드
 
@@ -597,20 +683,22 @@ sequenceDiagram
 |------|------|----------------|--------------------|------------------|----------------------|
 | 기존 코어 | 통화매니저AS | 기존 코어 사용 | 기존 Pair 용량 기준 | 기존 2 Pair 활용 | 추가 구축 없음 |
 | 기존 코어 | WTIMS RTP | 6,000 RTP 세션 | 800 세션/노드 | 8 | 8 Active + 2 Standby |
-| AI Call Agent 서버 | STT | 4,200 스트림 | 600/노드 | 7 | 7 Active + 2 Standby |
-| AI Call Agent 서버 | TTS | 2,520 채널 | 500/노드 | 6 | 6 Active + 2 Standby |
-| AI Call Agent 서버 | LLM | 630 동시 생성 | 80/노드 | 8 | 8 Active + 2 Standby |
-| AI Call Agent 서버 | AI Runtime | 6,000 세션 | 1,200/노드 | 5 | 5 Active + 1 Standby |
-| AI Call Agent 서버 | API/Realtime | 10,000 user, 6,000 WS peak | 2,500 WS/노드 | 4 | 4 Active + 1 Standby |
-| AI Call Agent 서버 | Altibase | 세션/정책/이력 | DB HA 기준 | 2 | Primary + Standby + Read Replica(권장) |
-| AI Call Agent 서버 | VectorDB | 고QPS 검색/업서트 | 200 QPS/샤드 가정 | 4 샤드 | 4 Active + 2 Replica |
-| AI Call Agent 서버 | Object Storage | 녹음/아티팩트 저장 | 대역폭 중심 | 2 | 2 Active 또는 관리형 |
-| AI Call Agent 서버 | EMS · OTel Collector | 전 계층 텔레메트리 인입 | 수집 파이프 처리량 | 2 | 2 Active + 1 Standby |
-| AI Call Agent 서버 | EMS · Metrics TSDB | 메트릭 장기 저장·알람 입력 | 시계열 카드널리티 | 2 | HA 페어 권장 |
-| AI Call Agent 서버 | EMS · Log Store | 로그 인입·보관 | 초당 로그량·보존기간 | 2 | 샤딩·복제 |
-| AI Call Agent 서버 | EMS · Trace Store | 트레이스 저장·조회 | 스팬 수신량 | 2 | HA 또는 분산 |
-| AI Call Agent 서버 | EMS · Alert Manager | 알람 라우팅 | 규칙·채널 수 | 1 | Active + Standby |
-| AI Call Agent 서버 | EMS · Grafana | 대시보드·조회 UI | 동시 조회·패널 수 | 2 | Active 이중화 또는 무중단 배포 |
+| AI Call Agent 시스템 | AIR 연동 접점 LB/GW | 코어→신규 단일 진입 · 통합 시그널만 | 제품·프로파일별 처리량 | 2 | Active 이중화 권장 §2.2 |
+| AI Call Agent 시스템 | AI API Ingress | 외부→API 단일 진입 | WAF·TLS 처리량 | 2 | Active 이중화 권장 §1.6 |
+| AI Call Agent 시스템 | STT | 4,200 스트림 | 600/노드 | 7 | 7 Active + 2 Standby |
+| AI Call Agent 시스템 | TTS | 2,520 채널 | 500/노드 | 6 | 6 Active + 2 Standby |
+| AI Call Agent 시스템 | LLM | 630 동시 생성 | 80/노드 | 8 | 8 Active + 2 Standby |
+| AI Call Agent 시스템 | AI Runtime | 6,000 세션 | 1,200/노드 | 5 | 5 Active + 1 Standby · 접점 뒤 로드쉐어 §2.2 |
+| AI Call Agent 시스템 | API/Realtime | 10,000 user, 6,000 WS peak | 2,500 WS/노드 | 4 | 4 Active + 1 Standby |
+| AI Call Agent 시스템 | Altibase | 세션/정책/이력 | DB HA 기준 | 2 | Primary + Standby + Read Replica(권장) |
+| AI Call Agent 시스템 | VectorDB | 고QPS 검색/업서트 | 200 QPS/샤드 가정 | 4 샤드 | 4 Active + 2 Replica |
+| AI Call Agent 시스템 | Object Storage | 녹음/아티팩트 저장 | 대역폭 중심 | 2 | 2 Active 또는 관리형 |
+| EMS | EMS · OTel Collector | 전 계층 텔레메트리 인입 | 수집 파이프 처리량 | 2 | 2 Active + 1 Standby |
+| EMS | EMS · Metrics TSDB | 메트릭 장기 저장·알람 입력 | 시계열 카드널리티 | 2 | HA 페어 권장 |
+| EMS | EMS · Log Store | 로그 인입·보관 | 초당 로그량·보존기간 | 2 | 샤딩·복제 |
+| EMS | EMS · Trace Store | 트레이스 저장·조회 | 스팬 수신량 | 2 | HA 또는 분산 |
+| EMS | EMS · Alert Manager | 알람 라우팅 | 규칙·채널 수 | 1 | Active + Standby |
+| EMS | EMS · Grafana | 대시보드·조회 UI | 동시 조회·패널 수 | 2 | Active 이중화 또는 무중단 배포 |
 
 > 상기 수치는 초기 계획치이며, 반드시 스테이징에서 50 CPS/120초/6,000 동시세션 부하로 재검증한다.
 
@@ -620,20 +708,22 @@ sequenceDiagram
 |------|-----------|-----------------------------|-----|-----|-----|----------|-----|------|
 | 기존 코어 | 통화매니저AS | 기존 2 Pair 활용 | 기존 사양 | 기존 사양 | - | 기존 사양 | 기존 사양 | 신규 구축 없음 |
 | 기존 코어 | WTIMS RTP | 8 + 2 | 24 vCPU | 64 GB | - | NVMe 1 TB | 10 Gbps | RTP Relay + RTP Mirror |
-| AI Call Agent 서버 | STT Server | 7 + 2 | 32 vCPU | 128 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming ASR |
-| AI Call Agent 서버 | TTS Server | 6 + 2 | 24 vCPU | 96 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming TTS |
-| AI Call Agent 서버 | LLM Server | 8 + 2 | 32 vCPU | 256 GB | L40S x2 | NVMe 2 TB | 25 Gbps | vLLM/TGI 추론 풀 |
-| AI Call Agent 서버 | AI Runtime | 5 + 1 | 16 vCPU | 64 GB | - | NVMe 500 GB | 10 Gbps | 세션 오케스트레이션 |
-| AI Call Agent 서버 | API/Realtime | 4 + 1 | 16 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | REST/WSS 게이트웨이 |
-| AI Call Agent 서버 | Altibase | 2 + 1(읽기복제) | 24 vCPU | 128 GB | - | NVMe 2 TB (고IOPS) | 10 Gbps | Primary/Standby/Read |
-| AI Call Agent 서버 | VectorDB | 4 + 2 | 24 vCPU | 128 GB | 선택(0~1) | NVMe 2 TB | 10 Gbps | 샤드+레플리카 |
-| AI Call Agent 서버 | Object Storage | 2 이상 | 16 vCPU | 64 GB | - | HDD 20 TB + SSD Cache | 10 Gbps | S3 API 호환 |
-| AI Call Agent 서버 | EMS · OTel Collector | 2 + 1 | 8 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | 수집·배압·라우팅 |
-| AI Call Agent 서버 | EMS · Metrics TSDB | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Prom/Mimir 등 |
-| AI Call Agent 서버 | EMS · Log Store | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Loki/ELK 등 |
-| AI Call Agent 서버 | EMS · Trace Store | 2 + 0 | 16 vCPU | 64 GB | - | NVMe 1 TB | 10 Gbps | Tempo/Jaeger 등 |
-| AI Call Agent 서버 | EMS · Alert Manager | 1 + 1 | 8 vCPU | 16 GB | - | NVMe 200 GB | 1 Gbps | Alertmanager |
-| AI Call Agent 서버 | EMS · Grafana | 2 + 0 | 8 vCPU | 32 GB | - | NVMe 200 GB | 10 Gbps | 대시보드·읽기 |
+| AI Call Agent 시스템 | AIR 연동 접점 LB/GW | 2 + 1 | 8 vCPU | 32 GB | - | NVMe 200 GB | 10 Gbps | 세션 시그널만 · VIP 이중화 §2.2 |
+| AI Call Agent 시스템 | AI API Ingress | 2 + 1 | 8 vCPU | 32 GB | - | NVMe 200 GB | 10 Gbps | TLS 종료 · §1.6 |
+| AI Call Agent 시스템 | STT Server | 7 + 2 | 32 vCPU | 128 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming ASR |
+| AI Call Agent 시스템 | TTS Server | 6 + 2 | 24 vCPU | 96 GB | L40S x1 | NVMe 1 TB | 10 Gbps | gRPC streaming TTS |
+| AI Call Agent 시스템 | LLM Server | 8 + 2 | 32 vCPU | 256 GB | L40S x2 | NVMe 2 TB | 25 Gbps | vLLM/TGI 추론 풀 |
+| AI Call Agent 시스템 | AI Runtime | 5 + 1 | 16 vCPU | 64 GB | - | NVMe 500 GB | 10 Gbps | 세션 오케스트레이션 · §2.2 |
+| AI Call Agent 시스템 | API/Realtime | 4 + 1 | 16 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | REST/WSS 게이트웨이 |
+| AI Call Agent 시스템 | Altibase | 2 + 1(읽기복제) | 24 vCPU | 128 GB | - | NVMe 2 TB (고IOPS) | 10 Gbps | Primary/Standby/Read |
+| AI Call Agent 시스템 | VectorDB | 4 + 2 | 24 vCPU | 128 GB | 선택(0~1) | NVMe 2 TB | 10 Gbps | 샤드+레플리카 |
+| AI Call Agent 시스템 | Object Storage | 2 이상 | 16 vCPU | 64 GB | - | HDD 20 TB + SSD Cache | 10 Gbps | S3 API 호환 |
+| EMS | EMS · OTel Collector | 2 + 1 | 8 vCPU | 32 GB | - | NVMe 500 GB | 10 Gbps | 수집·배압·라우팅 |
+| EMS | EMS · Metrics TSDB | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Prom/Mimir 등 |
+| EMS | EMS · Log Store | 2 + 1 | 16 vCPU | 64 GB | - | NVMe 2 TB | 10 Gbps | Loki/ELK 등 |
+| EMS | EMS · Trace Store | 2 + 0 | 16 vCPU | 64 GB | - | NVMe 1 TB | 10 Gbps | Tempo/Jaeger 등 |
+| EMS | EMS · Alert Manager | 1 + 1 | 8 vCPU | 16 GB | - | NVMe 200 GB | 1 Gbps | Alertmanager |
+| EMS | EMS · Grafana | 2 + 0 | 8 vCPU | 32 GB | - | NVMe 200 GB | 10 Gbps | 대시보드·읽기 |
 
 ### 6.2 목표 용량 대비 계산 체크
 
@@ -690,6 +780,62 @@ sequenceDiagram
 | Alert Manager | 알람 라우팅·억제·통합 | Alertmanager 등 |
 | Grafana | 대시보드·시각화·탐색 UI | Grafana |
 
+### 8.1 외부 관제 모니터링 PC → EMS 접근
+
+**전제:** OTel Collector·Metrics TSDB·Log Store·Trace Store·Alert Manager 등 EMS **백엔드**는 **관측 전용 네트워크 존**에 두고, 인터넷 또는 일반 사무망에 **직접 포트 개방하지 않는다.** 외부(타 부서망·NOC·재택)에서 쓰는 **관제 모니터링 PC**는 **브라우저 기반 조회**를 주 경로로 한다.
+
+**외부 → 대표 IP(VIP) 단일 접점(필수 고려):** 관제 PC가 **외부 네트워크**에 있을 때, 방화벽·NAT·ACL·DNS를 **백엔드 EMS 노드 여러 개가 아니라 “대표 주소 한 벌”**로만 맞춘다.
+
+| 항목 | 설계 포인트 |
+|------|-------------|
+| **대표 접점** | **공인 IP 1개** 또는 **가상 IP(VIP) 1개**에 매핑되는 **단일 FQDN**(예: `grafana-ems.company.com`) — 브라우저·북마크·방화벽 허용 목록을 이 주소만으로 통일 |
+| **구현** | 경계에 **EMS 관측 Ingress**(L4/L7 LB **Active/Standby 풀 앞단 VIP**) 또는 동등 장비가 대표 IP를 소유하고, 뒤쪽 Grafana·(선택) SSO만 내부 전달 |
+| **VPN·ZTNA** 사용 시 | 물리적으로 VPN 허브·ZTNA 포털이 있더라도, 관제자가 **실제로 HTTPS를 여는 목적지**는 조직 정책상 **논리적으로 단일 FQDN/VIP**로 수렴시키는 것을 권장(분산된 Grafana 실IP 직접 접속 금지) |
+| **AI API Ingress(§1.6)와 관계** | **별도 대표 IP·별도 FQDN** — 업무 API와 관제 UI의 노출면·인증·장애 영향 분리 |
+
+**운영자가 실제로 여는 것(권장)**
+
+| 접근 목적 | 접점 | 비고 |
+|-----------|------|------|
+| 대시보드·실시간 패널 | **Grafana** `https://` — 반드시 위 **대표 VIP/FQDN 단일 접점** 경유 | 운영·관제의 **주 접점** |
+| 로그·트레이스 탐색 | Grafana **Explore**(데이터 소스는 Loki·Tempo 등 **백엔드로만** 연결) | 직접 Loki/Tempo UI 포트를 PC에서 열지 않음 |
+| 알람 확인 | Grafana 알림 또는 Alertmanager 연동 **아웃바운드**(메일·메신저·티켓); 필요 시 읽기 전용 웹 UI는 Grafana 플러그인·외부 티켓으로 | 관제 PC는 **수신** 위주 |
+
+**네트워크 경로(조직 표준 중 선택·병행)**
+
+| 방식 | 설명 |
+|------|------|
+| **VPN / 폐쇄망 참여** | 관제 PC가 운영 VPN으로 EMS 존 라우팅 가능하게 한 뒤 Grafana VIP 접속 |
+| **EMS 관측 Ingress** | DMZ 또는 관제망 경계에 **대표 IP(VIP) 한 개 + 단일 FQDN**으로 **L7 단일 진입** — TLS 종료·WAF·SSO 후 내부 Grafana로 **역프록시**. **AI API Ingress(§1.6)** 와 **대표 IP·FQDN·방화벽·인증 정책을 분리**한다 |
+| **ZTNA / Zero Trust** | 클라우드 브로커 경유로 Grafana만 게시 |
+| **전용 회선·MPLS** | NOC ↔ DC 고정 경로 |
+
+**보안·계정**
+
+- **TLS** 필수, 가능하면 **SSO**(SAML/OIDC)·내부 **LDAP/AD** 연동.
+- Grafana **RBAC**: 관제 PC 사용자는 기본 **Viewer(읽기 전용)**; 대시보드 편집은 소수 Editor.
+- Prometheus·Loki·Tempo **네이티브 UI 포트**는 관제 PC에서 직접 접근 불가(방화벽 **거부**), 필요 시 **점프 호스트·관리자만** 별도 절차.
+
+**요약:** 관제 PC는 **EMS 백엔드 실IP 목록이 아니라 “대표 IP(VIP) 한 접점 → Grafana” 한 줄**로 들어오게 설계하고, 나머지 스택은 수집·저장 전용으로 남긴다.
+
+```mermaid
+flowchart LR
+    subgraph EXT_NOC["외부 · 관제"]
+        MON["관제 모니터링 PC<br/>브라우저"]
+    end
+    subgraph EDGE["대표 접점 단일화"]
+        VIP["EMS 관측 대표 VIP FQDN<br/>공인 또는 경계 VIP 한 벌"]
+        VPN["선택 VPN ZTNA<br/>동일 논리 목적지로 수렴"]
+    end
+    subgraph EMS["EMS · 관측 구역"]
+        GRA["EMS Grafana<br/>내부 주소"]
+    end
+    MON -->|HTTPS 목적지 1개만| VIP
+    MON -.->|조직 정책 시| VPN
+    VPN --> VIP
+    VIP -->|LB 역프록시 TLS SSO| GRA
+```
+
 ```mermaid
 flowchart LR
     subgraph CORE["기존 코어 · 프로세스형 서버"]
@@ -697,7 +843,7 @@ flowchart LR
       WT["WTIMS<br/>프로세스형 서버"]
     end
 
-    subgraph ACA["AI Call Agent 서버"]
+    subgraph ACA["AI Call Agent 시스템"]
       AIR["AI Runtime<br/>프로세스형 서버"]
       STT["STT<br/>프로세스형 서버"]
       TTS["TTS<br/>프로세스형 서버"]
@@ -706,29 +852,31 @@ flowchart LR
       DB["데이터 계층<br/>DBMS·객체 저장소"]
     end
 
-    OTL["EMS OTel Collector<br/>수집·라우팅 프로세스"]
-    MTS["EMS Metrics TSDB<br/>시계열 저장 프로세스"]
-    LOG["EMS Log Store<br/>로그 저장·검색 프로세스"]
-    TRC["EMS Trace Store<br/>트레이스 저장 프로세스"]
-    ALR["EMS Alert Manager<br/>알람 라우팅 프로세스"]
-    GRA["EMS Grafana<br/>시각화 프로세스"]
+    subgraph EMS["EMS · 관측 구역 별도"]
+      OTL["EMS OTel Collector<br/>수집·라우팅 프로세스"]
+      MTS["EMS Metrics TSDB<br/>시계열 저장 프로세스"]
+      LOG["EMS Log Store<br/>로그 저장·검색 프로세스"]
+      TRC["EMS Trace Store<br/>트레이스 저장 프로세스"]
+      ALR["EMS Alert Manager<br/>알람 라우팅 프로세스"]
+      GRA["EMS Grafana<br/>시각화 프로세스"]
+    end
 
-    CM --> OTL
-    WT --> OTL
-    AIR --> OTL
-    STT --> OTL
-    TTS --> OTL
-    LLM --> OTL
-    API --> OTL
-    DB --> OTL
+    CM -->|OTLP Push 등| OTL
+    WT -->|OTLP Push 등| OTL
+    AIR -->|OTLP Push| OTL
+    STT -->|OTLP Push| OTL
+    TTS -->|OTLP Push| OTL
+    LLM -->|OTLP Push| OTL
+    API -->|OTLP Push| OTL
+    DB -->|익스포터 로그| OTL
 
-    OTL --> MTS
-    OTL --> LOG
-    OTL --> TRC
-    MTS --> ALR
-    LOG --> GRA
-    TRC --> GRA
-    MTS --> GRA
+    OTL -->|remote write 등| MTS
+    OTL -->|로그 파이프| LOG
+    OTL -->|트레이스 파이프| TRC
+    MTS -->|알람 입력| ALR
+    LOG -->|데이터 소스 연동| GRA
+    TRC -->|데이터 소스 연동| GRA
+    MTS -->|대시보드 쿼리| GRA
 ```
 
 ### 핵심 모니터링 지표
@@ -747,7 +895,10 @@ flowchart LR
 
 - [ ] 교환기 N개 -> 통화매니저AS 라우팅 정책 검증
 - [ ] WTIMS RTP mirror 기능 개발/검증 완료
-- [ ] 통화매니저AS→WTIMS 호 세션 릴레이 및 WTIMS→AI Runtime **통합 시그널** 규약·순서·`call_id` 상관 검증
+- [ ] 통화매니저AS→WTIMS 호 세션 릴레이 및 WTIMS→**AIR 연동 접점**→AI Runtime **통합 시그널** 규약·순서·`call_id` 상관 검증
+- [ ] WTIMS→**AIR 연동 접점** 단일 주소(VIP/FQDN)·방화벽 홀·인증서 확정; 접점→AIR **`call_id` 로드쉐어** 및 장애 시 세션 정책 검증(§2.2)
+- [ ] **미디어 경로** RTP Mirror·TTS 재생이 GW를 경유하지 않음을 네트워크·방화벽 설계서와 일치 검증(§1.4)
+- [ ] **외부 서버→AI API Ingress** 단일 주소·mTLS 또는 API Key·레이트리밋·Ingress→API/Realtime 라우팅 검증(§1.6)
 - [ ] Internal STT/TTS/LLM API 스펙 확정(gRPC/REST)
 - [ ] AI Runtime 장애 격리(서킷브레이커/타임아웃/재시도) 적용
 - [ ] 통화매니저 API 유엔젤 ↔ AI API/Realtime 연동(코어 설정·정보 조회, 인증·레이트리밋) 검증
@@ -756,12 +907,13 @@ flowchart LR
 - [ ] VectorDB 샤딩/복제/캐시 정책 반영
 - [ ] 6,000 동시세션 + 50 CPS 부하테스트 통과
 - [ ] EMS 대시보드·알람 임계치 운영팀 인수(Grafana·Alert Manager 등)
+- [ ] **외부 관제 PC** → **EMS 관측 대표 IP(VIP) 단일 접점**·Grafana(또는 **EMS 관측 Ingress** 동일 FQDN)·VPN/ZTNA·TLS·SSO·Grafana RBAC·백엔드 직접 포트 차단 검증(§8.1)
 
 ---
 
 ## 10) 결론
 
-본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent** 계층(STT/TTS/LLM/Runtime/API/데이터 및 **EMS** — 관측 프로세스 6종)을 내부화해 주권과 확장성을 확보하는 설계다.  
+본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent 시스템**(STT/TTS/LLM/Runtime/API/데이터)과 **EMS**(관측 프로세스 6종 — 배포 구역은 별도)를 내부화해 주권과 확장성을 확보하는 설계다.  
 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와의 연계는 코어·외부 역할을 분리해 AI **API/Realtime**이 유엔젤로 코어 정보를, 바이토로 유저 단 정보를 오케스트레이션한다(§1.5).  
-핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AI Runtime 세션 릴레이 및 WT→AIR 통합 시그널 규약**, `AI Call Agent 서버 프로토콜 표준화`, `6,000 세션 실부하 검증`이다.
+핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW→AI Runtime**(세션 시그널만 GW · 미디어 RTP 비경유)·**외부→AI API Ingress**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `6,000 세션 실부하 검증`이다.
 
