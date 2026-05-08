@@ -1003,11 +1003,13 @@ flowchart LR
 
 ---
 
-## 11) AI Call Agent 비용 산출(부품가 리서치 기반)
+## 11) AI Call Agent 비용 산출
 
-아래 비용은 **EMS 제외**, **AI Call Agent 시스템만** 대상으로, 2026-05 시점 웹 공개가를 기준으로 한 **러프오더(ROM) CAPEX**다.
+본 절은 (1) **AI Call Agent 시스템**의 **하드웨어 CAPEX**(§11.1·§11.2)와 (2) **AI Call Agent를 제외한** 기존 노드·외부 연계 측 **소프트웨어 개발 비용**(§11.3)을 구분한다. 개발 비용은 산출된 항목만 금액을 표시하고, 미산출 항목은 **항목·범위만 기재**하여 추후 공수·금액 산출 시 채운다.
 
-### 11.1 단가 가정(USD)
+### 11.1 단가 가정(USD) — 서버 하드웨어
+
+아래는 **EMS 제외**, **AI Call Agent 시스템 서버 노드**만 대상으로, 2026-05 시점 웹 공개가를 기준으로 한 **러프오더(ROM) CAPEX**용 단가다.
 
 - GPU: NVIDIA L40S 1장 **$9,000** (시장가 기준)
 - CPU: AMD EPYC 9354 1개 **$2,700 ~ $3,400** (중앙값 $3,000 적용)
@@ -1033,7 +1035,38 @@ flowchart LR
 > 범위 권고: 부품 단가 변동(리셀러/재고/환율/유지보수 포함 여부) 때문에 실제 발주가는 보통 **±20%** 편차가 발생한다.  
 > 따라서 본 총액의 현실적 구매 범위는 **약 $282K ~ $424K (약 4.15억 ~ 6.24억원)**로 본다.
 
-### 11.3 단가 출처(웹 리서치)
+### 11.3 기존 노드·외부 연동 소프트웨어 개발(AI Call Agent 제외)
+
+신규 **AI Call Agent 시스템** 자체 구축 비용과 별도로, **기존 통신 코어·외부 API 측**에서 본 아키텍처에 맞춘 **연동 기능 개발**이 필요하다. 금액이 확정된 항목만 표에 반영하고, 미산출 항목은 **추후 산출**로 두어 공수·예산 책정 시 보완한다.
+
+| 구분 | 연동·개발 범위(요약) | 개발 금액(추정) | 비고 |
+|------|----------------------|-----------------|------|
+| 통화매니저 AS ↔ WTIMS | 호 세션·통합 시그널 등 CM↔WT 간 전달 규약 구현·검증(SIP/SDP 기반 합의와 일치) | **추후 산출** | 기존 노드 개발 |
+| 통화매니저 API 유엔젤 ↔ API/Realtime | 설정 반영, 동작·상태 조회, AI 호출 트리거 등 인바운드/아웃바운드 REST·인증·버저닝 | **추후 산출** | 단일 VIP+LB 접점(§1.6)과 규약 정합 |
+| WTIMS ↔ AIR 연동 접점 GW · RTP | 통합 시그널 단일 진입(GW), RTP Mirror→STT, TTS→WT 재생 경로 등 | **약 0.7억원**(과거 산출 이력) | 세부 범위·재검증 시 금액 조정 가능 |
+| 통화매니저 API 바이토 ↔ API/Realtime | 설정·동작 조회, Realtime 이벤트 릴레이·유저 PC Client 경로와의 매핑 등 | **추후 산출** | 유엔젤과 역할 분리·중복 방지 |
+| EMS(기존 노드·신규 스택 연동) | 아래 **필요 기능**에 대한 연동·설정·운영 반영 | **추후 산출** | EMS 미도입 시 본 행 범위는 축소 |
+
+**통화매니저 AS · 통화매니저 API 유엔젤**
+
+- **통화매니저 AS ↔ WTIMS**: 문서 §1.4·§2의 **통합 시그널**·호 세션 스냅샷 릴레이를 실제 제품 경로에 반영하는 개발·테스트. 금액은 **추후 산출**.
+- **통화매니저 API 유엔젤 ↔ API/Realtime**: 코어 설정·상태 조회, AI 연동 호출, 아웃바운드 조회 규약 등. 금액은 **추후 산출**.
+
+**WTIMS**
+
+- **AIR 연동 접점 GW**: 단일 FQDN/VIP로의 시그널 인입, GW↔AI Runtime 경계와 방화벽·장애 정책에 맞춘 연동.
+- **RTP**: Mirror(STT)·TTS 재생 등 미디어 평면. 과거 **약 0.7억원** 산출 이력이 있으나, 최종 스펙·부하 검증에 따라 재산출 권장.
+
+**통화매니저 API 바이토**
+
+- **API/Realtime**과의 설정·동작 조회, Realtime 푸시·바이토↔유저 PC Client 기존 연동과의 정합. 금액은 **추후 산출**.
+
+**EMS**
+
+- **필요 기능(간략)**: 기존 코어·AI Call Agent·API 컴포넌트에서 **OTLP(또는 동등)** 로 메트릭·로그·트레이스 인입, 수집 파이프라인·TSDB·로그 저장·트레이스 저장·알람·Grafana 대시보드·대표 VIP 접점과의 정합, (선택) 관제 PC·SSO·RBAC 연계.
+- **개발 금액**: **추후 산출**. EMS를 도입하지 않거나 전사 관제로 대체할 경우 §11.3 표의 EMS 행 및 본 bullet 범위를 재정의한다.
+
+### 11.4 단가 출처(웹 리서치) — §11.1·§11.2 하드웨어
 
 - NVIDIA L40S 가격 참고: [GPUCost L40S](https://gpucost.org/gpu/l40s), [Hyperscalers L40S](https://www.hyperscalers.com/NVIDIA-L40S-GP-GPU-ADA-Lovelace-architecture-AI-Omniverse-Enterprise-Rendering-3D-Data-Science-Workstations), [Newegg L40S 검색](https://www.newegg.com/p/pl?d=l40s)
 - AMD EPYC 9354 가격 참고: [AMD 제품 페이지](https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9354.html), [Newegg EPYC 9354](https://www.newegg.com/amd-epyc-9354-socket-sp5/p/1WK-0184-00068), [CDW EPYC 9354](https://www.cdw.com/product/amd-epyc-9354-3.25-ghz-processor-oem/8275725)
