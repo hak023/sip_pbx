@@ -1,10 +1,11 @@
 # SmartPBX AI - Product Requirements Document (PRD)
 ## 통합 PRD: SIP PBX Core + AI 기능
 
-**문서 버전**: v2.1  
+**문서 버전**: v2.2  
 **작성일**: 2026-02-02  
+**최종 갱신**: 2026-05-08  
 **작성자**: Product Team  
-**상태**: Integrated
+**상태**: Current (AI 범위는 [구현 스냅샷](#ai-기능-구현-스냅샷-2026-05) 기준)
 
 ---
 
@@ -22,10 +23,24 @@
 
 ### 목적
 본 문서는 SmartPBX AI의 전체 제품 요구사항을 정의합니다:
-- **Part 1**: SIP PBX Core 기능 (이미 구현 완료)
-- **Part 2**: AI 기능 (Phase 1-4, 개발 예정)
+- **Part 1**: SIP PBX Core 기능 (구현 완료)
+- **Part 2**: AI 기능 (Phase 1-4) — **세부·검수는** [prd-detailed-phase1-4.md](./prd-detailed-phase1-4.md), **구현 수준은** 아래 스냅샷·[docs/reports/README.md](../reports/README.md)를 병행한다.
+
+### AI 기능 구현 스냅샷 (2026-05)
+
+단일 리포지토리 기준 요약이다. 상용 타깃 배포·외부 코어 연동은 [production-deployment-architecture.md](../architecture/production-deployment-architecture.md)와 별개 과제다.
+
+| Phase | 계획 요약 | 구현 상태 (개략) |
+|-------|-----------|------------------|
+| **Phase 1** | Active RAG, 실시간 STT/TTS, 지식 적재, 부재중 AI 응대 | **대부분 구현**. 근거 예: `reports/2026-01/`의 VectorDB·Phase3·지식 UI 관련 리포트 |
+| **Phase 2** | Dynamic ARS·Intent 기반 대화 | **부분 구현** — Intent·오케스트레이션 경로는 코드·설계 문서와 함께 지속 확장 |
+| **Phase 3** | HITL·운영자 개입·품질 고도화 | **구현됨** — HITL·부재중 모드·통화이력 연계 등 (예: `reports/2026-03/` HITL·대시보드 다수) |
+| **Phase 4** | Agentic·멀티 에이전트 | **부분·실험적** — 도구 호출·에이전트 범위는 제품 로드맵에 따라 확대 |
+
+**데이터 저장소 표기**: 코드 경로에서는 Vector DB로 **ChromaDB** 등을 사용할 수 있다. PRD 본문의 Qdrant/Pinecone 표기는 **상용 확장 옵션**이며, 타깻 스택은 배포 설계서와 정렬한다.
 
 ### 문서 통합 이력
+- **v2.2** (2026-05-08): AI Phase 구현 스냅샷·관련 문서 링크 반영 (리포트·상용 배포 문서와 정합)
 - **v2.1** (2026-02-02): SIP PBX Core PRD와 AI PRD 통합
 - **v2.0** (2026-01-30): Phase 1-4 상세 요구사항 작성
 - **v1.1** (2025-01-05): 기본 SIP PBX PRD (AI 기능 제거)
@@ -164,10 +179,8 @@ B2BUA는 두 개의 독립적인 SIP leg을 생성하여 각각을 완전히 제
 - CDR 생성
 - Structured logging
 
-#### Phase 4: 안정화 (🔄 진행 중)
-- 에러 처리 강화
-- 성능 최적화
-- 문서화 완료
+#### Phase 4: 안정화 (🔄 지속)
+- 에러 처리·성능·문서 및 회귀 테스트 (종료 일정 없음 — 운영 피드백 반영)
 
 ---
 
@@ -180,7 +193,7 @@ B2BUA는 두 개의 독립적인 SIP leg을 생성하여 각각을 완전히 제
 **핵심 기능**:
 - 통화 Transcript 실시간 생성 (STT + Diarization)
 - Transcript → Knowledge Extraction (Q&A 쌍 자동 추출)
-- Vector Database 저장 (Qdrant/Pinecone)
+- Vector Database 저장 (런타임: ChromaDB 등 / 상용 목표 스택은 [production-deployment-architecture.md](../architecture/production-deployment-architecture.md) 참고)
 - RAG Retrieval 엔진
 - **AI 응대 모드 (AI Attendant Mode)**: 착신자 부재중 시 AI 자동 응답
 
@@ -324,13 +337,15 @@ B2BUA는 두 개의 독립적인 SIP leg을 생성하여 각각을 완전히 제
 
 ## 관련 문서
 
-- **[Technical Architecture](../architecture/technical-architecture.md)**: 전체 기술 아키텍처
+- **[Technical Architecture](../architecture/technical-architecture.md)**: 전체 기술 아키텍처 (구현체 기준)
+- **[Production Deployment](../architecture/production-deployment-architecture.md)**: 상용 통합·용량·비용
 - **[Frontend Architecture](../architecture/frontend-architecture.md)**: 프론트엔드 아키텍처
 - **[API Specification](../api/api-specification.md)**: API 명세서
 - **[PRD Detailed Phase 1-4](./prd-detailed-phase1-4.md)**: AI 기능 상세 요구사항
 - **[Project Plan](./project-plan.md)**: 프로젝트 계획서
+- **[Reports index](../reports/README.md)**: 월별 구현·분석 리포트 요약
 
 ---
 
 **문서 완료일**: 2026-02-02  
-**다음 리뷰**: 2026-02-15
+**최종 갱신**: 2026-05-08

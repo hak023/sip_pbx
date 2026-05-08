@@ -11,6 +11,8 @@
 | 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 PostgreSQL/**Qdrant**) · 경계 **AIR GW**·**API/Realtime 단일 접점(VIP) + L4/L7 LB 뒤 All-Active** · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) — **공유 파일 스토리지(NAS)는 초기 생략** §7.3 |
 | DB 제약 | RDB는 **PostgreSQL HA(최소 Primary+Standby)** 기준, 필요 시 Read Replica로 읽기 분산 |
 
+**관련 문서**: 현재 **개발 리포** 구현 세부·런타임 스택은 [technical-architecture.md](./technical-architecture.md)를 본다. 월별 변경·완료 보고서 요약은 [reports/README.md](../reports/README.md).
+
 ---
 
 ## 1) 설계 전제 및 해석

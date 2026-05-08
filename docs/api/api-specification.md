@@ -2,8 +2,11 @@
 ## OpenAPI 3.0 Complete Reference
 
 **Version**: 2.0.0  
-**Base URL**: `https://api.smartpbx.ai`  
-**Protocol**: HTTPS, WebSocket (WSS)
+**Base URL**: `https://api.smartpbx.ai` (예시 — 실제 배포는 환경별 `config`/게이트웨이 URL 사용)  
+**Protocol**: HTTPS, WebSocket (WSS)  
+**문서 갱신**: 2026-05-08
+
+**정합**: REST·WS 엔드포인트·페이로드는 구현과 함께 변할 수 있다. 아키텍처 맥락은 [technical-architecture.md](../architecture/technical-architecture.md), 외부 시스템·상용 단일 접점은 [production-deployment-architecture.md](../architecture/production-deployment-architecture.md) §1.5–§1.6을 병행한다.
 
 ---
 

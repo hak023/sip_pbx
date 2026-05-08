@@ -1,10 +1,11 @@
 # SmartPBX AI - User Flow Documentation
 ## 사용자 여정 및 시나리오 기반 플로우
 
-**문서 버전**: v1.0  
+**문서 버전**: v1.1  
 **작성일**: 2026-01-30  
+**최종 갱신**: 2026-05-08  
 **작성자**: UX Team  
-**상태**: Ready for Review
+**상태**: Living — 요구사항은 [prd.md](../product/prd.md)·[prd-detailed-phase1-4.md](../product/prd-detailed-phase1-4.md), 화면·연동은 [frontend-architecture.md](../architecture/frontend-architecture.md)와 정합 유지
 
 ---
 

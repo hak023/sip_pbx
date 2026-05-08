@@ -10,6 +10,8 @@
 | **프로젝트명** | SIP PBX B2BUA + AI Voice Assistant + Frontend Control Center |
 | **상태** | Production Ready |
 
+**관련**: 상용 통합(교환기·WTIMS·유엔젤/바이토 API·목표 용량)은 [production-deployment-architecture.md](./production-deployment-architecture.md). 단일 리포 기술 스택 요약은 [technical-architecture.md](./technical-architecture.md).
+
 ### 변경 이력
 
 | 날짜 | 버전 | 설명 | 작성자 |

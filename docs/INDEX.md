@@ -2,7 +2,7 @@
 
 전체 문서 구조 및 바로가기.
 
-**최종 수정**: 2026-03-30
+**최종 수정**: 2026-05-08
 
 ---
 
@@ -10,8 +10,21 @@
 
 | 문서 | 설명 |
 |---|---|
-| [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) | 시스템 전체 개요, 기능 상세, 유저 스토리, 아키텍처 (소개자료) |
+| [README.md](README.md) | `docs` 폴더 안내, 주요 문서 표, 읽는 순서 |
+| [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) | 시스템 전체 개요, 기능, 유저 스토리, 다이어그램 링크 (소개자료) |
 | [QUICK_START.md](QUICK_START.md) | 설치 및 실행 가이드 |
+
+### Canonical 아키텍처 (`docs/architecture/`)
+
+`design/`의 동명·유사 주제와 겹칠 수 있다. **긴 형식·스택·배포**는 아래를 우선한다.
+
+| 문서 | 설명 |
+|---|---|
+| [technical-architecture.md](architecture/technical-architecture.md) | **현재 리포** 기준 기술 아키텍처(구현·스택) |
+| [production-deployment-architecture.md](architecture/production-deployment-architecture.md) | **상용 통합** 목표(교환기/WTIMS/API/용량/비용/외부 연동 개발) |
+| [ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md) | AI Voicebot 백엔드 |
+| [frontend-architecture.md](architecture/frontend-architecture.md) | Next.js 운영 콘솔 |
+| [voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md) | Voice AI 대화 엔진 |
 
 ---
 
@@ -146,34 +159,36 @@
 
 ## 리포트 (docs/reports/)
 
-월별 분석·점검·수정 리포트. 파일명 형식: `YYYY-MM-DD_HHmm_주제.md`
+월별 분석·점검·구현 기록. 요약·주제별 대표 링크: **[reports/README.md](reports/README.md)**.
 
-| 폴더 | 내용 |
+| 폴더 | 비고 |
 |---|---|
-| [reports/2026-03/](reports/2026-03/) | 2026년 3월: RTP 오디오 품질 개선, AI 응답 시간 최적화, 호 전환 버그 수정 등 |
+| [reports/2025-10/](reports/2025-10/) | 소량 (예: B2BUA 상태) |
+| [reports/2026-01/](reports/2026-01/) | Phase3·VectorDB·통화이력·프론트 점검 등 (~44편) |
+| [reports/2026-02/](reports/2026-02/) | 성능·로그 분석 등 (~16편) |
+| [reports/2026-03/](reports/2026-03/) | RTP/TTS/HITL/대시보드 등 고빈도 (~218+편) |
+| [reports/2026-04/](reports/2026-04/) | 동월 이슈·구현 기록 (~200+편) |
 
 ---
 
-## 디렉토리 구조
+## 디렉토리 구조 (요약)
 
 ```
 docs/
-├── INDEX.md                    ← 이 파일 (문서 인덱스)
-├── SYSTEM_OVERVIEW.md          ← 시스템 전체 개요 (소개자료)
-├── QUICK_START.md              ← 빠른 시작 가이드
-├── design/                     ← 설계서 (~46개)
-│   ├── AI_VOICEBOT_ARCHITECTURE.md
-│   ├── FRONTEND_ARCHITECTURE.md
-│   ├── INTENT_HANDLING_DESIGN.md
-│   ├── TTS_RTP_AND_STT_QUEUE_DESIGN.md
-│   ├── CHROMADB_CATEGORY_DESIGN.md
-│   ├── HITL_OPERATOR_RESPONSE_FLOW.md
-│   └── ...
-├── guides/                     ← 가이드 (~22개)
-│   ├── TROUBLESHOOTING.md
-│   ├── USER_MANUAL.md
-│   ├── google-api-setup.md
-│   └── ...
-└── reports/                    ← 월별 리포트
-    └── 2026-03/                ← 2026년 3월 (~50+개)
+├── INDEX.md
+├── README.md
+├── SYSTEM_OVERVIEW.md
+├── QUICK_START.md
+├── architecture/          ← canonical 긴 문서 (technical, production-deployment, …)
+├── product/
+├── api/
+├── testing/
+├── ux/
+├── guides/
+├── design/                ← 상세 설계 (~다수), README.md 있음
+├── reports/YYYY-MM/       ← 월별 리포트
+├── presentation/
+├── diagrams/
+├── qa/
+└── analysis/
 ```

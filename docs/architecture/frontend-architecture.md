@@ -3,7 +3,7 @@
 
 **문서 버전**: v2.1 (UI 개선사항 반영)  
 **작성일**: 2026-01-30  
-**최종 업데이트**: 2026-03-06  
+**최종 업데이트**: 2026-05-08  
 **작성자**: Frontend Team  
 **상태**: Implemented
 
@@ -28,6 +28,8 @@
 ---
 
 ## Overview
+
+**관련 문서**: 백엔드·미디어 전체는 [technical-architecture.md](./technical-architecture.md), 백엔드 모듈 상세는 [ai-voicebot-architecture.md](./ai-voicebot-architecture.md). 외부 코어·상용 배포 관점은 [production-deployment-architecture.md](./production-deployment-architecture.md)(API/Realtime 단일 접점 등).
 
 ### 멀티테넌트 지원 (구현 완료)
 

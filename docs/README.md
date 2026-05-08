@@ -1,20 +1,24 @@
 # SmartPBX AI - Documentation
 
-**최종 업데이트**: 2026-02-02  
-**문서 통합 완료**: bmad/docs → sip-pbx/docs
+**최종 업데이트**: 2026-05-08  
+**읽는 순서**: [INDEX.md](./INDEX.md) → 본 README의 표 → 주제별 문서.
 
 ---
 
-## 📋 문서 구조
+## 📋 문서 구조 (요약)
 
 ```
 sip-pbx/docs/
 ├── README.md (이 문서)
+├── INDEX.md               # 전체 인덱스·설계/가이드 링크
 │
-├── architecture/          # 아키텍처 문서
-│   ├── technical-architecture.md      # 전체 기술 아키텍처 (최신, 상세)
-│   ├── ai-voicebot-architecture.md   # AI Voicebot 아키텍처 (기존)
-│   └── frontend-architecture.md      # 프론트엔드 아키텍처 (최신)
+├── architecture/          # 아키텍처 (canonical)
+│   ├── technical-architecture.md       # 구현 기준 기술 아키텍처
+│   ├── production-deployment-architecture.md  # 상용 배포·연동·용량(타깃)
+│   ├── ai-voicebot-architecture.md
+│   ├── frontend-architecture.md
+│   ├── voice-ai-conversation-engine.md
+│   └── …
 │
 ├── product/              # 제품 요구사항 문서
 │   ├── prd.md                        # 통합 PRD (SIP PBX Core + AI)
@@ -36,19 +40,15 @@ sip-pbx/docs/
 │   ├── TROUBLESHOOTING.md
 │   └── ...
 │
-├── reports/              # 완료 보고서 (기존 유지)
-│   ├── B2BUA_STATUS.md
-│   ├── IMPLEMENTATION_STATUS.md
-│   └── ...
+├── reports/              # 월별 완료·분석 리포트 → [reports/README.md](./reports/README.md)
+│   ├── 2025-10/ … 2026-04/ …
+│   └── README.md (월별 규모·주제별 대표 링크)
 │
-├── qa/                   # QA 문서 (기존 유지)
-│   └── ...
-│
-├── analysis/             # 분석 문서 (기존 유지)
-│   └── ...
-│
-└── design/               # 설계 문서 (기존 유지)
-    └── ...
+├── presentation/         # 브리프·요약 (선택)
+├── diagrams/             # Mermaid 소스·시스템 개요 다이어그램
+├── qa/                   # QA
+├── analysis/             # 분석
+└── design/               # 상세 설계 (~다수)
 ```
 
 ---
@@ -57,11 +57,13 @@ sip-pbx/docs/
 
 ### 아키텍처 문서
 
-| 문서 | 설명 | 페이지 수 | 상태 |
-|------|------|----------|------|
-| **[technical-architecture.md](./architecture/technical-architecture.md)** | 전체 기술 아키텍처 (SIP PBX + AI Layer) | ~2,800줄 | ✅ 최신 |
-| **[ai-voicebot-architecture.md](./architecture/ai-voicebot-architecture.md)** | AI Voicebot Backend 아키텍처 | ~1,765줄 | ✅ 기존 유지 |
-| **[frontend-architecture.md](./architecture/frontend-architecture.md)** | React 기반 운영자 대시보드 | ~2,300줄 | ✅ 최신 |
+| 문서 | 설명 | 비고 |
+|------|------|------|
+| **[technical-architecture.md](./architecture/technical-architecture.md)** | 단일 리포 구현 기준 SIP PBX + AI 레이어 | 코드·스택과 정합 유지 |
+| **[production-deployment-architecture.md](./architecture/production-deployment-architecture.md)** | 상용 통합(교환기/WTIMS/API)·용량·비용·외부 연동 개발 항목 | 런타임 구현과 다를 수 있음 — 문서 서두 참고 |
+| **[ai-voicebot-architecture.md](./architecture/ai-voicebot-architecture.md)** | AI Voicebot 백엔드 | |
+| **[frontend-architecture.md](./architecture/frontend-architecture.md)** | Next.js 운영 콘솔 | |
+| **[voice-ai-conversation-engine.md](./architecture/voice-ai-conversation-engine.md)** | Voice AI 대화 엔진(Pipecat·Agentic RAG 등) | |
 
 ### 제품 문서
 
@@ -94,9 +96,11 @@ sip-pbx/docs/
 ## 🎯 빠른 시작 가이드
 
 ### 처음 시작하는 경우
-1. **[QUICK_START.md](./QUICK_START.md)** - 5분 설치 및 실행
-2. **[SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)** - 전체 시스템 이해
-3. **[architecture/technical-architecture.md](./architecture/technical-architecture.md)** - 기술 아키텍처 상세
+1. **[INDEX.md](./INDEX.md)** - 문서 지도
+2. **[QUICK_START.md](./QUICK_START.md)** - 설치 및 실행
+3. **[SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)** - 전체 시스템 이해
+4. **[architecture/technical-architecture.md](./architecture/technical-architecture.md)** - 구현 기준 기술 아키텍처
+5. **상용 통합·용량** 검토 시 **[production-deployment-architecture.md](./architecture/production-deployment-architecture.md)**
 
 ### 개발자
 1. **[architecture/technical-architecture.md](./architecture/technical-architecture.md)** - 전체 기술 아키텍처
@@ -124,7 +128,8 @@ sip-pbx/docs/
 #### Architecture 문서
 - ✅ **technical-architecture.md**: `bmad/docs/technical-architecture.md` → `sip-pbx/docs/architecture/` (최신, 상세)
 - ✅ **frontend-architecture.md**: `bmad/docs/frontend-architecture.md` → `sip-pbx/docs/architecture/` (최신)
-- ✅ **ai-voicebot-architecture.md**: `sip-pbx/docs/ai-voicebot-architecture.md` → `sip-pbx/docs/architecture/` (기존 유지)
+- ✅ **ai-voicebot-architecture.md**: `sip-pbx/docs/architecture/` (기존 이동)
+- ➕ **production-deployment-architecture.md**: 상용 통합·용량 (2026년 이후 추가, sip-pbx 로컬 작성)
 
 #### Product 문서
 - ✅ **prd.md**: `bmad/docs/prd.md` + `bmad/docs/prd-detailed-phase1-4.md` 통합 → `sip-pbx/docs/product/prd.md`
@@ -148,10 +153,12 @@ sip-pbx/docs/
 
 ## 📁 카테고리별 문서 목록
 
-### Architecture (3개)
-- [technical-architecture.md](./architecture/technical-architecture.md) - 전체 기술 아키텍처
-- [ai-voicebot-architecture.md](./architecture/ai-voicebot-architecture.md) - AI Voicebot 아키텍처
-- [frontend-architecture.md](./architecture/frontend-architecture.md) - 프론트엔드 아키텍처
+### Architecture (대표)
+- [technical-architecture.md](./architecture/technical-architecture.md)
+- [production-deployment-architecture.md](./architecture/production-deployment-architecture.md)
+- [ai-voicebot-architecture.md](./architecture/ai-voicebot-architecture.md)
+- [frontend-architecture.md](./architecture/frontend-architecture.md)
+- [voice-ai-conversation-engine.md](./architecture/voice-ai-conversation-engine.md)
 
 ### Product (3개)
 - [prd.md](./product/prd.md) - 통합 PRD
@@ -179,11 +186,9 @@ sip-pbx/docs/
 - [QUICK_START_FRONTEND.md](./guides/QUICK_START_FRONTEND.md)
 - [START_ALL_GUIDE.md](./guides/START_ALL_GUIDE.md)
 
-### Reports (30+개) - 기존 유지
-- [B2BUA_STATUS.md](./reports/B2BUA_STATUS.md)
-- [IMPLEMENTATION_STATUS.md](./reports/IMPLEMENTATION_STATUS.md)
-- [AI-COMPLETION-CHECKLIST.md](./reports/AI-COMPLETION-CHECKLIST.md)
-- ... (기타 완료 보고서)
+### Reports (월별)
+- 인덱스: **[reports/README.md](./reports/README.md)** (월별 문서 수·주제별 대표 리포트)
+- 예: [reports/2025-10/B2BUA_STATUS.md](./reports/2025-10/B2BUA_STATUS.md), [reports/2026-01/IMPLEMENTATION_STATUS.md](./reports/2026-01/IMPLEMENTATION_STATUS.md)
 
 ### QA (5개) - 기존 유지
 - [test-strategy.md](./qa/test-strategy.md)
@@ -193,10 +198,8 @@ sip-pbx/docs/
 ### Analysis (1개) - 기존 유지
 - [ai-response-time-analysis.md](./analysis/ai-response-time-analysis.md)
 
-### Design (4개) - 기존 유지
-- [ai-implementation-guide.md](./design/ai-implementation-guide.md)
-- [ai-implementation-guide-part2.md](./design/ai-implementation-guide-part2.md)
-- [OPERATOR-AWAY-MODE-DESIGN.md](./design/OPERATOR-AWAY-MODE-DESIGN.md)
+### Design (다수) — [design/README.md](./design/README.md) 참고
+- 예: [ai-implementation-guide.md](./design/ai-implementation-guide.md), [OPERATOR-AWAY-MODE-DESIGN.md](./design/OPERATOR-AWAY-MODE-DESIGN.md)
 
 ---
 
@@ -208,8 +211,9 @@ sip-pbx/docs/
 - [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md) - 시스템 개요
 
 ### 아키텍처
-- [Technical Architecture](./architecture/technical-architecture.md) ⭐ 최신
-- [Frontend Architecture](./architecture/frontend-architecture.md) ⭐ 최신
+- [Technical Architecture](./architecture/technical-architecture.md) — 구현체 기준
+- [Production Deployment](./architecture/production-deployment-architecture.md) — 상용 타깃·연동
+- [Frontend Architecture](./architecture/frontend-architecture.md)
 - [AI Voicebot Architecture](./architecture/ai-voicebot-architecture.md)
 
 ### 제품
@@ -231,7 +235,7 @@ sip-pbx/docs/
 | **테스트 전략** | `docs/testing/` | backend-testing-strategy.md |
 | **UX/사용자 플로우** | `docs/ux/` | user-flow.md |
 | **사용 가이드** | `docs/guides/` | USER_MANUAL.md |
-| **완료 보고서** | `docs/reports/` | IMPLEMENTATION_STATUS.md |
+| **완료 보고서** | `docs/reports/YYYY-MM/` | 월별 생성. 요약은 `reports/README.md` |
 | **설계 문서** | `docs/design/` | ai-implementation-guide.md |
 
 ### 파일명 규칙
@@ -270,5 +274,4 @@ sip-pbx/docs/
 
 ---
 
-**문서 통합 완료일**: 2026-02-02  
-**다음 리뷰**: 2026-02-15
+**문서 통합 기준일(이력)**: 2026-02-02 (bmad → sip-pbx)

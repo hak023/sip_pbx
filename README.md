@@ -109,8 +109,8 @@ SIP PBX는 Python으로 구현된 고성능 **B2BUA(Back-to-Back User Agent)** �
 > 📚 **전체 문서 인덱스**: [docs/INDEX.md](docs/INDEX.md) ⭐  
 > 🚀 **빠른 시작**: [docs/QUICK_START.md](docs/QUICK_START.md)  
 > 🌐 **시스템 개요**: [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md)  
-> 🤖 **AI Voicebot 아키텍처**: [docs/ai-voicebot-architecture.md](docs/ai-voicebot-architecture.md)  
-> 🖥️ **Frontend 아키텍처**: [docs/frontend-architecture.md](docs/frontend-architecture.md)
+> 🤖 **AI Voicebot 아키텍처**: [docs/architecture/ai-voicebot-architecture.md](docs/architecture/ai-voicebot-architecture.md)  
+> 🖥️ **Frontend 아키텍처**: [docs/architecture/frontend-architecture.md](docs/architecture/frontend-architecture.md)
 
 ## 🚀 기술 스택
 
@@ -726,9 +726,10 @@ sequenceDiagram
 | [docs/INDEX.md](docs/INDEX.md) | **📚 문서 인덱스** - 전체 문서 탐색 시작점 |
 | [docs/QUICK_START.md](docs/QUICK_START.md) | **🚀 5분 빠른 시작** - 설치 및 실행 |
 | [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) | **🌐 시스템 개요** - 아키텍처, 데이터 플로우 |
-| [docs/ai-voicebot-architecture.md](docs/ai-voicebot-architecture.md) | **🤖 AI Voicebot 아키텍처** - STT/TTS/LLM/RAG/HITL |
+| [docs/architecture/ai-voicebot-architecture.md](docs/architecture/ai-voicebot-architecture.md) | **🤖 AI Voicebot 아키텍처** - STT/TTS/LLM/RAG/HITL |
 | [docs/architecture/voice-ai-conversation-engine.md](docs/architecture/voice-ai-conversation-engine.md) | **🧠 Voice AI 대화 엔진** - Pipecat + Smart Turn + LangGraph Agentic RAG |
-| [docs/frontend-architecture.md](docs/frontend-architecture.md) | **🖥️ Frontend 아키텍처** - Next.js Control Center |
+| [docs/architecture/frontend-architecture.md](docs/architecture/frontend-architecture.md) | **🖥️ Frontend 아키텍처** - Next.js Control Center |
+| [docs/architecture/production-deployment-architecture.md](docs/architecture/production-deployment-architecture.md) | **🏭 상용 배포·연동** - WTIMS/API/용량·비용 (타깃 설계) |
 
 ### 📂 추가 문서
 
@@ -736,7 +737,7 @@ sequenceDiagram
 - **아키텍처 설계**: [docs/architecture/](docs/architecture/) - Technical Architecture, Voice AI Conversation Engine
 - **상세 설계**: [docs/design/](docs/design/) - 구현 가이드 Part 1, 2 (3개)
 - **분석 자료**: [docs/analysis/](docs/analysis/) - 응답 시간 분석 (1개)
-- **완료 보고서**: [docs/reports/](docs/reports/) - 구현 상태, B2BUA 상태 등 (5개)
+- **완료 보고서**: [docs/reports/](docs/reports/) — 월별 폴더·요약은 [docs/reports/README.md](docs/reports/README.md)
 - 🔒 **[보안 가이드](docs/SECURITY.md)** - 보안 설정 *(예정)*
 
 ## 🛠️ 개발

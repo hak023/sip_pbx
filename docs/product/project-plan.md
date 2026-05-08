@@ -3,7 +3,8 @@
 
 **작성일**: 2026-01-30  
 **버전**: v1.0  
-**작성자**: Business Analyst (Mary)
+**작성자**: Business Analyst (Mary)  
+**유지보수 메모 (2026-05-08)**: 시장·재무·실행 로드맵 본문은 **기획 시점 기준**이다. **실제 구현 진척·상용 타깻 배포**는 [Technical Architecture](../architecture/technical-architecture.md), [Production Deployment](../architecture/production-deployment-architecture.md), [통합 PRD](./prd.md), [reports/README](../reports/README.md)를 우선한다.
 
 ---
 

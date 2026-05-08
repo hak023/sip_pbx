@@ -1,6 +1,6 @@
 # 🏗️ Design - 상세 설계 문서
 
-개발자를 위한 구현 수준의 상세 설계 문서 모음
+개발자를 위한 구현 수준의 상세 설계 문서 모음. **최종 아키텍처·스택**은 [../architecture/](../architecture/)의 `technical-architecture.md`·`production-deployment-architecture.md`를 우선한다(본 폴더는 설계·연구·히스토리가 섞일 수 있음).
 
 ---
 
@@ -98,12 +98,14 @@ AI 컴포넌트 구현 가이드 Part 2
 
 ## 🔗 관련 문서
 
-- **아키텍처**: [../ai-voicebot-architecture.md](../ai-voicebot-architecture.md)
-- **구현 상태**: [../reports/IMPLEMENTATION_STATUS.md](../reports/IMPLEMENTATION_STATUS.md)
-- **Frontend 설계**: [../frontend-architecture.md](../frontend-architecture.md)
+- **구현 기술 아키텍처**: [../architecture/technical-architecture.md](../architecture/technical-architecture.md)
+- **백엔드 모듈 상세**: [../architecture/ai-voicebot-architecture.md](../architecture/ai-voicebot-architecture.md)
+- **상용 배포·연동(타깃)**: [../architecture/production-deployment-architecture.md](../architecture/production-deployment-architecture.md)
+- **Frontend**: [../architecture/frontend-architecture.md](../architecture/frontend-architecture.md)
+- **구현·분석 리포트**: [../reports/README.md](../reports/README.md) (월별, 예: `2026-01/IMPLEMENTATION_STATUS.md`)
 
 ---
 
 **상위 문서 인덱스**: [../INDEX.md](../INDEX.md)  
-**최종 업데이트**: 2026-01-06
+**최종 업데이트**: 2026-05-08
 

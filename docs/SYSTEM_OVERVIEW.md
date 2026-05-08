@@ -5,7 +5,7 @@
 | 항목 | 내용 |
 |------|------|
 | **대상 독자** | 제품·운영·엔지니어링 이해관계자, 시스템 아키텍처 검토에 참여하는 팀 |
-| **최종 수정** | 2026-04-27 |
+| **최종 수정** | 2026-05-08 (부록·상용 아키텍처 링크 갱신) |
 | **이전 문서 백업** | 상세 항목·API 표가 필요하면 [`SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md`](SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md) 참고 |
 
 ### 다이어그램 (PNG) — 문서·교육 자료 등에 삽입
@@ -1923,4 +1923,4 @@ flowchart LR
 
 ---
 
-*이 문서는 고수준 **아키텍처**와 **기능**을 한데 묶은 **시스템 개요**에 초점을 맞췄다. 경계 조건·플래그·엔드포인트·API 상세는 코드와 `docs/reports` 리포트를 병행한다.*
+*이 문서는 고수준 **아키텍처**와 **기능**을 한데 묶은 **시스템 개요**에 초점을 맞췄다. 경계 조건·플래그·엔드포인트·API 상세는 코드와 `docs/reports` 리포트를 병행한다. **기존 교환기·WTIMS·외부 API와 붙는 상용 통합·용량**은 별도로 [`architecture/production-deployment-architecture.md`](architecture/production-deployment-architecture.md)를 본다.*

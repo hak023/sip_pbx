@@ -1,10 +1,13 @@
 # SmartPBX AI - Backend Testing Strategy
 ## Comprehensive Testing Framework for Python Backend
 
-**문서 버전**: v1.0  
+**문서 버전**: v1.1  
 **작성일**: 2026-01-30  
+**최종 갱신**: 2026-05-08  
 **작성자**: QA Team  
 **상태**: Implementation Ready
+
+**정합**: 테스트 피라미드·도구는 본 문서를 표준으로 하되, **실행 결과·커버리지**는 [`docs/qa/`](../qa/) 및 월별 [`docs/reports/`](../reports/README.md) 리포트와 함께 본다.
 
 ---
 

@@ -1,11 +1,11 @@
 # SmartPBX AI - Technical Architecture Document
 ## Active RAG 기반 지능형 통화 응대 시스템 - 기술 아키텍처
 
-**문서 버전**: v2.0 (멀티테넌트 반영)  
+**문서 버전**: v2.1  
 **작성일**: 2026-01-30  
-**최종 업데이트**: 2026-02-13  
+**최종 업데이트**: 2026-05-08  
 **작성자**: Architecture Team  
-**상태**: Implemented
+**상태**: Implemented (본 리포 코드베이스 기준)
 
 ---
 
@@ -21,6 +21,18 @@
 8. [Security Architecture](#security-architecture)
 9. [Performance & Scalability](#performance--scalability)
 10. [Monitoring & Observability](#monitoring--observability)
+
+---
+
+## 문서 역할 및 관련 문서
+
+| 문서 | 역할 |
+|------|------|
+| **본 문서** | 단일 리포지토리 기준 **현재 구현** 기술 아키텍처(SIP B2BUA + AI 레이어). 스택 표의 Vector DB 등은 **런타임 구현**을 반영한다. |
+| [production-deployment-architecture.md](./production-deployment-architecture.md) | 기존 교환기·통화매니저AS·WTIMS와 붙는 **상용 통합·목표 용량·DB/비용**(PostgreSQL·Qdrant 등). 구현 리포와 다를 수 있다. |
+| [ai-voicebot-architecture.md](./ai-voicebot-architecture.md) | 백엔드 모듈·시퀀스 중심 설명. |
+| [Frontend Architecture](./frontend-architecture.md) | Next.js 운영 콘솔. |
+| [reports/README.md](../reports/README.md) | 월별 구현·분석 리포트 인덱스. |
 
 ---
 
