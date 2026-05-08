@@ -125,12 +125,12 @@
 flowchart LR
     subgraph EXT["외부 통신 영역"]
         CUST["PSTN/SIP 가입자<br/>단말·클라이언트"]
-        EX["교환기 노드 N개<br/>프로세스형 서버"]
         PCL["유저 PC Client<br/>통화매니저 프론트엔드"]
         BAPI["통화매니저 API<br/>바이토 · 외부"]
     end
 
     subgraph CORE["기존 코어 통신 영역 · 프로세스형 서버"]
+        EX["교환기 노드 N개<br/>프로세스형 서버"]
         CM["통화매니저AS Pair<br/>프로세스형 서버"]
         WT["WTIMS RTP Cluster<br/>프로세스형 서버"]
         UAPI["통화매니저 API<br/>유엔젤 · 코어"]
@@ -222,7 +222,7 @@ flowchart LR
 
 ### 구조 설명
 
-- 교환기 N개가 외부 트래픽을 분산하므로 별도 LB를 두지 않는다.
+- 교환기 N개는 **기존 코어**에서 외부(PSTN/SIP) 트래픽을 분산·중계하므로 별도 LB를 두지 않는다(도표상 **외부 통신 영역**이 아닌 **기존 코어**에 둔다).
 - 통화매니저AS는 SIP 세션 상태 머신/호제어를 담당하고, WTIMS는 RTP 실시간 중계를 담당한다.
 - **AI Call Agent 시스템**은 STT·TTS·LLM·AI Runtime·API/Realtime·데이터 계층(PostgreSQL·Qdrant) 등 **신규 서버 모음**을 가리킨다. **통화 녹음 파일은 기존 WTIMS**에서 수행·보관하며, AI 계층은 **전용 공유 파일 스토리지 없이** 노드 **로컬 임시**로 부산물·캐시를 처리한다(§7.3). **EMS**(관측)는 같은 업무 도메인과 연계되지만 **별도 구역**으로 두고, OTel Collector·Metrics TSDB·Log·Trace·Alert·Grafana를 **각각 독립 프로세스**로 배포한다. AI Runtime이 통화 이벤트 기반으로 STT/LLM/TTS를 호출하고, 결과 음성을 다시 WTIMS로 전달한다.
 - 호의 **통합 시그널**(세션 스냅샷·`call_id`·레그 바인딩 메타)은 **통화매니저AS → WTIMS → AIR 연동 접점 GW → AI Runtime**으로 릴레이된다. 코어(WT)는 GW **한 주소**만 사용한다(§1.4). **RTP 미디어**(Mirror→STT, TTS→WT 등)는 **GW를 거치지 않고** WTIMS가 STT·AIR·WT 간 직접 경로를 유지한다(§1.4 표).
@@ -242,11 +242,11 @@ EMS를 외부 공용 관제나 기존 전사 관제로 대체하는 경우, 아�
 ```mermaid
 flowchart LR
     subgraph EXT["외부 통신 영역"]
-        EX["교환기 노드 N개"]
         PCL["유저 PC Client"]
         BAPI["통화매니저 API 바이토"]
     end
     subgraph CORE["기존 코어"]
+        EX["교환기 노드 N개"]
         CM["통화매니저AS"]
         WT["WTIMS"]
         UAPI["통화매니저 API 유엔젤"]
@@ -297,7 +297,7 @@ flowchart LR
 | 구분 | 형태 | 노드·서버 | 수행 역할 |
 |------|------|-----------|-----------|
 | 외부 | 단말·클라이언트 | PSTN/SIP 가입자 | 발신·착신 호·미디어 단말 |
-| 외부 | 프로세스형 서버 | 교환기 노드 N개 | SIP Trunk 진입·분산·코어로 라우팅, 외부와 코어 사이 게이트 |
+| 기존 코어 | 프로세스형 서버 | 교환기 노드 N개 | SIP Trunk 진입·분산·통화매니저AS로 라우팅(도표상 **기존 코어** 영역) |
 | 기존 코어 | 프로세스형 서버 | 통화매니저AS | SIP 세션 상태·호 제어·WTIMS로 SDP/미디어 앵커 제어, **호 세션 스냅샷을 WTIMS로 릴레이**해 AI 경로를 단순화 |
 | 기존 코어 | 프로세스형 서버 | WTIMS | RTP/RTCP 릴레이·미러·플레이아웃, STT용 RTP fork, **통화 녹음(기존)**, **CM 세션 정보 + 미디어 레그 바인딩을 통합 시그널로 AIR 연동 접점(단일 주소)으로 전달** §2.2 |
 | 기존 코어 | 프로세스형 서버 | 통화매니저 API · 유엔젤 | 코어 망 **REST 등** — 코어 통신 **설정·상태·정보 조회**; **AI 호출 시** **API/Realtime 단일 접점**으로 진입 §1.6 |
