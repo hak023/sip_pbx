@@ -1,6 +1,7 @@
 # AI Voicebot 아키텍처 설계서
 
 **목적**: AI 음성봇의 전체 구조, 컴포넌트 간 데이터 흐름, 주요 설계 결정을 기술한다.
+> **참고**: 이 문서는 초기 설계 시점의 히스토리 문서입니다. 최신(Canonical) 아키텍처는 [`../architecture/ai-voicebot-architecture.md`](../architecture/ai-voicebot-architecture.md)를 참고하세요.
 **작성일**: 2026-03-30
 
 ---

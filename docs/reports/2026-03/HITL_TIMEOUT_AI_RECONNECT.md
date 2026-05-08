@@ -437,7 +437,7 @@ get_hitl_service().start_fallback_timer(self._call_id or "", timeout_sec=20.0)
 
 - [HITL Implementation Complete](./HITL_IMPLEMENTATION_COMPLETE.md)
 - [HITL Implementation Checklist](./HITL_IMPLEMENTATION_CHECKLIST.md)
-- [System Overview (HITL Section)](../SYSTEM_OVERVIEW.md#268-295)
+- [System Overview (HITL Section)](../../SYSTEM_OVERVIEW.md#268-295)
 
 ---
 

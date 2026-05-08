@@ -747,8 +747,8 @@ grep "ai_200_ok_sent" logs/app.log
 ## 📚 참고 자료
 
 - [RFC 3261 - SIP](https://tools.ietf.org/html/rfc3261)
-- [RTP Relay 구현 가이드](./RTP_RELAY.md)
-- [AI Voicebot 아키텍처](./AI_VOICEBOT_ARCHITECTURE.md)
+- [RTP·미디어 레이어 개요](architecture/technical-architecture.md)
+- [AI Voicebot 아키텍처](architecture/ai-voicebot-architecture.md)
 
 ---
 

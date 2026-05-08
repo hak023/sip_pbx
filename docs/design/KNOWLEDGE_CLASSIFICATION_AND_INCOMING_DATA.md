@@ -1,4 +1,10 @@
 # ChromaDB 지식 분류 체계 및 인입 데이터 예시
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`KNOWLEDGE_MANAGEMENT_DESIGN.md`](KNOWLEDGE_MANAGEMENT_DESIGN.md)
+>
+---
+
 
 **작성일**: 2026-03-16  
 **배경**: [CALL_SaE6Smt5g3_RAG_DEBUG.md](../reports/2026-03/CALL_SaE6Smt5g3_RAG_DEBUG.md) — question 시 category 제한 제거 후, 데이터 증가에 대비한 **세분화 분류** 및 **인입 경로별 예시** 정리.

@@ -447,8 +447,8 @@ Content-Type: audio/wav
 
 **관련 문서**:  
 - [CALL_HISTORY_TRANSCRIPT_DISPLAY_ISSUE.md](CALL_HISTORY_TRANSCRIPT_DISPLAY_ISSUE.md) - 문제 분석 보고서  
-- [frontend-architecture.md](../frontend-architecture.md) - Frontend 아키텍처  
-- [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) - 시스템 개요  
+- [frontend-architecture.md](../../architecture/frontend-architecture.md) - Frontend 아키텍처  
+- [SYSTEM_OVERVIEW.md](../../SYSTEM_OVERVIEW.md) - 시스템 개요  
 
 ---
 

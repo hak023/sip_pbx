@@ -1,4 +1,10 @@
 # ChromaDB 카테고리 분류 설계 (Intent 연동)
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`KNOWLEDGE_MANAGEMENT_DESIGN.md`](KNOWLEDGE_MANAGEMENT_DESIGN.md)
+>
+---
+
 
 **목적**: 저장 시 분류(category)로 적재하고, RAG/캐시 검색 시 intent에 따라 적절한 문서만 검색. greeting/farewell 등 자주 바뀌지 않는 메시지는 입력 즉시 캐싱해 효율적으로 사용.
 

@@ -91,7 +91,7 @@ AI Voicebot 응답 시간 상세 분석 (532 lines)
 
 ## 🔗 관련 문서
 
-- **아키텍처**: [../ai-voicebot-architecture.md](../ai-voicebot-architecture.md)
+- **아키텍처**: [../architecture/ai-voicebot-architecture.md](../architecture/ai-voicebot-architecture.md)
 - **모델 비교**: [../guides/gemini-model-comparison.md](../guides/gemini-model-comparison.md)
 - **시스템 개요**: [../SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md)
 

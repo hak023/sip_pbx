@@ -1,4 +1,10 @@
 # HITL 지연 응답 설계 (Deferred HITL Response Design)
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`HITL_OPERATOR_RESPONSE_FLOW.md`](HITL_OPERATOR_RESPONSE_FLOW.md)
+>
+---
+
 
 **작성일**: 2026-03-17  
 **목적**: HITL timeout을 20분으로 늘리고, 운영자 응답 시 자연스러운 문맥 전환 지원  

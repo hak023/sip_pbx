@@ -1,6 +1,7 @@
 # Frontend 아키텍처 설계서
 
 **목적**: Next.js 기반 운영자 대시보드의 구조, 데이터 흐름, 주요 기능을 기술한다.
+> **참고**: 이 문서는 초기 설계 시점의 히스토리 문서입니다. 최신(Canonical) 아키텍처는 [`../architecture/frontend-architecture.md`](../architecture/frontend-architecture.md)를 참고하세요.
 **작성일**: 2026-03-30
 
 ---

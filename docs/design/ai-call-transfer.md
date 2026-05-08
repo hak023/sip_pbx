@@ -1,4 +1,10 @@
 # AI 호 연결 (Call Transfer) 기능 설계서
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`AI_DYNAMIC_CALL_TRANSFER_DESIGN.md`](AI_DYNAMIC_CALL_TRANSFER_DESIGN.md)
+>
+---
+
 
 > **Version**: 1.1  
 > **Date**: 2026-01-29 (Updated: 2026-02-13)  

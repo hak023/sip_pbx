@@ -1,5 +1,9 @@
 # Project Brief: Agentic AI Callbot — 듣고, 이해하고, 처리하는 통화 비서
 
+**문서 성격**: 발표·기획용 브리프. **현재 리포 구현 기준 스택·컴포넌트 경계**는 [`../architecture/technical-architecture.md`](../architecture/technical-architecture.md)를 단일 소스로 따른다. 기존 교환기·WTIMS 등 **상용 통합·목표 인프라**는 [`../architecture/production-deployment-architecture.md`](../architecture/production-deployment-architecture.md)를 참고한다.
+
+**최종 검토**: 2026-05-08
+
 ---
 
 ## Executive Summary
@@ -101,9 +105,9 @@ Agentic AI Callbot은 표준 SIP 기반 통화 제어 위에 실시간 음성 AI
 | **Client & External Access** | 사용자와 시스템 간의 접점. SIP 단말/트렁크를 통한 통화 접속과 Next.js 기반의 웹 운영 콘솔(Call Dock)을 포함합니다. |
 | **Application Tier** | 시스템 제어 및 실시간 상태 관리. FastAPI를 통한 REST API(착신 라우팅 설정 등)와 Socket.IO를 통한 실시간 양방향 이벤트 처리를 담당합니다. |
 | **Core Processing Engine** | 시스템의 핵심 로직. **AI Voice + Agent**(LangGraph 의도 분류, Pipecat 음성 파이프라인)와 **SIP / RTP Core**(B2BUA 세션 제어, RTP 브리지)가 상호작용합니다. |
-| **Data Storage & External** | 영속성 데이터 보관 및 외부 연동. SQLite(관계형 DB), ChromaDB(벡터 DB), Google Cloud AI(STT/TTS, Gemini) 모듈이 위치합니다. |
+| **Data Storage & External** | 영속성 데이터 보관 및 외부 연동. **SQLite**(통화 이력·운영 데이터 등 현재 구현), **ChromaDB**(벡터·테넌트 설정), Google Cloud AI(STT/TTS, Gemini). 상용 배포에서의 **PostgreSQL/Qdrant 등 목표 구성**은 production-deployment 아키텍처 문서를 본다. |
 
-설정에 따라 LLM·RAG 요약을 별도 DB에 적재하는 **옵션 로깅(asyncpg 등)** 이 붙을 수 있습니다 — 상세는 배포 환경의 `config` 기준입니다.
+설정에 따라 LLM·RAG 요약을 별도 DB에 적재하는 **옵션 로깅(asyncpg 등)** 이 붙을 수 있습니다 — 상세는 배포 환경의 `config` 및 [`technical-architecture.md`](../architecture/technical-architecture.md) 기준입니다.
 
 ### 3.3 LangGraph 의도 라우팅 구조
 

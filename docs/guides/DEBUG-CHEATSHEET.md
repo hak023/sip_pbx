@@ -117,6 +117,6 @@ curl http://localhost:8080/health
 ## 📖 상세 가이드
 
 **더 자세한 정보:**
-- [디버깅 가이드 (전체)](docs/DEBUGGING.md)
-- [사용 매뉴얼](docs/USER_MANUAL.md)
+- [디버깅 가이드 (전체)](DEBUGGING.md)
+- [사용 매뉴얼](USER_MANUAL.md)
 

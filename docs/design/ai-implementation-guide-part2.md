@@ -1,4 +1,10 @@
 # AI 컴포넌트 구현 가이드 Part 2
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`ai-implementation-guide.md`](ai-implementation-guide.md)
+>
+---
+
 
 이 문서는 Part 1의 연속입니다.
 

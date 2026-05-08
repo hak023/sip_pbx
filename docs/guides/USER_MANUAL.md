@@ -418,8 +418,8 @@ A: 현재는 개발 단계입니다. 프로덕션 사용 전 충분한 테스트
 
 ## 지원
 
-- 📘 [Quick Start Guide](QUICK_START.md)
+- 📘 [Quick Start Guide](../QUICK_START.md)
 - 🐛 [Debugging Guide](DEBUGGING.md)
-- 🔧 [B2BUA Status](B2BUA_STATUS.md)
+- 🔧 [B2BUA Status](../reports/2025-10/B2BUA_STATUS.md)
 - 📂 [GitHub Issues](https://github.com/your-org/sip-pbx/issues)
 

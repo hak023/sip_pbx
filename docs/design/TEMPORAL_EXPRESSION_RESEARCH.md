@@ -1,4 +1,10 @@
 # 시제 표현 처리 (Temporal Expression Resolution) 리서치
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`TTS_RTP_AND_STT_QUEUE_DESIGN.md`](TTS_RTP_AND_STT_QUEUE_DESIGN.md)
+>
+---
+
 
 ## 📋 개요
 

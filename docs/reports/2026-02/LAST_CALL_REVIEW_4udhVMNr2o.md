@@ -73,13 +73,13 @@
   - **farewell 시**: LangGraph `update_state` 노드에서 `state["response"]`에 마무리 멘트를 설정하도록 수정.
   - **DB(VectorDB tenant_config)**: `closing_templates` 필드에 JSON 배열로 마무리 멘트 목록 저장. `OrganizationInfoManager.get_random_closing_template()`으로 랜덤 선택.
   - **기본값**: DB에 없거나 비어 있으면 `"감사합니다. 필요하시면 다시 연락 주세요."` 사용.
-- **문서**: [technical-architecture.md](../architecture/technical-architecture.md) tenant_config 스키마, [multi-tenant-rag-and-dashboard.md](../design/multi-tenant-rag-and-dashboard.md) 예시·흐름 참고.
+- **문서**: [technical-architecture.md](../../architecture/technical-architecture.md) tenant_config 스키마, [multi-tenant-rag-and-dashboard.md](../../design/multi-tenant-rag-and-dashboard.md) 예시·흐름 참고.
 
 ### 2.5 DB/로깅 설정 경고 (통화 품질과 무관)
 
 - `DB client not configured, skipping RAG logging`  
 - `DB client not configured, skipping knowledge match logging`  
-  AI DB 로깅이 꺼져 있어, RAG/지식 매칭 이벤트가 DB에 남지 않음. (설정 가이드: [AI_DB_LOGGING_SETUP.md](../guides/AI_DB_LOGGING_SETUP.md))
+  AI DB 로깅이 꺼져 있어, RAG/지식 매칭 이벤트가 DB에 남지 않음. (설정 가이드: [AI_DB_LOGGING_SETUP.md](../../guides/AI_DB_LOGGING_SETUP.md))
 
 ### 2.6 no_answer_timeout 중복 로그
 
@@ -108,12 +108,12 @@
 | **높음** | LLM 오늘/내일 혼동 | semantic cache 키/스코어 또는 의도 분류가 “내일 날씨”와 “오늘 날씨”를 구분하도록 점검. 쿼리 정규화(rewrite) 시 “내일”이 유지되는지 확인. |
 | **중간** | LLM 응답 절단 | “서울 지역…” 답변의 max_output_tokens 또는 스트리밍 종료 조건 확인. URL/긴 문장이 끝까지 생성되도록 조정. |
 | **완료** | farewell 빈 응답 | DB tenant_config.closing_templates + update_state에서 마무리 멘트 설정. 기본값 제공. |
-| **참고** | DB 로깅 | 운영에서 RAG/지식 매칭 분석이 필요하면 `ai_logger.set_db_client(db)` 및 [AI_DB_LOGGING_SETUP.md](../guides/AI_DB_LOGGING_SETUP.md) 적용. |
+| **참고** | DB 로깅 | 운영에서 RAG/지식 매칭 분석이 필요하면 `ai_logger.set_db_client(db)` 및 [AI_DB_LOGGING_SETUP.md](../../guides/AI_DB_LOGGING_SETUP.md) 적용. |
 
 ---
 
 ## 5. 참고 문서
 
 - [TTS_RTP_QUEUE_REVIEW.md](./TTS_RTP_QUEUE_REVIEW.md) — TTS 출력·queueing·불일치 원인 분석  
-- [TTS_RTP_AND_HITL_DESIGN.md](./TTS_RTP_AND_HITL_DESIGN.md) — TTS→RTP·HITL 설계  
-- [AI_DB_LOGGING_SETUP.md](../guides/AI_DB_LOGGING_SETUP.md) — AI DB 로깅 설정
+- [TTS_RTP_AND_STT_QUEUE_DESIGN.md](../../design/TTS_RTP_AND_STT_QUEUE_DESIGN.md) — TTS→RTP·대기열 설계  
+- [AI_DB_LOGGING_SETUP.md](../../guides/AI_DB_LOGGING_SETUP.md) — AI DB 로깅 설정

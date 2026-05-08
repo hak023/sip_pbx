@@ -188,7 +188,7 @@
 
 - [테스트 전략 문서](./test-strategy.md)
 - [테스트 실행 가이드](./test-execution-guide.md)
-- [기능 테스트 완료 보고서](../reports/TEST_DOCUMENTATION_COMPLETE.md)
+- [백엔드 테스트 전략](../testing/backend-testing-strategy.md)
 
 ---
 

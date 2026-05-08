@@ -36,5 +36,5 @@ CID 도크에 **발신 식별(1행)** 과 **연락처·관계 라벨(2행)** 을
 
 ## 잔여 과제
 
-- ~~연락처 설정 화면에서 **인라인 수정(PATCH)** UI~~ → 구현됨: [`frontend/app/contacts/page.tsx`](../../frontend/app/contacts/page.tsx)(구 `settings/contacts`)에서 **수정** / `PATCH /api/caller-contacts/{id}`; 저장 시 DB `source=manual`·`llm_confidence=NULL` ([`caller_contact_db.update_caller_contact`](../../src/common/caller_contact_db.py)).
+- ~~연락처 설정 화면에서 **인라인 수정(PATCH)** UI~~ → 구현됨: [`frontend/app/contacts/page.tsx`](../../../frontend/app/contacts/page.tsx)(구 `settings/contacts`)에서 **수정** / `PATCH /api/caller-contacts/{id}`; 저장 시 DB `source=manual`·`llm_confidence=NULL` ([`caller_contact_db.update_caller_contact`](../../../src/common/caller_contact_db.py)).
 - 기존 DB는 **서버 `init_db()` 재실행** 또는 수동 `CREATE TABLE` 으로 `caller_contacts` 생성 필요.

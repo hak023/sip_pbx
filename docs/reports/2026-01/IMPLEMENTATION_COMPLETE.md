@@ -422,10 +422,10 @@ npm run dev
 
 ## 📚 관련 문서
 
-- 📄 [설계 문서](docs/OPERATOR-AWAY-MODE-DESIGN.md) - 전체 시스템 설계
-- 📄 [실행 가이드](docs/OPERATOR_AWAY_MODE_SETUP.md) - 설정 및 실행 방법
-- 📄 [Frontend 아키텍처](docs/frontend-architecture.md) - Frontend 상세 설계
-- 📄 [AI Voicebot 아키텍처](docs/ai-voicebot-architecture.md) - 전체 시스템 아키텍처
+- 📄 [설계 문서](../../design/OPERATOR-AWAY-MODE-DESIGN.md) - 전체 시스템 설계
+- 📄 [실행 가이드](../../guides/OPERATOR_AWAY_MODE_SETUP.md) - 설정 및 실행 방법
+- 📄 [Frontend 아키텍처](../../architecture/frontend-architecture.md) - Frontend 상세 설계
+- 📄 [AI Voicebot 아키텍처](../../architecture/ai-voicebot-architecture.md) - 전체 시스템 아키텍처
 
 ---
 

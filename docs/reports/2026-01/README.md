@@ -64,7 +64,7 @@ Get-Content logs\app.log | Select-String "rag_llm_user_input|langgraph_agent_res
 
 **TTS 음성 끊김/깨짐 점검**  
 AI 응대 시 음성이 살짝 깨질 때는 TTS → PCM 큐 → RTP 송출 구간 로그를 보면 됩니다.  
-→ **[TTS_RTP_QUEUE_CHECK.md](TTS_RTP_QUEUE_CHECK.md)** 에서 `rtp_tts_queue_empty_timeout`, `rtp_tts_queue_depleted`, `pipecat_pcm_queue_full_dropping`, `output_audio_frame_skipped` 등 이벤트별 의미와 필터 예시를 참고하세요.
+→ **[TTS_RTP_QUEUE_CHECK.md](../2026-03/TTS_RTP_QUEUE_CHECK.md)** 에서 `rtp_tts_queue_empty_timeout`, `rtp_tts_queue_depleted`, `pipecat_pcm_queue_full_dropping`, `output_audio_frame_skipped` 등 이벤트별 의미와 필터 예시를 참고하세요.
 
 **자주 보이는 경고**:
 | event | 원인 | 조치 |
@@ -79,7 +79,7 @@ AI 응대 시 음성이 살짝 깨질 때는 TTS → PCM 큐 → RTP 송출 구�
 | `TTS synthesis error` | `Requested language code 'ko' doesn't match the voice 'ko-KR-Chirp3-HD-Kore''s language code 'ko-kr'` | TTS 클라이언트에 전달하는 언어 코드가 `ko`인데, 보이스는 `ko-kr`(또는 `ko-KR`)만 허용함 | 설정 또는 TTS 클라이언트 초기화에서 **언어 코드를 `ko-kr` 또는 `ko-KR`로 변경**. (config 예: `streaming_tts.language` / `tts.language` 등) |
 | `STT streaming error` | `400 Audio Timeout Error: Long duration elapsed without audio. Audio should be sent close to real time.` | Google STT 스트리밍 API에 오디오가 실시간에 가깝게 전달되지 않음(인사말 TTS 재생 중에는 발화가 없어서 지연이 길어짐) | (1) 인사말 구간처럼 오디오가 없을 때는 스트리밍 세션을 잠시 유지하거나, (2) Google Cloud STT 설정에서 스트리밍 타임아웃/인터리빙 정책 확인, (3) RTP→STT 버퍼가 너무 크지 않은지 확인 |
 
-위 TTS 에러가 나면 **인사말/응답 말소리가 통화에 전혀 안 들리는** 상태가 됩니다. 우선 **TTS 언어 코드를 `ko-kr`로 맞추는 것**을 권장합니다. 상세 조치 절차는 **[docs/guides/TTS_NO_AUDIO_FIX.md](../docs/guides/TTS_NO_AUDIO_FIX.md)**를 참고하세요.
+위 TTS 에러가 나면 **인사말/응답 말소리가 통화에 전혀 안 들리는** 상태가 됩니다. 우선 **TTS 언어 코드를 `ko-kr`로 맞추는 것**을 권장합니다. 상세 조치 절차는 **[TTS_NO_AUDIO_FIX.md](../../guides/TTS_NO_AUDIO_FIX.md)**를 참고하세요.
 
 **app.log에서 자주 보이는 error/warning (요약)**  
 | level | event | 요약 | 조치 |

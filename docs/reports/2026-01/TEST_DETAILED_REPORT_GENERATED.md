@@ -215,10 +215,10 @@ python generate_test_report.py
 
 ## 📎 관련 문서
 
-- [테스트 상세 리포트](./test-detailed-report.md) - 32개 테스트 상세 결과
-- [테스트 전략 문서](./test-strategy.md) - 테스트 전략 및 계획
-- [테스트 실행 가이드](./test-execution-guide.md) - 테스트 실행 방법
-- [테스트 코드 구현 완료 보고서](../reports/TEST_CODE_IMPLEMENTATION.md) - 테스트 코드 작성 내역
+- [테스트 상세 리포트](../../qa/test-detailed-report.md) - 32개 테스트 상세 결과
+- [테스트 전략 문서](../../qa/test-strategy.md) - 테스트 전략 및 계획
+- [테스트 실행 가이드](../../qa/test-execution-guide.md) - 테스트 실행 방법
+- [테스트 코드 구현 완료 보고서](./TEST_CODE_IMPLEMENTATION.md) - 테스트 코드 작성 내역
 
 ---
 

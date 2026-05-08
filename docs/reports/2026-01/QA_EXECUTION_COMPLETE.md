@@ -305,11 +305,11 @@ docs/reports/
 
 ## 📎 참고 문서
 
-- [테스트 상세 리포트](../qa/test-detailed-report.md) - 32개 테스트 상세 결과
-- [테스트 전략](../qa/test-strategy.md) - 전체 테스트 전략
-- [테스트 실행 가이드](../qa/test-execution-guide.md) - 단계별 실행 방법
-- [README.md](../../README.md) - QA 섹션 포함
-- [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) - QA 섹션 포함
+- [테스트 상세 리포트](../../qa/test-detailed-report.md) - 32개 테스트 상세 결과
+- [테스트 전략](../../qa/test-strategy.md) - 전체 테스트 전략
+- [테스트 실행 가이드](../../qa/test-execution-guide.md) - 단계별 실행 방법
+- [README.md](../../../README.md) - QA 섹션 포함
+- [SYSTEM_OVERVIEW.md](../../SYSTEM_OVERVIEW.md) - QA 섹션 포함
 
 ---
 

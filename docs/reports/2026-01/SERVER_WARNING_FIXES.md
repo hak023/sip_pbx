@@ -196,8 +196,8 @@ else:
 ## 📚 관련 문서
 
 - [README.md](../../README.md) - 프로젝트 전체 개요
-- [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) - 시스템 아키텍처
-- [requirements.txt](../../requirements.txt) - Python 의존성 목록
+- [SYSTEM_OVERVIEW.md](../../SYSTEM_OVERVIEW.md) - 시스템 아키텍처
+- [requirements.txt](../../../requirements.txt) - Python 의존성 목록
 
 ---
 

@@ -1,4 +1,10 @@
 # HITL( Human-In-The-Loop ) 현재 로직 정리
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`HITL_OPERATOR_RESPONSE_FLOW.md`](HITL_OPERATOR_RESPONSE_FLOW.md)
+>
+---
+
 
 **작성일**: 2026-03-16  
 **목적**: HITL 변경 전 현재 동작 방식 정리.

@@ -311,10 +311,10 @@ PORT=3001
 
 ### 추가 문서
 
-- [전체 시스템 개요](./SYSTEM_OVERVIEW.md)
-- [구현 현황](./IMPLEMENTATION_STATUS.md)
-- [Frontend 아키텍처](./frontend-architecture.md)
-- [AI 보이스봇 아키텍처](./ai-voicebot-architecture.md)
+- [전체 시스템 개요](../SYSTEM_OVERVIEW.md)
+- [구현 현황](../reports/2026-01/IMPLEMENTATION_STATUS.md)
+- [Frontend 아키텍처](../architecture/frontend-architecture.md)
+- [AI 보이스봇 아키텍처](../architecture/ai-voicebot-architecture.md)
 
 ---
 

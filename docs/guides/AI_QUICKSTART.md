@@ -461,13 +461,13 @@ ai_voicebot:
 ### 추가 학습
 
 1. **아키텍처 이해**
-   - [docs/ai-voicebot-architecture.md](ai-voicebot-architecture.md)
+   - [AI 보이스봇 아키텍처](../architecture/ai-voicebot-architecture.md)
 
 2. **성능 최적화**
-   - [docs/ai-response-time-analysis.md](ai-response-time-analysis.md)
+   - [AI 응답 시간 분석](../analysis/ai-response-time-analysis.md)
 
 3. **비용 최적화**
-   - [docs/gemini-model-comparison.md](gemini-model-comparison.md)
+   - [Gemini 모델 비교](gemini-model-comparison.md)
 
 ### 프로덕션 배포
 
@@ -521,7 +521,7 @@ ai_voicebot:
 ## 🆘 도움이 필요하신가요?
 
 **빠른 답변이 필요하면:**
-1. [FAQ 문서](ai-voicebot-architecture.md#faq) 확인
+1. [FAQ 문서](../architecture/ai-voicebot-architecture.md#faq) 확인
 2. [트러블슈팅 가이드](DEBUGGING.md) 참조
 3. [GitHub Issues](https://github.com/hak023/sip_pbx/issues) 검색
 

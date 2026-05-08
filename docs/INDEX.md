@@ -260,6 +260,8 @@ docs/
 
 INDEX 및 상위 문서(`README.md`, `SYSTEM_OVERVIEW.md`)에서 링크된 문서를 **살아 있는 참조**로 유지하기 위한 절차다. 한 번에 전부 고치지 않고, **계층 순서 + 리스크**로 나눈다.
 
+> **진행 현황 (2026-05-08)**: 1·2단계(근거 문서·API/테스트/UX/QA 링크) 및 **3~5단계**(`design/` 클러스터 안내 헤더, [`guides/README.md`](guides/README.md) 동기화, [`presentation/PROJECT_BRIEF.md`](presentation/PROJECT_BRIEF.md) Canonical 아키텍처 정렬) 반영 완료. 이후에는 아래 **지속 점검**만 주기적으로 수행한다.
+
 ### 1단계 — 근거 문서 (우선)
 
 | 대상 | 점검 내용 |

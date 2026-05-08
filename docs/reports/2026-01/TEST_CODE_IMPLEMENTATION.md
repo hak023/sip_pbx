@@ -361,9 +361,9 @@ async def test_embed_single_text_returns_vector(self, embedder):
 
 ## 📎 참고 문서
 
-- [테스트 전략 문서](./test-strategy.md)
-- [테스트 실행 가이드](./test-execution-guide.md)
-- [테스트 결과 보고서](./test-results.md)
+- [테스트 전략 문서](../../qa/test-strategy.md)
+- [테스트 실행 가이드](../../qa/test-execution-guide.md)
+- [테스트 결과 보고서](../../qa/test-results.md)
 
 ---
 

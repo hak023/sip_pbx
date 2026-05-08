@@ -285,7 +285,7 @@ def test_example():
 
 - **[테스트 전략](test-strategy.md)** - 전체 테스트 계획 및 전략
 - **[테스트 실행 가이드](test-execution-guide.md)** - 상세 실행 방법
-- **[시스템 아키텍처](../ai-voicebot-architecture.md)** - 시스템 구조 이해
+- **[시스템 아키텍처](../architecture/ai-voicebot-architecture.md)** - 시스템 구조 이해
 
 ---
 

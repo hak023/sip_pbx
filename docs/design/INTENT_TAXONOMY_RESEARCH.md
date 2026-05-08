@@ -1,4 +1,10 @@
 # AI 비서 의도(Intent) 분류 확장 리서치
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`INTENT_HANDLING_DESIGN.md`](INTENT_HANDLING_DESIGN.md)
+>
+---
+
 
 ## 1. 목적
 

@@ -423,10 +423,10 @@ WARNING: WebRTC VAD initialization failed
 
 ## 📚 참고 문서
 
-- [아키텍처 문서](./ai-voicebot-architecture.md)
-- [구현 가이드 Part 1](./ai-implementation-guide.md)
-- [구현 가이드 Part 2](./ai-implementation-guide-part2.md)
-- [Google API 설정](./google-api-setup.md)
+- [아키텍처 문서](../../architecture/ai-voicebot-architecture.md)
+- [구현 가이드 Part 1](../../design/ai-implementation-guide.md)
+- [구현 가이드 Part 2](../../design/ai-implementation-guide-part2.md)
+- [Google API 설정](../../guides/google-api-setup.md)
 
 ---
 

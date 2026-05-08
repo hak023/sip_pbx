@@ -1,4 +1,10 @@
 # RAG DB 로깅
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`KNOWLEDGE_MANAGEMENT_DESIGN.md`](KNOWLEDGE_MANAGEMENT_DESIGN.md)
+>
+---
+
 
 ## 개요
 

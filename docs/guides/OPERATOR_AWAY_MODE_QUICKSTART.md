@@ -64,8 +64,8 @@ http://localhost:3000/call-history
 ## 📚 자세한 문서
 
 - 📄 [상세 실행 가이드](OPERATOR_AWAY_MODE_SETUP.md)
-- 📄 [구현 완료 보고서](../IMPLEMENTATION_COMPLETE.md)
-- 📄 [설계 문서](OPERATOR-AWAY-MODE-DESIGN.md)
+- 📄 [구현 완료 보고서](../reports/2026-01/IMPLEMENTATION_COMPLETE.md)
+- 📄 [설계 문서](../design/OPERATOR-AWAY-MODE-DESIGN.md)
 
 ---
 

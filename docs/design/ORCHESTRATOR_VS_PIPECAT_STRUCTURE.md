@@ -1,4 +1,10 @@
 # Orchestrator vs Pipecat 구조 정리 및 권장 경로
+> **클러스터 안내**: 설계·연구 문서입니다. 구현 스택·컴포넌트 경계는 Canonical 아키텍처를 우선합니다.
+> 
+> **참고**: [architecture/ai-voicebot-architecture.md](../architecture/ai-voicebot-architecture.md)
+>
+---
+
 
 ## 1. 현재 구조 요약
 

@@ -1,4 +1,10 @@
 # TTS → 큐 → RTP 재생 로직 구조 검토
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`TTS_RTP_AND_STT_QUEUE_DESIGN.md`](TTS_RTP_AND_STT_QUEUE_DESIGN.md)
+>
+---
+
 
 인사말 구간 RTP 부족/끊김 이슈(APP_LOG_AI_CALL_20260310_101436_ANALYSIS.md)에 대한 권장 조치 반영 후, **TTS에서 생성한 패킷을 큐에 넣고 RTP로 재생되는 전체 구조**를 검토한 문서입니다.
 

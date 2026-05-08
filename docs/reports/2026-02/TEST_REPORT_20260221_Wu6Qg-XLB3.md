@@ -111,7 +111,7 @@
 ## 8. API 키 403 (유출) 대응
 
 - **메시지**: `403 Your API key was reported as leaked. Please use another API key.`
-- **조치**: [docs/guides/GEMINI_API_KEY_ROTATION.md](../guides/GEMINI_API_KEY_ROTATION.md) 참고하여 **새 API 키 발급** 후 `.env`(권장) 또는 `config/config.yaml`에 반영. 기존 키는 사용 중단.
+- **조치**: [GEMINI_API_KEY_ROTATION.md](../../guides/GEMINI_API_KEY_ROTATION.md) 참고하여 **새 API 키 발급** 후 `.env`(권장) 또는 `config/config.yaml`에 반영. 기존 키는 사용 중단.
 
 ---
 

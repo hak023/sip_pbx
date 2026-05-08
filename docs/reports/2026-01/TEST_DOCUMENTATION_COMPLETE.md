@@ -166,9 +166,9 @@ sip-pbx/
 
 ## 📚 참고 문서
 
-- **[기능 테스트 전략](docs/qa/test-strategy.md)**
-- **[실행 가이드](docs/qa/test-execution-guide.md)**
-- **[QA README](docs/qa/README.md)**
+- **[기능 테스트 전략](../../qa/test-strategy.md)**
+- **[실행 가이드](../../qa/test-execution-guide.md)**
+- **[QA README](../../qa/README.md)**
 
 ---
 

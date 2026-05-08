@@ -5,7 +5,7 @@
 **상태**: 설계 완료  
 **관련 문서**:  
 - [OPERATOR_TAKEOVER_DESIGN.md](OPERATOR_TAKEOVER_DESIGN.md) - 상담원 개입 설계
-- [ai-voicebot-architecture.md](../ai-voicebot-architecture.md) - AI Voicebot 아키텍처
+- [ai-voicebot-architecture.md](../architecture/ai-voicebot-architecture.md) - AI Voicebot 아키텍처
 - [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) - 시스템 개요
 
 ---

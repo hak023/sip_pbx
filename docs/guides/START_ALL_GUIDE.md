@@ -226,9 +226,9 @@ sip-pbx/
 
 ## 📚 추가 문서
 
-- **문제 해결**: [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
-- **빠른 시작**: [QUICK_START.md](./docs/QUICK_START.md)
-- **시스템 개요**: [SYSTEM_OVERVIEW.md](./docs/SYSTEM_OVERVIEW.md)
+- **문제 해결**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- **빠른 시작**: [QUICK_START.md](../QUICK_START.md)
+- **시스템 개요**: [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md)
 - **API 문서**: http://localhost:8000/docs (서버 실행 후)
 
 ---

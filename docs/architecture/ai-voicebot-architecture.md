@@ -21,7 +21,7 @@
 | 2026-02-13 | v3.0 | AI 인사말/Capability, Knowledge Extraction v2, AI 호 연결(Transfer) 통합 (섹션 23~25) | AI Assistant |
 | 2026-01-29 | v4.0 | AI Outbound Call (목적지향 대화, TaskTracker, OutboundCallManager) 구현 및 통합 (섹션 26) | AI Assistant |
 | 2026-02-13 | v5.0 | **멀티테넌트 RAG 아키텍처** - VectorDB 기반 OrganizationInfoManager, owner 필터, 테넌트별 데이터 격리, Frontend 멀티테넌트 지원 (섹션 27) | AI Assistant |
-| 2026-02-19 | v5.1 | **TTS→RTP 파이프라인·Phase 타이밍** (4.3.2a), **RAG 부족 시 HITL 대응 플로우** (19.1a) 설계 반영. 참고: docs/reports/TTS_RTP_AND_HITL_DESIGN.md | AI Assistant |
+| 2026-02-19 | v5.1 | **TTS→RTP 파이프라인·Phase 타이밍** (4.3.2a), **RAG 부족 시 HITL 대응 플로우** (19.1a) 설계 반영. 참고: [docs/design/TTS_RTP_AND_STT_QUEUE_DESIGN.md](../design/TTS_RTP_AND_STT_QUEUE_DESIGN.md) | AI Assistant |
 | 2026-02-19 | v5.2 | **AI 응답 고도화 (사람처럼 응대)** 설계 반영: 확장 Intent 택소노미, 의도별 HITL 조건, shortcut 경로 HITL 연동 (섹션 19.1b). 참고: docs/design/AI_RESPONSE_HUMANLIKE_DESIGN.md | AI Assistant |
 | 2026-02-19 | v5.3 | **HITL 구현 현황** (섹션 19.1c): HITLService, call_id별 queue·20초 fallback timer, hitl_fallback_available, emit_call_ended 시 unregister_call(SIP BYE 연동) 반영 | AI Assistant |
 
@@ -43,7 +43,7 @@
 > - ✅ **AI 응답 고도화 (사람처럼 응대)**: 확장 Intent 택소노미, 의도별 템플릿/폴백 경로, **의도별 HITL 연동** (섹션 19.1b)
 > 
 > Frontend 관련 내용은 **[Frontend Architecture](frontend-architecture.md)** 문서를 참조하세요.  
-> 상세 설계: **[TTS_RTP_AND_HITL_DESIGN.md](../reports/TTS_RTP_AND_HITL_DESIGN.md)** (TTS→RTP 변수 정의, RAG 부족 HITL 플로우).  
+> 상세 설계: **[TTS_RTP_AND_STT_QUEUE_DESIGN.md](../design/TTS_RTP_AND_STT_QUEUE_DESIGN.md)** (TTS→RTP·대기열, RAG 부족 시 흐름과 연계 가능한 타이밍 정의).  
 > **대화 응답 고도화**: **[AI_RESPONSE_HUMANLIKE_DESIGN.md](../design/AI_RESPONSE_HUMANLIKE_DESIGN.md)** (확장 Intent, 의도별 HITL 조건, 구현 단계).
 
 ---
@@ -1103,7 +1103,7 @@ TTS(Google) → TTSEndFrameForwarder → TTSCompleteNotifier → SIPPBXOutputTra
 
 - 발송 루프가 20ms마다 한 패킷만 보내므로, TTS가 청크를 늦게 주면 큐가 잠깐 비어 끊김처럼 들릴 수 있음.
 - 큐가 가득 찬 경우 `put_nowait` 실패 시 해당 청크의 패킷이 누락될 수 있음(경고 후 break). 개선 시 큐 크기 유지, 누락 시 재시도 또는 블로킹 옵션 검토.
-- 상세 설계: `docs/reports/TTS_RTP_AND_HITL_DESIGN.md`.
+- 상세 설계: `docs/design/TTS_RTP_AND_STT_QUEUE_DESIGN.md`.
 
 #### 4.3.3 시퀀스 다이어그램
 
@@ -1270,7 +1270,7 @@ flowchart TD
     I --> Z
 ```
 
-> **지식 정제** 상세(입력=전체 전사·저장=착신자만, 출력 스키마, 카테고리, 토큰/길이 처리)는 **§24.4 지식 정제 (Knowledge Refinement)** 및 설계서 [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md), [USEFULNESS_JUDGMENT_DESIGN.md](../reports/USEFULNESS_JUDGMENT_DESIGN.md) 참조.
+> **지식 정제** 상세(입력=전체 전사·저장=착신자만, 출력 스키마, 카테고리, 토큰/길이 처리)는 **§24.4 지식 정제 (Knowledge Refinement)** 및 설계서 [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md), [UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md](../design/UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md) 참조.
 
 **LLM 지식 정제 (요약):**
 - **입력**: 통화 **전체 전사**(발신자+착신자) — 맥락 파악용. 길이 제한은 `judgment_max_input_chars`(기본 6000자).
@@ -2935,7 +2935,7 @@ RAG 검색 결과가 없거나 confidence가 낮을 때, "모른다"를 명시�
 - **HITL timeout 시**: 정해진 문구 TTS 재생, 통화 종료, Frontend에 `hitl_timeout` 피드백 (기존 이벤트 활용).
 - **Frontend**: 담당자 입력 UI, timeout 표시/피드백은 기존 HITL 플로우와 통합.
 
-상세 설계: `docs/reports/TTS_RTP_AND_HITL_DESIGN.md`.
+상세 설계: `docs/design/TTS_RTP_AND_STT_QUEUE_DESIGN.md`.
 
 ### 19.1b 의도(Intent) 기반 HITL 및 응답 고도화 ⭐
 
@@ -4504,7 +4504,7 @@ metadata = {
 
 ### 24.4 지식 정제 (Knowledge Refinement)
 
-> **관련 설계서**: [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md), [USEFULNESS_JUDGMENT_DESIGN.md](../reports/USEFULNESS_JUDGMENT_DESIGN.md)
+> **관련 설계서**: [KNOWLEDGE_MANAGEMENT_DESIGN.md](../design/KNOWLEDGE_MANAGEMENT_DESIGN.md), [UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md](../design/UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md)
 
 - **목적**: 통화 종료 후 전사를 분석해 VectorDB에 저장할 지식(통화정보 중 지식정보)을 정제하여, 노이즈 저장을 줄이고 FAQ/지식 품질을 유지한다.
 - **파이프라인 위치**: 정규 통화(사람–사람) 종료 후 — 녹음/전사 완료 → Knowledge Extractor가 **전체 전사** 로드 → `judge_usefulness(transcript=전체전사, speaker=callee, call_id)` 호출. LLM에는 **전체 전사(발신자+착신자)** 를 맥락으로 전달하고, **저장 후보는 착신자(callee) 발화만** 추출. (AI 통화는 정책에 따라 스킵 가능.)

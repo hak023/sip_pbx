@@ -360,7 +360,7 @@ Get-Content logs\server.log |
 ## 🔗 관련 문서
 
 - [사용 매뉴얼](USER_MANUAL.md) - 설치 및 설정
-- [빠른 시작](QUICK_START.md) - 5분 안에 실행
+- [빠른 시작](../QUICK_START.md) - 5분 안에 실행
 - [Architecture](../../bmad/docs/architecture.md) - 시스템 아키텍처
 
 ---

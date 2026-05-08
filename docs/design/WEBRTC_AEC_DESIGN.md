@@ -1,4 +1,10 @@
 # WebRTC AEC (Acoustic Echo Cancellation) 설계
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`TTS_RTP_AND_STT_QUEUE_DESIGN.md`](TTS_RTP_AND_STT_QUEUE_DESIGN.md)
+>
+---
+
 
 **목적**: TTS 재생 중에도 STT를 차단하지 않고, 스피커→마이크 에코를 제거하여 오인식("Beautiful" 등) 방지.
 

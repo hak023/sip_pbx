@@ -519,8 +519,8 @@ curl http://localhost:8000/api/call-history?page=1&limit=20
 **상태**: API 백엔드 구현 필요 🔴  
 
 **관련 문서**:  
-- [frontend-architecture.md](../frontend-architecture.md) - Frontend 아키텍처  
-- [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) - 시스템 개요  
+- [frontend-architecture.md](../../architecture/frontend-architecture.md) - Frontend 아키텍처
+- [SYSTEM_OVERVIEW.md](../../SYSTEM_OVERVIEW.md) - 시스템 개요
 
 ---
 

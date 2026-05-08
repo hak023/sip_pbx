@@ -1,4 +1,10 @@
 # CDR(통화 상세 기록) 개선 설계
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`CALL_HISTORY_AND_CONTENT_DESIGN.md`](CALL_HISTORY_AND_CONTENT_DESIGN.md)
+>
+---
+
 
 ## 1. 목적
 

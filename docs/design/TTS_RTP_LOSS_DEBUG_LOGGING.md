@@ -1,4 +1,10 @@
 # TTS ↔ RTP 손실 원인 분석 및 디버깅 로그 강화
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`TTS_RTP_AND_STT_QUEUE_DESIGN.md`](TTS_RTP_AND_STT_QUEUE_DESIGN.md)
+>
+---
+
 
 ## 1. 현상 정리
 

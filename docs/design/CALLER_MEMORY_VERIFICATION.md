@@ -1,4 +1,10 @@
 # 발신자 맥락(Caller Memory) 로직 검증
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`CALLER_MEMORY_DESIGN.md`](CALLER_MEMORY_DESIGN.md)
+>
+---
+
 
 설계: `CALLER_MEMORY_DESIGN.md`  
 구현: `src/db/`, `src/api/routers/call_history.py`, `src/ai_voicebot/pipecat/processors/rag_processor.py`, `src/websocket/server.py`

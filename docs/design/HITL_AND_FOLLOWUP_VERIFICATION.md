@@ -1,4 +1,10 @@
 # HITL·후속 대응 로직 점검
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`HITL_OPERATOR_RESPONSE_FLOW.md`](HITL_OPERATOR_RESPONSE_FLOW.md)
+>
+---
+
 
 ## 설계 의도
 

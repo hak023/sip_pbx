@@ -1,4 +1,10 @@
 # 운영자 부재중 모드 설계 문서
+> **클러스터 안내**: 세부·히스토리 설계 문서입니다. 통합 관점·경계는 아래 대표 문서를 우선 참고하세요.
+> 
+> **대표 문서**: [`OPERATOR_TAKEOVER_DESIGN.md`](OPERATOR_TAKEOVER_DESIGN.md) · 호 전환 상세는 [`AI_DYNAMIC_CALL_TRANSFER_DESIGN.md`](AI_DYNAMIC_CALL_TRANSFER_DESIGN.md)
+>
+---
+
 
 ## 📋 문서 정보
 
@@ -742,9 +748,9 @@ async def _handle_hitl_request(
 
 ## 10. 관련 문서
 
-- 📄 **[AI Voicebot Architecture](ai-voicebot-architecture.md)** - 전체 시스템 아키텍처
-- 📄 **[Frontend Architecture](frontend-architecture.md)** - Frontend 상세 설계
-- 📄 **[HITL Workflow](frontend-architecture.md#3-human-in-the-loop-hitl-architecture)** - HITL 상세 워크플로우
+- 📄 **[AI Voicebot Architecture](../architecture/ai-voicebot-architecture.md)** - 전체 시스템 아키텍처
+- 📄 **[Frontend Architecture](../architecture/frontend-architecture.md)** - Frontend 상세 설계
+- 📄 **[HITL Workflow](../architecture/frontend-architecture.md#3-human-in-the-loop-hitl-architecture)** - HITL 상세 워크플로우
 
 ---
 

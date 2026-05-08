@@ -327,8 +327,8 @@ async def create_ai_orchestrator(self):
 
 **관련 문서**:  
 - [ERROR_LOG_ANALYSIS.md](ERROR_LOG_ANALYSIS.md) - 이전 동일 이슈 분석  
-- [SYSTEM_OVERVIEW.md](../SYSTEM_OVERVIEW.md) - AI Voicebot 아키텍처  
-- [ai-voicebot-architecture.md](../ai-voicebot-architecture.md) - 상세 설계  
+- [SYSTEM_OVERVIEW.md](../../SYSTEM_OVERVIEW.md) - AI Voicebot 아키텍처
+- [ai-voicebot-architecture.md](../../architecture/ai-voicebot-architecture.md) - 상세 설계
 
 ---
 
