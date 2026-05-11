@@ -1,7 +1,7 @@
 # SmartPBX AI - Product Requirements Document (PRD)
 ## 통합 PRD: SIP PBX Core + AI 기능
 
-**문서 버전**: v3.4  
+**문서 버전**: v3.5  
 **작성일**: 2026-02-02  
 **최종 갱신**: 2026-05-11  
 **작성자**: Product Team  
@@ -50,6 +50,7 @@
 **데이터 저장소 표기**: 코드 경로에서는 Vector DB로 **ChromaDB** 등을 사용할 수 있다. PRD 본문의 Qdrant/Pinecone 표기는 **상용 확장 옵션**이며, 타깻 스택은 배포 설계서와 정렬한다.
 
 ### 문서 통합 이력
+- **v3.5** (2026-05-11): 운영비 참조를 상용 문서 **§11.7**로 정렬 — MM 정의와 **§11.4 SW 개발비** 명시적 연계.
 - **v3.4** (2026-05-11): MM를 **65.0**으로 상향 — STT/TTS/LLM **품질·모델별 개런티(~1.5× 가중)**, **AI Runtime** 복잡도 가산, **시뮬레이터·연동 후 전구간** 다단계 검증 반영.
 - **v3.3** (2026-05-11): **MM 산정 범위 점검표** 추가 — 기존 노드(§11.3) vs AI 구역(MM 총액), 부하·검증시험 포함 수준 명시.
 - **v3.2** (2026-05-11): Epic·Phase MM을 **온프레미스·연동·부하 검증** 포함 상용 전제로 재산정하여 **서버별 합계와 동일 44.0 MM**으로 정렬.
@@ -364,7 +365,7 @@ AI 정확도·규제·경쟁 등 **상세 매트릭스**는 [project-plan.md](./
 **정의**
 
 - **1 MM** = 1인·1개월 **개발 인월**(설계·구현·단위·통합 테스트 포함).
-- **미포함**: PM 전담, 별도 QA 조직, UAT, **운영비(Opex)** — Opex는 [production-deployment-architecture.md](../architecture/production-deployment-architecture.md) §11.6 등에서 AI Call Agent 범위로 정리한다.
+- **미포함**: PM 전담, 별도 QA 조직, UAT, **월간 장비 운영비(유지·전력)** — 해당 비용은 [production-deployment-architecture.md](../architecture/production-deployment-architecture.md) **§11.7** 에서 AI Call Agent 노드 범위로 정리한다. 본 PRD MM은 **순수 SW 개발**에 대응하며, 상용 문서 **§11.4** 금액과 정합한다.
 
 ### 산정 전제 (Epic·서버 합계 일치)
 
