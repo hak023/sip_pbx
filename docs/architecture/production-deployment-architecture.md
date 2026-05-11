@@ -8,7 +8,7 @@
 | 용량 목표(가상 시나리오) | 가입자 100,000명, **약 2.1 CPS(운영 기준)**, 평균 통화 유지 120초 |
 | 동시세션 산정(가상 시나리오) | `LLM 2노드(fp8 1,500 tok/s/노드) 기준 ≈ 250 동시 세션(운영상한)` |
 | 기존 자산 | 교환기 N개, 통화매니저AS 2 Pair(A/S), WTIMS RTP 서버, **통화매니저 API(유엔젤·코어)** , **통화매니저 API(바이토·외부)** , 유저 PC Client ↔ 바이토 ↔ 유엔젤 기존 연동 |
-| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 PostgreSQL/**Qdrant**) · 경계 **AIR GW**·**API/Realtime 단일 VIP — Active/Standby (L4 전용 장비·CAPEX 없음)** · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) — **공유 파일 스토리지(NAS)는 초기 생략** §7.3 |
+| 신규 구축 | **AI Call Agent 시스템**(STT, TTS, LLM, AI Runtime, API/Realtime, 데이터 PostgreSQL/**Qdrant**) · **단일 접점만 Active/Standby:** 경계 **AIR GW**, **API/Realtime 단일 VIP** (L4 전용 장비·CAPEX 없음) · **그 외**(AIR·STT·TTS·LLM·Qdrant 등)는 **All-Active** · **EMS** 별도 구역(관측 — OTel·Metrics·Log·Trace·Alert·Grafana **각각 별도 프로세스**) — **공유 파일 스토리지(NAS)는 초기 생략** §7.3 |
 | DB 제약 | RDB는 **PostgreSQL HA(최소 Primary+Standby)** 기준, 필요 시 Read Replica로 읽기 분산 |
 
 **관련 문서**: 현재 **개발 리포** 구현 세부·런타임 스택은 [technical-architecture.md](./technical-architecture.md)를 본다. 월별 변경·완료 보고서 요약은 [reports/README.md](../reports/README.md).
@@ -23,7 +23,7 @@
 
 ### 빠른 참조 — 아키텍처(요약 다이어그램)
 
-**한 줄:** 기존 **교환기 → 통화매니저AS → WTIMS** 코어를 유지하고, WTIMS가 **RTP 미러로 STT**에 직접 연결되며, **통합 시그널만 AIR 연동 접점(GW)** → **AI Runtime(정상 시 Active, Standby 페일오버)** → STT/LLM/TTS로 처리한다. **유엔젤·바이토**는 **API/Realtime 단일 VIP(Active/Standby)** 로만 AI에 진입한다.
+**한 줄:** 기존 **교환기 → 통화매니저AS → WTIMS** 코어를 유지하고, WTIMS가 **RTP 미러로 STT 풀(All-Active)** 에 직접 연결되며, **통합 시그널만 AIR 연동 접점(GW)** — VIP **Active/Standby** — 가 **`call_id` 일관 해시**로 **AI Runtime 다중 대(All-Active)** 에 분배하고, STT/LLM/TTS 풀도 **전부 All-Active** 로 처리한다. **유엔젤·바이토**는 **API/Realtime 단일 VIP(Active/Standby)** 로만 AI에 진입한다.
 
 ```mermaid
 flowchart LR
@@ -32,7 +32,7 @@ flowchart LR
     end
     subgraph ACA["AI Call Agent · EMS 제외 요약"]
         GW["AIR GW"]
-        AIR["AI Runtime A/S"]
+        AIR["AIR 풀<br/>All-Active"]
         STT["STT"]
         LLM["LLM"]
         TTS["TTS"]
@@ -58,7 +58,7 @@ flowchart LR
 
 1. SIP `INVITE` → 교환기 → 통화매니저AS → WTIMS(SIP/SDP, RTP 앵커).
 2. 사용자 음성 **RTP** → WTIMS → **STT(미러, GW 비경유)**.
-3. 통화매니저AS → WTIMS **호 세션 릴레이** → WT가 **통합 시그널**로 **AIR GW** → **정상 시 Active AI Runtime**(Standby는 페일오버; **L4 없이 All-Active 분산 없음** §2.2).
+3. 통화매니저AS → WTIMS **호 세션 릴레이** → WT가 **통합 시그널**로 **AIR GW**(단일 VIP **A/S**) → GW가 **`call_id` 일관 해시**로 **AI Runtime 풀(All-Active)** 에 분배(§2.2; **전용 L4 없음**).
 4. AIR ↔ STT 스트림, AIR → LLM, AIR → TTS → **WT로 재생(RTP)**.
 5. 유엔젤/바이토 → **API/Realtime 단일 VIP**(인바운드); AI → 코어 **아웃바운드** HTTPS 등(1.5·1.6절).
 
@@ -70,10 +70,10 @@ flowchart LR
 |------|-----------|-----------|
 | 기존 코어 | WTIMS RTP | 1 + 1 |
 | AI Call Agent | AIR 연동 접점 GW | 1 + 1 |
-| AI Call Agent | STT Server | 1 + 1 |
-| AI Call Agent | TTS Server | 1 + 1 |
-| AI Call Agent | LLM Server | 2 + 0 |
-| AI Call Agent | AI Runtime | 1 + 1 (Active/Standby) |
+| AI Call Agent | STT Server | **2 Active** (All-Active) |
+| AI Call Agent | TTS Server | **2 Active** (All-Active) |
+| AI Call Agent | LLM Server | 2 Active |
+| AI Call Agent | AI Runtime | **2 Active** (All-Active; GW가 분배) |
 | AI Call Agent | API/Realtime (단일 VIP) | 1 + 1 (Active/Standby) |
 | AI Call Agent | PostgreSQL HA | 2 + 0 |
 | AI Call Agent | Qdrant(VectorDB) | 2 + 0 |
@@ -85,10 +85,10 @@ flowchart LR
 | 서버 역할 | 권장 대수 | CPU | RAM | GPU | 스토리지 | NIC |
 |-----------|-----------|-----|-----|-----|----------|-----|
 | AIR 연동 접점 GW | 1 + 1 | 8 vCPU | 32 GB | - | HDD 1 TB | 1 Gbps |
-| STT Server | 1 + 1 | 32 vCPU | 128 GB | L40S x1 | HDD 2 TB | 10 Gbps |
-| TTS Server | 1 + 1 | 24 vCPU | 96 GB | L40S x1 | HDD 2 TB | 10 Gbps |
-| LLM Server | 2 + 0 | 32 vCPU | 256 GB | L40S x2 | HDD 2 TB | 1 Gbps |
-| AI Runtime | 1 + 1 | 16 vCPU | 64 GB | - | HDD 1 TB | 1 Gbps |
+| STT Server | **2 Active** | 32 vCPU | 128 GB | L40S x1 | HDD 2 TB | 10 Gbps |
+| TTS Server | **2 Active** | 24 vCPU | 96 GB | L40S x1 | HDD 2 TB | 10 Gbps |
+| LLM Server | 2 Active | 32 vCPU | 256 GB | L40S x2 | HDD 2 TB | 1 Gbps |
+| AI Runtime | **2 Active** | 16 vCPU | 64 GB | - | HDD 1 TB | 1 Gbps |
 | API/Realtime | 1 + 1 | 16 vCPU | 32 GB | - | HDD 1 TB | 1 Gbps |
 | PostgreSQL HA | 2 + 0 / 2 + 1 | 24 vCPU | 128 GB | - | HDD 4 TB | 1 Gbps |
 | Qdrant | 2 + 0 / 3 + 0 | 16 vCPU | 64 GB | - | HDD 2 TB | 1 Gbps |
@@ -97,25 +97,27 @@ flowchart LR
 
 ### 빠른 참조 — 용량·수용량 (250 세션)
 
-- **STT:** 1 Active × 625 세션/노드(벤치) = **625** (목표 250 대비 여유).
-- **TTS:** 1 Active × 1,000 = **1,000** (여유).
-- **LLM:** `fp8 1,500 tok/s/노드` × 2노드 = `3,000 tok/s`; 평균 120 tokens/요청 가정 시 **25 QPS** (운영상한 80% 적용 시 **20 QPS**).
-- **AI Runtime / API:** 정상 시 Active 1대 기준 `250 세션·250 WS` 처리 (Standby 페일오버 인수).
+- **시나리오 목표 부하:** 통화 경로 **동시 250세션**은 **LLM 병목**(§6.4)에 맞춘 값이다. 아래 합산은 **활성(Active) 노드만** 곱한 **계층별 클러스터 여유**다.
+- **STT:** **2 Active** × 625 세션/노드(벤치) = **1,250** 클러스터 (목표 250 대비 여유).
+- **TTS:** **2 Active** × 1,000 = **2,000** 클러스터 (여유).
+- **LLM:** `fp8 1,500 tok/s/노드` × **2 Active** = `3,000 tok/s`; 평균 120 tokens/요청 가정 시 **25 QPS** (운영상한 80% 적용 시 **20 QPS**).
+- **AI Runtime:** **2 Active** × 250 세션/노드(벤치) = **500** 클러스터.
+- **API/Realtime:** **단일 VIP 뒤 Active 1대** 기준 `250 WS + 80 rps` (Standby는 페일오버 인수; 외부 인바운드는 A/S 정책 §1.6).
 - **WTIMS:** 1 Active × 800 = **800** RTP 수용(여유).
 
 **통합 지표 표:** 아래 「노드별 가용 용량 매트릭스」. **상세 체크리스트:** 6.2절.
 
 ### 빠른 참조 — 노드별 가용 용량 매트릭스 (AI Call Agent)
 
-본 표는 §5~§6.4와 동일 가정(평균 통화 **120초**, Busy Hour 목표 **250 동시세션**, LLM **호당 0.08 req/s**)을 바탕으로 한다. **CPS_max**는 세션·스트림을 호 1건당 1개 점유한다는 전제에서 **Little 법칙**으로 `동시 한도 ÷ 120`을 적용한다. **가입자(명/시간)**는 §6.4와 같이 가입자당 **1콜/시간**일 때 `동시 한도 × (3600÷120) = 동시 한도 × 30`으로 환산한 **해당 계층 단독 상한**이다(시스템 전체 상한은 **가장 낮은 한도**).
+본 표는 §5~§6.4와 동일 가정(평균 통화 **120초**, Busy Hour 목표 **250 동시세션**, LLM **호당 0.08 req/s**)을 바탕으로 한다. **CPS_max**는 세션·스트림을 호 1건당 1개 점유한다는 전제에서 **Little 법칙**으로 `동시 한도 ÷ 120`을 적용한다. **가입자(명/시간)**는 §6.4와 같이 가입자당 **1콜/시간**일 때 `동시 한도 × (3600÷120) = 동시 한도 × 30`으로 환산한 **해당 계층 단독 상한**이다(시스템 전체 상한은 **가장 낮은 한도** — 본 시나리오에서는 **LLM 250**). **단일 VIP가 필요한 계층만 A/S**이며, **그 외는 표기된 Active 대수가 모두 부하를 받는 All-Active**다.
 
 | 노드 | QPS (단발·참고) | CPS_max (120초 가정) | 동시 점유 한도 | 가입자 상한 (명/시간, 1콜/시간) | 권장 서버 대수 |
 |------|-----------------|----------------------|----------------|----------------------------------|----------------|
-| AIR GW | N/A (통합 시그널·스트림; TPS는 제품·프로파일별 벤치) | 운영 목표 **≥ ~2.1 INVITE/s**에 맞춰 프로파일링 | 동시 통합 시그널: 수치는 벤치 확정 필요 | 시그널 TPS·호 매핑 확정 후 산정 | 1 + 1 (A/S) |
-| API/Realtime | REST **80 rps** (Active); WSS는 세션형 | **≈ 2.08**/Active (250 WS÷120) | **250** 동시 WS + 위 REST | **7,500** | 1 + 1 (VIP A/S) |
-| AI Runtime | N/A (오케스트레이션·제어) | **≈ 2.08**/Active | **250** 동시 세션/Active | **7,500** | 1 + 1 (A/S) |
-| TTS | N/A (스트리밍 합성) | **≈ 8.33**/Active 벤치 (1,000÷120) | **1,000** 세션/노드(벤치) | **30,000** | 1 + 1 |
-| STT | N/A (스트리밍 ASR) | **≈ 5.21**/Active 벤치 (625÷120) | **625** 세션/노드(벤치) | **18,750** | 1 + 1 |
+| AIR GW | N/A (통합 시그널·스트림; TPS는 제품·프로파일별 벤치) | 운영 목표 **≥ ~2.1 INVITE/s**에 맞춰 프로파일링 | 동시 통합 시그널: 수치는 벤치 확정 필요 | 시그널 TPS·호 매핑 확정 후 산정 | 1 + 1 (A/S, 단일 접점) |
+| API/Realtime | REST **80 rps** (VIP 부착 Active); WSS는 세션형 | **≈ 2.08** (250 WS÷120, **VIP Active 1대** 기준) | **250** 동시 WS + 위 REST | **7,500** | 1 + 1 (VIP A/S) |
+| AI Runtime | N/A (오케스트레이션·제어) | **≈ 4.17** 클러스터 (500÷120, **2 Active** 합산) | **500** (2×250/노드 벤치) | **15,000** | **2 Active** |
+| TTS | N/A (스트리밍 합성) | **≈ 16.67** 클러스터 (2×1,000÷120) | **2,000** (2×1,000/노드 벤치) | **60,000** | **2 Active** |
+| STT | N/A (스트리밍 ASR) | **≈ 10.42** 클러스터 (2×625÷120) | **1,250** (2×625/노드 벤치) | **37,500** | **2 Active** |
 | LLM | 클러스터 **25→20 QPS**(운영 80%); 노드당 **12.5→10** | **≈ 2.08** (호당 0.08 req/s·250 동시 call 권장과 정합) | **250** 동시 call (운영 권장, 2노드 풀) | **7,500** | 2 Active |
 | PostgreSQL | 워크로드·스키마별 — **TPS/QPS는 부하 테스트로 확정** | 트랜잭션 상한: 부하 테스트 | Primary 쓰기·커넥션 풀 한도 | AIR 경로와 별도 산정 | **2** (Primary+Standby, 선택 Replica) |
 | Qdrant | 노드 **100 QPS**(보수, 혼합); 클러스터 **~200 QPS** | 호당 벡터 쿼리 빈도 가정 후 환산 | 250 동시세션 조회·업서트 시나리오(§7.2) | RAG 호출 빈도에 의존 — **LLM과 독립 병목 가능** | **2** Active |
@@ -193,7 +195,7 @@ flowchart LR
 
 **본 문서의 확정 설계:** 통화매니저AS가 AI Runtime에 **직접 연결하지 않는다.** 호에 대한 세션·정책 정보는 **통화매니저AS → WTIMS**로 먼저 전달·릴레이되고, **WTIMS → AI Runtime** 경로로 **세션 필드 + 미디어 레그 바인딩**을 합친 시그널을 보낸다.
 
-**코어 통신 영역 ↔ AI Call Agent 시스템 접점:** WTIMS는 AI Runtime 노드 목록을 직접 들고 **개별 노드로 분산 발신하지 않는다.** 두 구역 사이에는 **단일 연동 접점**(VIP·FQDN 한 벌에 대응하는 **AIR 연동 접점 GW** — **gRPC/HTTP 게이트웨이 등 소프트웨어**, **L4 전용 로드밸런서는 본 설계·비용 범위에 포함하지 않음**)을 두어, WT는 그 접점만 사용한다. 접점 뒤 **AI Runtime**은 **Active/Standby**로 두고(§2.2), 정상 시 **Active 한 노드**가 통합 시그널을 처리한다. **다중 AIR 수평 분산·`call_id` 일관 해시**는 **별도 L4/LB 계층 도입** 시 확장 옵션이다. AI Call Agent **내부**(예: AIR→STT/LLM/TTS, API→AIR)에서 추론 풀로의 부하는 동일 구역 내 로드밸런싱을 적용할 수 있다.
+**코어 통신 영역 ↔ AI Call Agent 시스템 접점:** WTIMS는 AI Runtime 노드 목록을 직접 들고 **개별 노드로 분산 발신하지 않는다.** 두 구역 사이에는 **단일 연동 접점**(VIP·FQDN 한 벌에 대응하는 **AIR 연동 접점 GW** — **gRPC/HTTP 게이트웨이 등 소프트웨어**, **L4 전용 로드밸런서는 본 설계·비용 범위에 포함하지 않음**)을 두어, WT는 그 접점만 사용한다. **GW 자체**는 코어 대면 주소를 고정하기 위해 **Active/Standby(VIP)** 로 둔다. 접점 **안쪽 AI Runtime**은 **All-Active 다중 대**로 두고, GW가 **`call_id` 일관 해시**로 분배한다(§2.2). AI Call Agent **내부** 추론 풀(STT·TTS·LLM 등)도 **All-Active** 이며 동일 존에서 **로드밸런싱**한다.
 
 | 단계 | 역할 |
 |------|------|
@@ -208,7 +210,7 @@ flowchart LR
 
 | 평면 | 내용 | GW(AIR 연동 접점) 경유 여부 |
 |------|------|------------------------------|
-| **통합 시그널** | `call_id`·세션 스냅샷·미디어 **레그 바인딩 메타**(키·슬롯 ID·코덱 요약 등) — 저대역·저빈도 gRPC/Kafka 스트림 | **경유** — 코어↔신규 구역 **단일 주소(VIP)·Active/Standby** 목적 |
+| **통합 시그널** | `call_id`·세션 스냅샷·미디어 **레그 바인딩 메타**(키·슬롯 ID·코덱 요약 등) — 저대역·저빈도 gRPC/Kafka 스트림 | **경유** — 코어↔신규 구역 **단일 주소(VIP)**; **GW만 A/S**, 뒤쪽 AIR는 **All-Active** §2.2 |
 | **미디어(RTP/PCM 대역)** | RTP Mirror → STT, TTS 재생 → WTIMS 등 **초당 수 kb~Mb 스루풋** | **비경유** — WTIMS는 이미 §2 도표처럼 **STT·WT와 직접** 미디어 경로를 유지하고, GW에 RTP를 끌고 오지 않는다 |
 | **AIR↔STT gRPC** | 오디오 스트림·부분 텍스트 — AIR가 STT 풀과 **내부 구역**에서 직접 | GW와 무관 |
 
@@ -246,8 +248,8 @@ flowchart LR
 | **단일 진입** | 방화벽·WAF·ACL을 **API/Realtime 단일 접점 주소**에만 개방; 유엔젤·바이토가 **같은 목적지**를 바라보게 조직 DNS·라우팅 정리 |
 | **TLS·신뢰** | Active에서 종료(또는 이중화에 맞춘 인증서 배포), **mTLS**·클라이언트 인증서 선택 |
 | **정책** | OAuth2/JWT·API Key·IP 허용목록, **레이트리밋**, 요청 크기 제한 |
-| **고가용성** | **1 Active + 1 Standby** — 인바운드를 **동시에 두 노드가 나누는 All-Active**는 **L4 분산 계층 없이는 채택하지 않음**(본 문서 전제와 모순). 세션형 WSS는 페일오버 시 재연결·`last_seq` 재동기화로 복구 |
-| **선택 확장** | 트래픽 증가 시 **전용 L4/LB·게이트웨이 도입** 후 All-Active 다중 노드로 확장 가능(별도 CAPEX·설계) |
+| **고가용성** | **API/Realtime 인바운드만** **1 Active + 1 Standby (VIP)** — 외부(유엔젤·바이토)가 붙는 **단일 접점**이므로 **동시에 두 노드가 인바운드를 나누는 All-Active는 채택하지 않음**. 세션형 WSS는 페일오버 시 재연결·`last_seq` 재동기화로 복구 |
+| **선택 확장** | **내부** AIR·STT·TTS·LLM은 이미 **All-Active**(§2.2). **API/GW 측 인바운드** 트래픽 증가·무중단 수평 확장이 필요하면 **전용 L4/LB·게이트웨이**(별도 CAPEX) 검토 |
 | **아웃바운드(반대 방향)** | **API/Realtime → 유엔젤·바이토** 호출은 별도 존 연동으로 직접 허용 — 표 §3.2 |
 
 **운영 콘솔**(신규 존 동일 망)·**순수 내부 마이크로서비스**만 API를 쓰는 경우에도, **통화매니저 API 서버에서 AI로 오는 호출**은 위 **단일 VIP·Active/Standby** 정책과 맞춘다.
@@ -276,7 +278,7 @@ flowchart LR
     subgraph ACA["AI Call Agent 시스템 · 신규 계획"]
         GW["AIR 연동 접점 GW<br/>세션·통합 시그널 전용<br/>미디어 RTP 비경유"]
         subgraph AI["AI 처리 · 프로세스형 서버"]
-            AIR["AI Runtime<br/>Active / Standby"]
+            AIR["AI Runtime 풀<br/>All-Active (N=2)"]
             STT["STT Server Pool<br/>프로세스형 서버"]
             LLM["LLM Inference Pool<br/>프로세스형 서버"]
             TTS["TTS Server Pool<br/>프로세스형 서버"]
@@ -313,7 +315,7 @@ flowchart LR
     WT -->|RTP RTCP Relay| CUST
     WT -->|RTP Mirror 미디어 평면 GW 비경유| STT
     WT -->|통합 시그널만 단일 FQDN VIP| GW
-    GW -->|정상 시 Active AIR| AIR
+    GW -->|call_id 해시 → AIR| AIR
 
     AIR -->|gRPC bidi 스트리밍 ASR| STT
     AIR -->|HTTPS JSON 또는 gRPC OpenAI 호환| LLM
@@ -367,7 +369,7 @@ flowchart LR
 - 위 Mermaid 화살표 라벨은 **연동 규격**(프로토콜·형식·상관 키)을 요약한 것이며, 세부 필드는 **3.2절 표·부록 A**와 일치시킨다.
 - 위 Mermaid 박스는 **첫 줄=이름, 둘째 줄=§2.0 구성요소 유형**을 병기했다. **EMS** 서브그래프는 AI Call Agent 시스템과 **분리**하여 표시한다.
 - 도표상 동일한 박스로 보일 수 있으나, 실제로는 **프로세스형 서버·DBMS·단말/클라이언트**로 구분한다(§2.0).
-- **WTIMS → AI Runtime**은 기존 코어와 신규 시스템의 **경계**이므로 WT가 AIR 실제 IP 목록을 들지 않고 **AIR 연동 접점**(단일 VIP/FQDN에 대응하는 **GW**)만 사용한다. 접점 뒤 AI Runtime은 **Active/Standby**(§2.2); **다중 AIR 수평 분산**은 **별도 L4/LB 도입** 시 확장 옵션이다. 내부 풀(STT·LLM·TTS 등) 간 부하는 동일 구역 내 일반 로드밸런싱으로 처리한다.
+- **WTIMS → AI Runtime**은 기존 코어와 신규 시스템의 **경계**이므로 WT가 AIR 실제 IP 목록을 들지 않고 **AIR 연동 접점 GW**(단일 VIP/FQDN)만 사용한다. **GW 뒤 AI Runtime**은 **All-Active**(§2.2), **STT·TTS·LLM 풀**도 **All-Active** 이다. 내부 풀 간 부하는 동일 구역 내 **로드밸런싱**으로 처리한다.
 - 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와 AI **API/Realtime** 연계는 §1.5 및 본 절 Mermaid를 참고한다.
 - **유엔젤·바이토**가 **API/Realtime을 호출**할 때는 **API/Realtime 단일 접점 VIP/FQDN**(§1.6)으로 수렴한다. **API/Realtime이 유엔젤·바이토를 호출**하는 **아웃바운드**는 존 정책에 따라 직접(HTTPS 등) 연결할 수 있다.
 - **관제 모니터링 PC**는 EMS 백엔드(OTel/TSDB/Log/Trace)에 직접 붙지 않고, **EMS 관측 대표 VIP/FQDN(또는 EMS 관측 Ingress)** 을 거쳐 **Grafana**로만 접근한다(§8.1).
@@ -390,7 +392,7 @@ flowchart LR
     end
     subgraph ACA["AI Call Agent 시스템"]
         GW["AIR 연동 접점 GW"]
-        AIR["AI Runtime A/S"]
+        AIR["AIR 풀<br/>All-Active"]
         STT["STT"]
         TTS["TTS"]
         LLM["LLM"]
@@ -443,7 +445,7 @@ flowchart LR
 | 외부·관제 | 단말·클라이언트 | 관제 모니터링 PC | **Grafana**(선택 **EMS 관측 Ingress**)로 EMS 모니터링 · TSDB·Loki 직접 접속 금지 §8.1 |
 | AI Call Agent 시스템 | 프로세스형 서버 | AIR 연동 접점 GW | 코어(WT)와 신규(AIR) 구역 **단일 연동 주소** · **세션·통합 시그널만** · RTP 미디어 비경유 §1.4·§2.2 |
 | AI Call Agent 시스템 | 프로세스형 서버 | API/Realtime 단일 접점(VIP) | 유엔젤·바이토→**API/Realtime** **단일 진입** · **Active/Standby** · TLS·레이트리밋 §1.6 (**L4 전용 장비 없음**) |
-| AI Call Agent 시스템 | 프로세스형 서버 | AI Runtime | 호 단위 오케스트레이션·정책·의도·HITL·추론 라우팅, STT/LLM/TTS 호출·WTIMS 재생 명령·DB/스토리지 연계 · **접점 뒤 Active/Standby** §2.2 |
+| AI Call Agent 시스템 | 프로세스형 서버 | AI Runtime | 호 단위 오케스트레이션·정책·의도·HITL·추론 라우팅, STT/LLM/TTS 호출·WTIMS 재생 명령·DB/스토리지 연계 · **GW 뒤 All-Active** §2.2 |
 | AI Call Agent 시스템 | 프로세스형 서버 | STT Server | RTP 미러 또는 오디오 스트림 수신·실시간 문자 변환·부분/최종 텍스트 스트리밍 |
 | AI Call Agent 시스템 | 프로세스형 서버 | LLM Server | 프롬프트 기반 추론·도구/함수 호출 응답·OpenAI 호환 API 제공 |
 | AI Call Agent 시스템 | 프로세스형 서버 | TTS Server | 텍스트→음성 스트리밍 합성·PCM 청크 반환 |
@@ -460,30 +462,30 @@ flowchart LR
 
 상세 모델·스펙은 §5, 스토리지 용도는 §7 참고.
 
-### 2.2 부하분산: 구역 경계(WTIMS→AIR)와 내부 풀
+### 2.2 부하분산: 단일 접점(GW·API) vs 내부 All-Active
 
 **원칙**
 
-- **내부 노드 간**(AI Call Agent 시스템 안에서 AIR→STT·LLM·TTS, API→AIR 등)은 동일 보안·네트워크 존 안에서 **일반적인 로드밸런싱**(라운드로빈·최소 연결·헬스 기반)을 적용할 수 있다.
-- **기존 코어 통신 영역 ↔ AI Call Agent 시스템** 접점인 **WTIMS → AI Runtime**은 연동 주소·계약·방화벽 홀을 **한 벌로 고정**할 필요가 있으므로, **AIR 연동 접점 GW**를 두어 **단일화**한다. WTIMS는 이 접점의 **FQDN/VIP 한 개만** 알면 된다. **본 설계(비용 11절 포함)** 에는 **L4 전용 로드밸런서를 두지 않으므로**, 접점 뒤 AI Runtime은 **Active/Standby**로 두고 **정상 시 Active 한 노드**만 인바운드를 처리한다. **다중 AIR를 동시에 가동하는 All-Active** 및 **`call_id` 일관 해시로 N대 분산**은 **전용 L4/LB·게이트웨이 계층**을 별도 도입했을 때의 확장 옵션이다.
+- **단일 외부·코어 접점이 필요한 계층만 Active/Standby(VIP):** **AIR 연동 접점 GW**(WT→신규 구역 한 주소), **API/Realtime**(유엔젤·바이토→AI 한 VIP). 이 둘은 **정상 시 VIP가 부착된 한 노드**가 인바운드를 받고, 장애 시 Standby가 인수한다(§1.6).
+- **그 외 AI Call Agent 내부 계층** — **AI Runtime, STT, TTS, LLM, Qdrant** 등 — 은 **별도의 “단일 진입 브랜드 VIP”가 없으므로 전부 All-Active** 로 두는 것이 타당하다. **동일 존** 내에서는 **로드밸런싱·일관 해시·헬스 기반**으로 부하를 나눈다.
+- **기존 코어 ↔ 신규 구역** 경계에서는 연동 주소를 **한 벌**로 고정해야 하므로 **AIR GW**만 단일 FQDN/VIP를 노출한다. **GW 뒤 AIR 다중 대**는 GW 소프트웨어가 **`call_id` 일관 해시**로 선택한다 — **전용 L4 장비 없음**(본 설계·비용 11절 전제).
 
 **AIR 연동 접점(권장 구조)**
 
 | 요소 | 역할 |
 |------|------|
-| **단일 진입 주소** | WT 클러스터가 바라보는 **하나의 VIP 또는 FQDN**(예: `air-ingest.prod.internal`) — 코어↔신규 구역 방화벽·ACL도 이 주소만 허용하면 된다. |
-| **GW→AIR 전달** | **gRPC/HTTP 게이트웨이 등 소프트웨어 GW**가 통합 시그널을 **정상 시 Active AI Runtime**으로 전달한다. Standby는 페일오버 시 VIP·구성 전환으로 인수한다. **N대 수평 분산·스티키 로드쉐어**는 L4/LB 없이는 채택하지 않는다(1.4절·1.6절과 동일 전제). |
-| **AI Runtime** | **1 Active + 1 Standby** — WT는 AIR 실제 IP 목록을 보유하지 않음 |
+| **단일 진입 주소** | WT가 바라보는 **하나의 VIP/FQDN** — 방화벽·ACL **GW 한 주소**만 개방. |
+| **GW 본체** | 코어 대면 VIP는 **1+1 A/S**(Keepalived/VRRP 등). 인바운드 통합 시그널은 **한 시점에 VIP에 붙은 GW 프로세스**가 받는다. |
+| **GW→AIR** | 동일 GW 프로세스(또는 GW 쌍이 공유하는 라우팅 규칙)가 **`call_id` 일관 해시**로 **AI Runtime N대(본 시나리오 N=2) All-Active** 에 분배. 호 생명 주안에 동일 AIR로 고정. |
+| **AI Runtime** | **All-Active** — WT는 AIR 실제 목록을 들지 않음. |
 
-**미디어 평면은 GW 비경유:** GW는 **통합 시그널·저대역 스트림**만 처리한다. RTP Mirror·PCM 파이프는 **WTIMS ↔ STT**(및 TTS 재생 경로)가 직접 이어지며, §2 도표의 `WT→STT` 엣지가 그 역할이다. 이렇게 해야 지연·버퍼·대역폭 낭비를 피한다.
+**미디어 평면은 GW 비경유:** RTP Mirror·PCM 파이프는 **WTIMS ↔ STT**, TTS 재생은 **WTIMS** 직결이며 §1.4 표와 같다.
 
-**호 단위 고정:** 한 통화는 **`call_id`당 정상 시 단일 Active AIR**에 바인딩한다(동시에 두 Active가 부하를 나누지 않는 전제).
+**호 단위 고정:** 한 통화는 **`call_id` → 일관 해시로 선택된 단일 AIR 인스턴스**에 바인딩한다. 스케일아웃 시 **해시 링 조정** 시에만 재바인딩 정책을 정의한다.
 
-**비권장(경계 구간):** WT 프로세스가 AIR 목록을 직접 들고 호마다 노드를 고르는 방식은 **연동 지점이 WT 전 노드에 분산**되어 방화벽·버저닝·장애 시 공조가 어렵다. 불가피할 경우에만 검토하고, 그래도 **논리 주소는 단일 접점으로 노출**하는 편이 운영에 유리하다.
+**AIR 한 대 장애 시:** 해시 대상이 줄어 나머지 Active가 부하를 이어받는다. 세션 연속성은 **재시도·세션 복구·PostgreSQL 상태**로 완화(3.4절·부록 A).
 
-**AIR 장애 시:** Active 장애 시 Standby가 인수한다. 전환 순간 세션 연속성은 **짧은 재시도·세션 복구 스키마·PostgreSQL 등에 둔 상태**로 완화할 수 있으며, 계약·부록 A와 정합시킨다(3.4절). **L4/LB 뒤 다중 Active**로 확장한 뒤에는 **일관 해시·재바인딩** 정책을 별도로 정의한다.
-
-STT·LLM·TTS 풀은 Active AIR가 **동일 호에 대해** 저지연으로 호출할 수 있도록 같은 존 또는 근접 네트워크에 두고, **정상 시 Active 1대** 기준으로 세션 부하를 산정한다(§6).
+**STT·TTS·LLM 풀:** **전부 All-Active**. AIR는 동일 호에 대해 STT/TTS/LLM 풀을 **저지연으로 호출**할 수 있도록 근접 배치한다. **용량 수치는 Active 노드 수 × 노드당 벤치**로 합산한다(§6).
 
 ---
 
@@ -504,7 +506,7 @@ flowchart TD
     subgraph ACA["AI Call Agent 시스템 · 유형 표기"]
         GW["AIR 연동 접점<br/>세션 시그널 전용"]
         STT["STT Server<br/>프로세스형 서버"]
-        AIR["AI Runtime<br/>프로세스형 서버"]
+        AIR["AI Runtime 풀<br/>All-Active"]
         LLM["LLM Server<br/>프로세스형 서버"]
         TTS["TTS Server<br/>프로세스형 서버"]
         API["API/Realtime<br/>단일 VIP · Active / Standby"]
@@ -519,7 +521,7 @@ flowchart TD
     API -->|아웃바운드 코어 조회| UAPI
     API -->|Realtime 이벤트 릴레이<br/>STT TTS 상태 푸시| BAPI
     WT -->|통합 시그널 단일 진입| GW
-    GW -->|정상 시 Active AIR| AIR
+    GW -->|call_id 해시 → AIR| AIR
     WT -->|RTP Mirror 미디어 GW 비경유| STT
     AIR -->|gRPC bidi · 16k PCM Opus| STT
     AIR -->|HTTP2 gRPC 또는 REST · OpenAI-compatible| LLM
@@ -554,7 +556,7 @@ flowchart TD
 | 교환기 ↔ 통화매니저AS | SIP 2.0, SDP, UDP/TCP/TLS | 양방향 | Trunk, INVITE/ACK/BYE, 코덱·미디어 협상 |
 | 통화매니저AS ↔ WTIMS | **SIP 2.0 + SDP + RTP/RTCP** | 양방향 | 미디어 앵커·세션 제어; 호 상관·테넌트 등 AI 연계 메타는 **SIP 헤더·SDP 속성·협의된 SDP 필드** 등으로 전달. **CM↔WT 구간은 JSON 페이로드 규격으로 두지 않는다.** WT는 여기서 확보한 세션 정보와 미디어 메타를 합쳐 **AIR 연동 접점**으로 내보낸다 |
 | WTIMS → AIR 연동 접점 | gRPC 또는 Kafka 등 **부록 A**와 동일 규약 | WT→GW | **코어↔신규 구역 단일 주소**(VIP/FQDN); WT는 AIR 노드 목록 미보유 |
-| AIR 연동 접점 → AI Runtime | 동상 내부 전달 | GW→AIR | **정상 시 Active AIR**로 전달 · Standby 페일오버 §2.2 (**N대 분산은 L4/LB 별도 도입 시**) |
+| AIR 연동 접점 → AI Runtime | 동상 내부 전달 | GW→AIR | **`call_id` 해시로 선택된 AIR** 인스턴스로 전달 §2.2 (**AIR 풀 All-Active**) |
 | WTIMS → STT | RTP 또는 SRTP 미러 | WT→STT | PCM 16 kHz mono 등 사전 합의 코덱 |
 | AI Runtime ↔ STT | gRPC bidi, 오디오 프레임 + 메타 | 양방향 | 세션 메타 첫 프레임·부분/최종 텍스트 스트림 |
 | AI Runtime ↔ LLM | HTTPS JSON OpenAI 호환 또는 gRPC | AIR→LLM | `/v1/chat/completions` 등, 스트리밍 옵션 |
@@ -584,7 +586,7 @@ SIP/SDP·JSON·HTTP 등 **프로토타입용 샘플**은 **문서 맨 뒤 [부�
 - **교환기 <-> 통화매니저AS**: SIP Trunk (UDP/TCP/TLS)
 - **통화매니저AS <-> WTIMS**: **SIP 2.0 + SDP + RTP/RTCP**만 사용. 호 세션·스냅샷·생명주기 표현도 **동일 구간의 SIP/SDP·협의 헤더**로 한다(JSON 전용 CM↔WT 채널 없음). AIR 직접 연동 없음
 - **WTIMS → AIR 연동 접점**: 세션 릴레이 + 미디어 레그 바인딩 **통합 시그널**(gRPC/Kafka 등), **단일 주소** · `call_id` 상관·갱신·해제 포함 · **RTP 미디어는 GW 비경유**
-- **AIR 연동 접점 → AI Runtime**: **정상 시 Active AIR** · Standby 페일오버 §2.2
+- **AIR 연동 접점 → AI Runtime**: GW가 **`call_id` 해시 → AIR 풀(All-Active)** §2.2
 - **WTIMS -> STT**: RTP mirror stream (codec normalized PCM 16k 권장) · **미디어 평면 직결**
 - **AI Runtime <-> STT**: gRPC bidirectional streaming
 - **AI Runtime <-> LLM**: OpenAI-compatible REST 또는 gRPC inference API
@@ -601,7 +603,7 @@ SIP/SDP·JSON·HTTP 등 **프로토타입용 샘플**은 **문서 맨 뒤 [부�
 
 **단계별 요약(텍스트):** 문서 앞쪽 **빠른 참조 — 통화·데이터 플로우**. 본 절은 참여자 간 메시지 순서를 **시퀀스 다이어그램**으로 보여 준다.
 
-STT·LLM·TTS·AI Runtime 참여자는 **AI Call Agent 시스템** 소속 컴포넌트로 본다. 교환기·통화매니저AS·WTIMS는 기존 코어다. 아래 시퀀스에서 **AIR 연동 접점 GW**는 WT와 AI Runtime 사이 **단일 논리 진입**으로 표기했으며, 실제 배포는 §2·§2.2(**Active/Standby**, 무 L4)와 같다.
+STT·LLM·TTS·AI Runtime 참여자는 **AI Call Agent 시스템** 소속 컴포넌트로 본다. 교환기·통화매니저AS·WTIMS는 기존 코어다. 아래 시퀀스에서 **AIR 연동 접점 GW**는 WT와 AI Runtime 사이 **단일 논리 진입**으로 표기했으며, **AIR·추론 풀은 All-Active**, **GW·API만 단일 VIP A/S**(§2·§2.2).
 
 ```mermaid
 sequenceDiagram
@@ -626,7 +628,7 @@ sequenceDiagram
     WT->>STT: RTP mirror stream
     CM->>WT: 호 세션 스냅샷 릴레이
     WT->>GW: 세션 + 미디어 통합 시그널
-    GW->>AIR: Active AIR로 전달 (Standby 대기)
+    GW->>AIR: call_id 해시로 선택된 AIR로 전달
     STT-->>AIR: partial/final transcript (stream)
     AIR->>LLM: inference request (intent/context/tool)
     LLM-->>AIR: answer + action
@@ -660,6 +662,7 @@ sequenceDiagram
 - **권장 형태**: GPU inference + gRPC streaming
 - **서버 스펙(노드당)**: 32 vCPU / 128 GB RAM / GPU L40S 1장 이상 / HDD 2 TB
 - **처리량 가정(벤치)**: **625 동시세션/노드**
+- **구성**: 본 시나리오 **2노드 All-Active** → 클러스터 **1,250 동시**(벤치 합산).
 - **기준 구분**: 위 처리량은 **벤치 기준치**이며, 운영 시에는 목표 상한을 **80% 이내(권장 500/노드)** 로 관리한다.
 
 ## 5.2 TTS 서버 (내부 구축)
@@ -670,6 +673,7 @@ sequenceDiagram
 - **권장 형태**: gRPC streaming synth + 캐시
 - **서버 스펙(노드당)**: 24 vCPU / 96 GB RAM / GPU L40S 1장 / HDD 2 TB
 - **처리량 가정(벤치)**: **1,000 동시세션/노드**
+- **구성**: 본 시나리오 **2노드 All-Active** → 클러스터 **2,000 동시**(벤치 합산).
 - **기준 구분**: 위 처리량은 **벤치 기준치**이며, 운영 시에는 목표 상한을 **80% 이내(권장 800/노드)** 로 관리한다.
 
 ## 5.3 LLM 서버 (내부 구축)
@@ -706,11 +710,11 @@ sequenceDiagram
 
 ## 5.4 AI Runtime 서버
 
-- **역할**: 세션 오케스트레이션, 정책 판단, HITL, 도구 호출, STT/TTS/LLM 라우팅. WTIMS는 **AIR 연동 접점**을 통해서만 유입(§1.4·§2.2).
+- **역할**: 세션 오케스트레이션, 정책 판단, HITL, 도구 호출, STT/TTS/LLM 라우팅. WTIMS는 **AIR 연동 접점 GW**를 통해서만 유입(§1.4·§2.2).
 - **서버 스펙(노드당)**: 16 vCPU / 64 GB RAM / HDD 1 TB
 - **NIC 권장**: **1 Gbps** (텍스트·제어 시그널 중심, 미디어 RTP 비처리)
-- **처리량 가정**: 250 동시 세션/노드(본 시나리오 기준)
-- **배치 원칙**: **1 Active + 1 Standby** — `call_id`는 정상 시 Active에 바인딩. **L4 없이** 다중 Active로 부하를 나누지 않는다(2.2절). 스케일아웃은 **전용 L4/LB 도입** 후 별도 설계
+- **처리량 가정**: **250 동시 세션/노드**(벤치); 본 시나리오는 **노드 2대 All-Active** → 클러스터 합산 **500 동시**(§6.2)
+- **배치 원칙**: **All-Active N대**(본문 **N=2**) — **AIR GW**가 **`call_id` 일관 해시**로 특정 AIR 인스턴스에 바인딩. **전용 L4 없음**(GW 소프트웨어 라우팅, §2.2). 노드 증설 시 해시 링·재균형 정책 정의
 
 ## 5.5 API/Realtime 서버
 
@@ -737,10 +741,10 @@ sequenceDiagram
 | 기존 코어 | 통화매니저AS | 기존 코어 사용 | 기존 Pair 용량 기준 | 기존 2 Pair 활용 | 추가 구축 없음 |
 | 기존 코어 | WTIMS RTP | 250 RTP 세션 | 800 세션/노드 | 1 | 1 Active + 1 Standby |
 | AI Call Agent 시스템 | AIR 연동 접점 GW | 코어→신규 단일 진입 · 통합 시그널만 | 제품·프로파일별 처리량 | 1 | 1 Active + 1 Standby |
-| AI Call Agent 시스템 | STT | 250 세션(상시 점유) | **625/노드(벤치)** | 1 | **1 Active + 1 Standby** |
-| AI Call Agent 시스템 | TTS | 250 세션 기준 합성 부하 | **1,000/노드(벤치)** | 1 | **1 Active + 1 Standby** |
+| AI Call Agent 시스템 | STT | 250 세션(상시 점유) | **625/노드(벤치)** | **2** | **2 Active** (All-Active; 클러스터 **1,250** 동시) |
+| AI Call Agent 시스템 | TTS | 250 세션 기준 합성 부하 | **1,000/노드(벤치)** | **2** | **2 Active** (All-Active; 클러스터 **2,000**) |
 | AI Call Agent 시스템 | LLM | 20 QPS (운영상한, 80% 적용) | `1,500 tok/s x 2노드`, 120 tok/요청 | 2 | **2 Active (fp8)** |
-| AI Call Agent 시스템 | AI Runtime | 250 세션 | 250/노드(Active) | 1 | **1 Active + 1 Standby** |
+| AI Call Agent 시스템 | AI Runtime | 250 세션(시스템 목표) | 250/노드(벤치) | **2** | **2 Active** (All-Active; GW 해시; 클러스터 **500** 동시 벤치) |
 | AI Call Agent 시스템 | API/Realtime | 250 WS peak + 80 rps | 250 WS/노드 + 80 rps(Active) | 1 | **1 Active + 1 Standby** · 단일 VIP §1.6 |
 | AI Call Agent 시스템 | PostgreSQL HA | 세션/정책/이력 | 쓰기 Primary 기준 · 읽기 Replica 오프로딩(선택) | 2 | **최소** Primary + Standby(HA) |
 | AI Call Agent 시스템 | Qdrant(VectorDB) | **10만 고객 지식베이스 + 250 동시세션 조회/업서트** | 100 QPS/노드(보수) | 2 | **최소 2 Active** |
@@ -753,7 +757,7 @@ sequenceDiagram
 
 > 상기 수치는 초기 계획치이며, 반드시 스테이징에서 **2.1 CPS/120초/250 동시세션** 부하로 재검증한다.
 > **표의 노드당 처리량 값은 벤치 기준치**이며, 운영 상한은 기본적으로 **80% 이내**로 관리한다(장애 전환·피크 구간은 일시 초과 허용).
-> STT/TTS 노드 수는 사용자가 확정한 **벤치 수용량(STT 625/노드, TTS 1,000/노드)** 기준으로 산정했다.
+> STT/TTS는 각 **2노드 All-Active** 이며, 클러스터 합산 동시는 **STT 1,250 / TTS 2,000**(벤치, 노드당 STT 625·TTS 1,000).
 
 ### 6.4 가상 시나리오 처리량 환산 (유저 수)
 
@@ -777,10 +781,10 @@ sequenceDiagram
 | 기존 코어 | 통화매니저AS | 기존 2 Pair 활용 | 기존 사양 | 기존 사양 | - | 기존 사양 | 기존 사양 | 신규 구축 없음 |
 | 기존 코어 | WTIMS RTP | 1 + 1 | 24 vCPU | 64 GB | - | HDD 2 TB | 10 Gbps | RTP Relay + RTP Mirror |
 | AI Call Agent 시스템 | AIR 연동 접점 GW | 1 + 1 | 8 vCPU | 32 GB | - | HDD 1 TB | 1 Gbps | 세션 시그널만 · VIP 이중화 §2.2 |
-| AI Call Agent 시스템 | STT Server | 1 + 1 | 32 vCPU | 128 GB | L40S x1 | HDD 2 TB | 10 Gbps | gRPC streaming ASR · 625/노드(벤치) |
-| AI Call Agent 시스템 | TTS Server | 1 + 1 | 24 vCPU | 96 GB | L40S x1 | HDD 2 TB | 10 Gbps | gRPC streaming TTS · 1,000/노드(벤치) |
+| AI Call Agent 시스템 | STT Server | **2 Active** | 32 vCPU | 128 GB | L40S x1 | HDD 2 TB | 10 Gbps | gRPC streaming ASR · 625/노드(벤치) · **All-Active** |
+| AI Call Agent 시스템 | TTS Server | **2 Active** | 24 vCPU | 96 GB | L40S x1 | HDD 2 TB | 10 Gbps | gRPC streaming TTS · 1,000/노드(벤치) · **All-Active** |
 | AI Call Agent 시스템 | LLM Server | 2 + 0 | 32 vCPU | 256 GB | L40S x2 | HDD 2 TB | 1 Gbps | vLLM/TGI 추론 풀 · fp8 1,500 tok/s/노드 가정 |
-| AI Call Agent 시스템 | AI Runtime | 1 + 1 | 16 vCPU | 64 GB | - | HDD 1 TB | 1 Gbps | 세션 오케스트레이션 · Active/Standby §2.2 |
+| AI Call Agent 시스템 | AI Runtime | **2 Active** | 16 vCPU | 64 GB | - | HDD 1 TB | 1 Gbps | 세션 오케스트레이션 · **All-Active** §2.2 |
 | AI Call Agent 시스템 | API/Realtime (단일 VIP) | 1 + 1 | 16 vCPU | 32 GB | - | HDD 1 TB | 1 Gbps | REST/WSS · Active가 250 WS+80 rps; 페일오버 시 Standby 인수 |
 | AI Call Agent 시스템 | PostgreSQL HA | 2 + 0(최소) / 2 + 1(읽기분산) | 24 vCPU | 128 GB | - | HDD 4 TB | 1 Gbps | Primary/Standby + (선택) Read Replica |
 | AI Call Agent 시스템 | Qdrant(VectorDB) | 2 + 0(최소) / 3 + 0(권장) | 16 vCPU | 64 GB | - | HDD 2 TB | 1 Gbps | 2 Active 시작, 장애내성 강화 시 3노드 권장 |
@@ -798,10 +802,10 @@ sequenceDiagram
 - 동시세션 목표(운영): `250`
 - API/Realtime 유효 수용량: **정상 시 Active 1대** 기준 `250 WS + 80 rps`; 페일오버 시 Standby가 동일 한도로 인수 **전제**(VIP 전환·재연결 지연 별도)
 - WTIMS 유효 수용량: `1 active x 800 = 800` (여유)
-- STT 유효 수용량(벤치): `1 active x 625 = 625` (요구 동시세션 대비 여유)
-- TTS 유효 수용량(벤치): `1 active x 1,000 = 1,000` (요구 동시세션 대비 여유)
+- STT 유효 수용량(벤치): **`2 active x 625 = 1,250`** 클러스터 (요구 250 대비 여유)
+- TTS 유효 수용량(벤치): **`2 active x 1,000 = 2,000`** 클러스터 (여유)
 - LLM 유효 수용량: `2 active x 1,500 tok/s ÷ 120 tok/요청 = 25 QPS` (운영상한 80% 적용 시 20 QPS, 목표 250세션 정합)
-- AI Runtime 유효 수용량: **정상 시 Active 1대** `250` 세션; 페일오버 시 Standby 인수
+- AI Runtime 유효 수용량: **`2 active x 250 = 500`** 세션 클러스터(벤치); 한 노드 장애 시 남은 **1 Active**가 일시적으로 부하 집중(해시 재분배 권장)
 
 ### 6.3 EMS 제외 시 서버 산정(옵션)
 
@@ -811,10 +815,10 @@ EMS를 본 시스템 범위에서 제외하면(외부 관제/기존 관제 사�
 |------|-----------|-----------|
 | 기존 코어 | WTIMS RTP | 1 + 1 |
 | AI Call Agent 시스템 | AIR 연동 접점 GW | 1 + 1 |
-| AI Call Agent 시스템 | STT Server | 1 + 1 |
-| AI Call Agent 시스템 | TTS Server | 1 + 1 |
-| AI Call Agent 시스템 | LLM Server | 2 + 0 |
-| AI Call Agent 시스템 | AI Runtime | 1 + 1 |
+| AI Call Agent 시스템 | STT Server | **2 Active** |
+| AI Call Agent 시스템 | TTS Server | **2 Active** |
+| AI Call Agent 시스템 | LLM Server | 2 Active |
+| AI Call Agent 시스템 | AI Runtime | **2 Active** |
 | AI Call Agent 시스템 | API/Realtime (단일 VIP) | 1 + 1 |
 | AI Call Agent 시스템 | PostgreSQL HA | 2 + 0 |
 | AI Call Agent 시스템 | Qdrant(VectorDB) | 2 + 0 |
@@ -989,7 +993,7 @@ flowchart LR
 - [ ] 교환기 N개 -> 통화매니저AS 라우팅 정책 검증
 - [ ] WTIMS RTP mirror 기능 개발/검증 완료
 - [ ] 통화매니저AS→WTIMS 호 세션 릴레이 및 WTIMS→**AIR 연동 접점**→AI Runtime **통합 시그널** 규약·순서·`call_id` 상관 검증
-- [ ] WTIMS→**AIR 연동 접점** 단일 주소(VIP/FQDN)·방화벽 홀·인증서 확정; 접점→AIR **Active 전달·Standby 페일오버** 및 장애 시 세션 정책 검증(§2.2)
+- [ ] WTIMS→**AIR 연동 접점** 단일 주소(VIP/FQDN)·방화벽 홀·인증서 확정; **GW A/S** 및 **GW→AIR `call_id` 해시·AIR All-Active** 장애·세션 정책 검증(§2.2)
 - [ ] **미디어 경로** RTP Mirror·TTS 재생이 GW를 경유하지 않음을 네트워크·방화벽 설계서와 일치 검증(§1.4)
 - [ ] **유엔젤·바이토 → API/Realtime 단일 접점(VIP)** 단일 주소·mTLS 또는 API Key·레이트리밋·**Active/Standby VIP 전환** 검증(§1.6)
 - [ ] Internal STT/TTS/LLM API 스펙 확정(gRPC/REST)
@@ -1013,7 +1017,7 @@ flowchart LR
 
 본 구조는 기존 통신 코어(교환기/통화매니저AS/WTIMS)를 최대한 재활용하면서, 신규 **AI Call Agent 시스템**(STT/TTS/LLM/Runtime/API/데이터 — **통화 녹음은 WTIMS**, 파일 부산물은 **노드 로컬 임시**·§7.3)과 **EMS**(관측 프로세스 6종 — 배포 구역은 별도)를 내부화해 주권과 확장성을 확보하는 설계다.  
 기존 **통화매니저 API(유엔젤·바이토)** 및 **유저 PC Client**와의 연계는 코어·외부 역할을 분리하고, **유엔젤·바이토 → API/Realtime**은 **단일 VIP · Active/Standby**(§1.6; **L4 전용 장비 없음**), **API/Realtime → 유엔젤·바이토** 아웃바운드는 직접 조회·연계한다(§1.5).  
-핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW→AI Runtime Active**(세션 시그널만 GW · 미디어 RTP 비경유 · Standby 페일오버)·**유엔젤·바이토→API/Realtime 단일 VIP**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `250 세션 실부하 검증`이다.
+핵심 성공 요소는 `WTIMS RTP mirror 안정화`, **통화매니저AS→WTIMS→AIR GW**(단일 VIP **A/S**)→**AI Runtime 풀 All-Active**(세션 시그널만 GW · 미디어 RTP 비경유 · **GW 해시 분배**)·**유엔젤·바이토→API/Realtime 단일 VIP A/S**(§1.6)·**외부 관제 PC→EMS 관측 대표 VIP 단일 접점→Grafana**(§8.1), `AI Call Agent 시스템·EMS 연동 규격 표준화`, `250 세션 실부하 검증`이다.
 
 ---
 
@@ -1215,7 +1219,7 @@ DNIS·서비스 프로파일 등은 **별도 JSON 파일이 아니라** SIP `Req
 
 #### B. WTIMS → AIR 연동 접점 → AI Runtime 통합 시그널 (세션 릴레이 + 미디어 레그)
 
-WTIMS가 **SIP/SDP로 CM과 맺은 세션**에서 해석한 필드와 자체 미디어 메타를 **한 페이로드**로 **AIR 연동 접점**에 보내고, 접점이 **정상 시 Active AI Runtime**으로 전달한다(gRPC·Kafka 등 **WT→GW 구간 JSON/바이너리 규약**). Standby는 페일오버 시 인수한다. 미디어 미준비 구간은 `media` 생략 또는 `state`로 표현할 수 있다.
+WTIMS가 **SIP/SDP로 CM과 맺은 세션**에서 해석한 필드와 자체 미디어 메타를 **한 페이로드**로 **AIR 연동 접점 GW**에 보내고, GW가 **`call_id` 일관 해시**로 **AI Runtime 풀(All-Active)** 중 한 인스턴스로 전달한다(gRPC·Kafka 등 **WT→GW 구간 JSON/바이너리 규약**). **GW VIP** 장애 시 Standby GW가 인수한다. 미디어 미준비 구간은 `media` 생략 또는 `state`로 표현할 수 있다.
 
 ```json
 {
