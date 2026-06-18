@@ -29,7 +29,7 @@ flowchart TB
 
     CM -->|호 세션| RT
     RT -->|호 세션| STT
-    WT -->|미디어(TCP 200ms)| STT
+    WT -->|"미디어(TCP 200ms)"| STT
     STT -->|전사| RT
     RT <-->|폭언·자막·TIP| CM_API
     CM_API -->|호 제어| CM
