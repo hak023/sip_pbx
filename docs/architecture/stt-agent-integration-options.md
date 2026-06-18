@@ -17,6 +17,7 @@ flowchart TB
         CM[통화매니저 AS]
         WT[WTIMS]
         CM_API[통화매니저 API]
+        IN_STT[STT 서버]
     end
 
     subgraph NEW_STT["음성 AI Agent(Cloud)"]
@@ -26,15 +27,11 @@ flowchart TB
         RT[AI 서버]
     end
 
-    subgraph HYBRID_STT["음성 AI Agent(지능망+Cloud)"]
+    subgraph HYBRID_STT["음성 AI Agent(Cloud 측)"]
         style HYBRID_STT fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
         
-        IN_STT[STT 서버]
         RT2[AI 서버]
     end
-
-    %% 지능망 STT 서버 실선 스타일 지정
-    style IN_STT stroke:#333,stroke-width:2px
 
     EX <-->|SIP 연동| CM
     CM --> WT
