@@ -36,9 +36,9 @@
 
 | 문서 | 설명 |
 |---|---|
-| [prd.md](product/prd.md) | 통합 PRD (SIP Core + AI), 구현 스냅샷 |
-| [prd-detailed-phase1-4.md](product/prd-detailed-phase1-4.md) | Phase 1–4 상세 요구사항 |
-| [project-plan.md](product/project-plan.md) | 프로젝트 계획(시장·재무·로드맵 — 기획 시점 기준, 유지보수 메모 참고) |
+| [prd.md](product/prd.md) | **마스터 PRD** (SIP Core + AI + 사업 요약 + MM); 구현 스냅샷 |
+| [prd-detailed-phase1-4.md](product/prd-detailed-phase1-4.md) | Phase 1–4 **부록** — 상세 FR·User Story |
+| [project-plan.md](product/project-plan.md) | 시장·재무·GTM **원문 보관**(기획 시점; 요약은 `prd.md`) |
 
 ---
 
@@ -268,7 +268,7 @@ INDEX 및 상위 문서(`README.md`, `SYSTEM_OVERVIEW.md`)에서 링크된 문�
 |------|-----------|
 | [architecture/technical-architecture.md](architecture/technical-architecture.md) | 스택 표·다이어그램 링크·내부 상호 링크 |
 | [architecture/production-deployment-architecture.md](architecture/production-deployment-architecture.md) | §11 비용·외부 연동 표, Mermaid, `technical`과 용어 충돌 시 각주 |
-| [product/prd.md](product/prd.md) · [prd-detailed-phase1-4.md](product/prd-detailed-phase1-4.md) | Phase 스냅샷·세부 FR과 코드/리포트 불일치 목록화 |
+| [product/prd.md](product/prd.md) · [prd-detailed-phase1-4.md](product/prd-detailed-phase1-4.md) | 마스터 PRD·부록 상세 FR과 코드/리포트 불일치 목록화 |
 
 **산출**: 상위 문서 하단 "관련 문서" 표가 1단계만으로 닫히는지 확인.
 

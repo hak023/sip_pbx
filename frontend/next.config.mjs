@@ -31,12 +31,12 @@ const nextConfig = {
   // Windows 시스템 파일 접근 에러 방지 (pagefile.sys, hiberfil.sys 등)
   // C:\ 루트의 시스템 파일을 lstat할 때 EINVAL 에러 발생
   webpack: (config) => {
+    // Next.js 번들 webpack 스키마는 ignored 에 RegExp 혼합 시 검증 실패할 수 있음 → 문자열 glob 만 사용
     config.watchOptions = {
       ...config.watchOptions,
       ignored: [
         '**/node_modules/**',
         '**/.next/**',
-        // Windows 시스템 파일 (glob 패턴 - Webpack은 배열 내 RegExp 미지원)
         '**/pagefile.sys',
         '**/hiberfil.sys',
         '**/swapfile.sys',

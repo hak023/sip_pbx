@@ -1267,7 +1267,7 @@ function FragmentRow({
   onResolveToggle: (id: string, newValue: boolean) => void;
 }) {
   const [resolving, setResolving] = useState(false);
-  const isUnresolved = computeIsUnresolved(row, nUnhandled);
+  const isUnresolved = computeIsUnresolved(row);
 
   const handleResolveClick = async (e: MouseEvent) => {
     e.stopPropagation();

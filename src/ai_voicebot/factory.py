@@ -630,22 +630,31 @@ async def create_pipecat_pipeline_builder(config: Dict[str, Any]) -> Optional[An
             graph = await get_or_build_compiled_graph_async()
             graph_elapsed = time.time() - graph_start
             if graph:
-                logger.info("✅ [Pipecat] LangGraph pre-compiled",
-                           elapsed=f"{graph_elapsed:.3f}s")
+                logger.info(
+                    "[Pipecat] LangGraph pre-compiled",
+                    elapsed=f"{graph_elapsed:.3f}s",
+                )
             else:
-                logger.warning("⚠️ [Pipecat] LangGraph pre-compilation failed",
-                             elapsed=f"{graph_elapsed:.3f}s")
+                logger.warning(
+                    "[Pipecat] LangGraph pre-compilation failed",
+                    elapsed=f"{graph_elapsed:.3f}s",
+                )
         except Exception as e:
             logger.warning("langgraph_pre_compile_failed", error=str(e))
         
-        logger.info("✅ Pipecat Pipeline Builder created successfully")
+        logger.info("Pipecat Pipeline Builder created successfully")
         return builder
         
     except ImportError as e:
-        logger.error("pipecat_import_error",
-                    error=str(e),
-                    message="pipecat-ai 패키지가 설치되지 않았습니다. "
-                            "pip install pipecat-ai[google,silero] 를 실행하세요.")
+        logger.error(
+            "pipecat_import_error",
+            error=str(e),
+            message=(
+                "Pipecat 모듈 import 실패(버전 불일치 가능). "
+                "예: StartInterruptionFrame 제거 → src/ai_voicebot/pipecat/interruption_compat.py 참고. "
+                "또는 pip install -U 'pipecat-ai[google,silero]' 로 버전 맞춤."
+            ),
+        )
         return None
     except Exception as e:
         logger.error("pipecat_builder_creation_error",

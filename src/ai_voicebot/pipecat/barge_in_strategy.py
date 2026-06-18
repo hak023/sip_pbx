@@ -18,9 +18,9 @@ import structlog
 from pipecat.frames.frames import (
     Frame,
     InterimTranscriptionFrame,
-    StartInterruptionFrame,
     TranscriptionFrame,
 )
+from src.ai_voicebot.pipecat.interruption_compat import StartInterruptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 logger = structlog.get_logger(__name__)

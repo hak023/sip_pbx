@@ -11,10 +11,12 @@ try:
     from pipecat.frames.frames import (
         Frame,
         InputAudioRawFrame,
-        StartInterruptionFrame,
     )
     from pipecat.processors.frame_processor import FrameProcessor
     from pipecat.pipeline.pipeline import FrameDirection
+
+    from src.ai_voicebot.pipecat.interruption_compat import StartInterruptionFrame
+
     _PIPECAT_AVAILABLE = True
 except ImportError:
     Frame = None

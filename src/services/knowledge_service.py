@@ -28,6 +28,8 @@ class KnowledgeService:
         self._vector_db = vector_db
         self._embedder = embedder
         self._extraction_pending_file = extraction_pending_file
+        # seed_data.seed_initial_data 등이 초기화 여부를 볼 때 사용 (별도 initialize() 없이 즉시 사용 가능)
+        self._initialized = True
 
     @property
     def vector_db(self):

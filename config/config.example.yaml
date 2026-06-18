@@ -10,6 +10,19 @@
 #   3) (선택) ringback.ngrok_local_api_url — 기본 http://127.0.0.1:4040
 # PBX가 ngrok 로컬 API에서 공개 https URL 을 읽어 callBackUrl 을 조합합니다.
 # (선택) 환경변수 RINGBACK_USE_NGROK_TUNNEL / RINGBACK_NGROK_LOCAL_API_URL 로도 동일 설정 가능
+#
+# --- AI Voicebot / 오케스트레이션 (선택)
+# config.yaml 에 ai_voicebot 블록이 없으면 ai_orchestrator 는 생성되지 않습니다.
+# (로그: ai_voicebot_disabled, ai_readiness_at_startup 의 ai_orchestrator_set=False)
+# 키는 repo 에 넣지 않고: GOOGLE_APPLICATION_CREDENTIALS(서비스 계정 JSON), GEMINI_API_KEY — start-all.ps1 이 로드.
+# 켤 때만 아래 주석을 해제하고 project_id 를 본인 GCP 프로젝트에 맞춥니다. enabled: true 시 기동 시 AI 초기화가
+# 끝날 때까지(최대 ~120초) 대기하며, 실패하면 프로세스가 종료될 수 있습니다.
+#
+# ai_voicebot:
+#   enabled: true
+#   google_cloud:
+#     project_id: "sip-pbx-ai"
+#     # credentials_path 는 보통 생략 — 환경 변수 GOOGLE_APPLICATION_CREDENTIALS
 
 ringback:
   suno_api_key: "" # 또는 환경변수 SUNO_API_KEY

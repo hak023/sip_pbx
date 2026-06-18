@@ -20,14 +20,10 @@ try:
         InterruptionFrame,
         InterruptionTaskFrame,
         StartFrame,
-        StartInterruptionFrame,
         UserStartedSpeakingFrame,
         UserStoppedSpeakingFrame,
     )
-    try:
-        from pipecat.frames.frames import StopInterruptionFrame
-    except ImportError:
-        StopInterruptionFrame = None  # 일부 pipecat 버전에 없음
+    from src.ai_voicebot.pipecat.interruption_compat import StartInterruptionFrame, StopInterruptionFrame
     _PIPECAT_AVAILABLE = True
 except ImportError:
     _PIPECAT_AVAILABLE = False

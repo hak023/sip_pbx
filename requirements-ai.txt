@@ -12,14 +12,14 @@
 # -----------------------------------------------------------------------------
 # Google Cloud AI Services
 # -----------------------------------------------------------------------------
-google-cloud-speech==2.24.0          # STT (Speech-to-Text) with streaming
-google-cloud-texttospeech==2.16.3    # TTS (Text-to-Speech) with streaming
-google-generativeai==0.3.2           # Gemini LLM for conversation
-google-api-core==2.15.0              # Core library for Google APIs
-google-auth==2.26.2                  # Authentication for Google Cloud
-grpcio==1.60.1                       # gRPC for streaming APIs
-grpcio-status==1.60.1                # gRPC status codes
-protobuf==4.25.1                     # Protocol buffers
+google-cloud-speech==2.39.0          # STT — protobuf>=4.25.8,<8 (pipecat-ai와 protobuf 5.x 공존)
+google-cloud-texttospeech==2.36.0    # TTS — 동일 protobuf 상한
+google-generativeai==0.8.6           # Gemini — protobuf 5.x 정합(google-ai-generativelanguage>=0.6.9)
+google-api-core==2.30.3              # protobuf>=4.25.8,<8 (구 2.15는 protobuf<5 고정)
+google-auth>=2.48.1,<3               # pipecat→google-genai가 >=2.48.1 요구; !=2.24/2.25는 클라우드 라이브러리가 제외
+grpcio==1.67.1                     # chromadb→otel OTLP grpcio>=1.63.2
+grpcio-status==1.67.1            # grpcio와 버전 맞춤
+protobuf>=5.29.6,<6                 # pipecat-ai 1.1.x는 >=5.29.6 명시
 
 # -----------------------------------------------------------------------------
 # Vector Database & Embeddings
@@ -31,7 +31,8 @@ chromadb>=0.6.0,<1.0.0              # Vector DB (0.6.x: 기존 DB 스키마 호�
 # pinecone-client==3.0.0             # Vector DB for production (uncomment when ready)
 
 # Transformers & Embeddings (PyTorch 2.1 compatible versions)
-transformers==4.36.0                 # HuggingFace Transformers - PyTorch 2.1 compatible
+transformers==4.48.3                 # pipecat-ai 1.1.x는 >=4.48 필요; sentence-transformers 2.3.x와 <5 호환
+tokenizers==0.21.4                     # transformers 4.48.x 호환(<0.22). 누락·혼합 시 `decoders.DecodeStream` AttributeError로 기동 실패할 수 있음
 sentence-transformers==2.3.1         # Text embeddings (multilingual support) - PyTorch 2.1 compatible
 # 이전 버전: sentence-transformers==2.2.2 (PyTorch 2.1과 호환성 문제)
 # 이전 버전: transformers==4.35.x (PyTorch 2.1과 호환성 문제)
@@ -53,8 +54,7 @@ scikit-learn==1.4.0                  # ML utilities for embeddings
 # -----------------------------------------------------------------------------
 # Pipecat AI Framework (Phase 1)
 # -----------------------------------------------------------------------------
-pipecat-ai[google,silero]>=0.0.85    # Voice AI pipeline framework
-                                      # Includes: Silero VAD, Google STT/TTS/Gemini
+pipecat-ai[google,silero]==1.1.0    # Voice AI (protobuf 5 / pydantic>=2.10.6); 범위 지정 시 해석기 과부하
 
 # -----------------------------------------------------------------------------
 # LangGraph Agentic RAG (Phase 2)
@@ -85,7 +85,7 @@ backoff==2.2.1                       # Alternative backoff implementation
 # -----------------------------------------------------------------------------
 # aiohttp==3.9.1                     # Async HTTP (already in base requirements.txt)
 # aiodns==3.1.0                      # Async DNS resolution (already in base)
-aiofiles==23.2.1                     # Async file operations
+aiofiles>=24.1.0,<27                 # pipecat-ai 요구; Async file operations
 
 # -----------------------------------------------------------------------------
 # Configuration & Validation (extends base requirements.txt)

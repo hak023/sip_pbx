@@ -1,5 +1,5 @@
 # Async & Web Framework
-aiohttp==3.9.1
+aiohttp>=3.11.12,<4  # pipecat-ai 요구(>=3.11.12)
 aiodns==3.1.0
 fastapi==0.109.0              # FastAPI framework for API Gateway
 uvicorn[standard]==0.27.0     # ASGI server for FastAPI
@@ -7,9 +7,9 @@ python-socketio==5.11.0       # Socket.IO server for WebSocket
 python-multipart==0.0.6       # File upload support for FastAPI
 
 # Configuration & Validation
-pydantic==2.5.2
+pydantic==2.10.6                     # pipecat-ai>=2.10.6
 pydantic-settings==2.1.0
-pydantic[email]==2.5.2  # Email validation support
+pydantic[email]==2.10.6              # Email validation support
 PyYAML==6.0.1
 
 # Audio Processing
@@ -22,6 +22,7 @@ structlog==24.1.0
 python-json-logger==2.0.7
 
 # Utilities
+urllib3>=2.0,<3              # main.py SSL 경고 비활성화; requests 등과 호환
 python-dotenv==1.0.0
 PyJWT>=2.8.0                     # JWT encode/decode (auth_utils, WebSocket)
 python-jose[cryptography]==3.3.0  # JWT authentication (legacy)
@@ -34,7 +35,7 @@ pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-cov==4.1.0
 pytest-mock==3.12.0
-httpx==0.25.2  # For testing HTTP endpoints
+httpx>=0.27.0,<1  # chromadb 0.6.x 요구(>=0.27); 테스트 HTTP 클라이언트
 
 # Development Tools (optional, comment out for production)
 # black==23.11.0
@@ -49,7 +50,7 @@ httpx==0.25.2  # For testing HTTP endpoints
 # =============================================================================
 google-auth>=2.0
 google-auth-oauthlib>=1.0
-google-api-python-client>=2.0
+google-api-python-client==2.196.0   # 범위 지정 시 pip가 수백 버전 백트래킹 — 고정
 
 # =============================================================================
 # AI Voice Assistant Extension

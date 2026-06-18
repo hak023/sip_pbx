@@ -622,8 +622,10 @@ export default function Dashboard() {
     );
   };
 
-  const getCallDuration = (startTime: string) => {
+  const getCallDuration = (startTime?: string | null) => {
+    if (!startTime?.trim()) return "—";
     const start = new Date(startTime);
+    if (Number.isNaN(start.getTime())) return "—";
     const now = new Date();
     const diffSecs = Math.floor((now.getTime() - start.getTime()) / 1000);
     const minutes = Math.floor(diffSecs / 60);
@@ -1071,7 +1073,7 @@ export default function Dashboard() {
                 {callHistory.map((row) => {
                   const open = !!expandedHistory[row.call_id];
                   const nUnhandled = row.ai_unhandled_count ?? (row.ai_unhandled_items?.length || 0);
-                  const isUnresolved = computeIsUnresolved(row, nUnhandled);
+                  const isUnresolved = computeIsUnresolved(row);
                   return (
                     <Fragment key={row.call_id}>
                       <tr
@@ -1220,12 +1222,12 @@ function mergeByCallId(
     const r = map.get(c.call_id);
     if (!r) map.set(c.call_id, c);
     else {
-      const tPrev = Date.parse(c.start_time);
-      const tRest = Date.parse(r.start_time);
+      const tPrev = c.start_time ? Date.parse(c.start_time) : NaN;
+      const tRest = r.start_time ? Date.parse(r.start_time) : NaN;
       const start_time =
         !Number.isNaN(tPrev) && !Number.isNaN(tRest)
           ? new Date(Math.min(tPrev, tRest)).toISOString()
-          : r.start_time;
+          : r.start_time || c.start_time;
       map.set(c.call_id, {
         ...r,
         start_time,

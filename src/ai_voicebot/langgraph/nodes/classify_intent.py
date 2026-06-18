@@ -11,17 +11,18 @@ transfer, out_of_scope, nlu_fallback
   0차: 복합 발화가 아니고 순수 짧은 인사만 → greeting (LLM·페르소나 임베딩 생략)
   1차: 전환 접속사로 발화의 '핵심 절' 추출 (_extract_main_clause)
   2차: 페르소나 scope_keywords 매칭 → question 직행
-  3차: 페르소나 유사도 → chitchat / question 조기 분기
+  3차: 페르소나 유사도 → chitchat / question 조기 분기 (페르소나 비관련이어도 RAG VectorDB strict 유사도 통과 시 question)
   4차: LLM 분류 (복합발화 규칙 포함 프롬프트)
   fallback: LLM 없을 때 question 기본값
 """
 
 from datetime import datetime
 import re
+from typing import Optional, Tuple
 
 import structlog
 from src.ai_voicebot.langgraph.state import ConversationState
-from src.ai_voicebot.langgraph.call_context import get_llm_client
+from src.ai_voicebot.langgraph.call_context import get_llm_client, get_rag_engine
 from src.ai_voicebot.langgraph.booking_intent_heuristic import merge_booking_intent_into_result
 from src.ai_voicebot.knowledge.persona_service import DEFAULT_PERSONA_SIMILARITY_THRESHOLD
 from src.common.call_data_record_logger import log_call_data
@@ -197,13 +198,37 @@ def _is_standalone_social_greeting(text: str) -> bool:
     return True
 
 
+def _recover_intent_from_partial_llm_json(raw: str, main_clause: str) -> Optional[Tuple[str, str]]:
+    """
+    MAX_TOKENS·마크다운 등으로 JSON이 잘리면 json.loads가 실패한다.
+    이미 출력된 부분에서 intent / search_query 만 부분 추출한다.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    intent_m = re.search(r'"intent"\s*:\s*"([^"\\]*)', text, re.IGNORECASE)
+    if not intent_m:
+        intent_m = re.search(r"'intent'\s*:\s*'([^'\\]*)", text, re.IGNORECASE)
+    if not intent_m:
+        return None
+    intent_val = (intent_m.group(1) or "").strip().lower()
+    if not intent_val:
+        return None
+    # 닫는 따옴표 없이 잘린 경우까지 포착
+    sq_m = re.search(r'"search_query"\s*:\s*"([^"]*)', text, re.IGNORECASE)
+    if not sq_m:
+        sq_m = re.search(r"'search_query'\s*:\s*'([^']*)", text, re.IGNORECASE)
+    search_q = (sq_m.group(1).strip() if sq_m else "") or (main_clause or "").strip()
+    return intent_val, search_q
+
+
 async def classify_intent_node(state: ConversationState) -> dict:
     """
     사용자 발화의 의도를 분류.
 
     1차: 핵심 절 추출 (_extract_main_clause) — 복합 발화 전처리
     2차: 페르소나 scope_keywords 매칭 → question 직행 (LLM 스킵)
-    3차: 페르소나 유사도 → chitchat / question 조기 분기
+    3차: 페르소나 유사도 → chitchat / question 조기 분기 (비관련 + 지식 strict 유사도면 question)
     4차: LLM 분류 (복합발화 규칙 포함)
     fallback: LLM 없을 때 question 기본값
 
@@ -422,6 +447,73 @@ async def classify_intent_node(state: ConversationState) -> dict:
                             )
                             # LLM 3차 분류로 fall-through
                         else:
+                            # 페르소나 임베딩과는 멀어도, 지식 VectorDB 상위 hit가 RAG similarity_threshold
+                            # 이상이면 question 으로 승격 → 기존 check_cache·RAG·generate_response 경로 사용
+                            kb_strict_hits = 0
+                            kb_top_score = 0.0
+                            rag_threshold: Optional[float] = None
+                            try:
+                                rag = get_rag_engine()
+                                if rag is not None:
+                                    rag_threshold = float(rag.similarity_threshold)
+                                    kb_res = await rag.search(
+                                        main_clause,
+                                        owner_filter=persona_owner,
+                                        call_id=call_id or None,
+                                        intent="question",
+                                        top_k_override=5,
+                                    )
+                                    tr = kb_res.trace or {}
+                                    kb_strict_hits = int(
+                                        tr.get("after_strict_similarity_threshold_count") or 0
+                                    )
+                                    if kb_res.documents:
+                                        kb_top_score = float(kb_res.documents[0].score or 0.0)
+                            except Exception as kb_exc:
+                                logger.warning(
+                                    "classify_intent_kb_gate_error",
+                                    error=str(kb_exc),
+                                    query_preview=query[:50],
+                                    persona_owner=persona_owner,
+                                )
+
+                            if kb_strict_hits > 0:
+                                elapsed = time.time() - node_start
+                                logger.info(
+                                    "classify_intent_persona_irrelevant_kb_question_override",
+                                    intent="question",
+                                    query_preview=query[:50],
+                                    main_clause_preview=main_clause[:50],
+                                    persona_similarity=relevance["similarity"],
+                                    persona_threshold=DEFAULT_PERSONA_SIMILARITY_THRESHOLD,
+                                    kb_strict_hits=kb_strict_hits,
+                                    kb_top_score=round(kb_top_score, 4),
+                                    rag_similarity_threshold=rag_threshold,
+                                    persona_owner=persona_owner,
+                                    note="페르소나 비관련이나 지식 VectorDB strict 임계 이상 → question",
+                                )
+                                _log_intent_classify_timing(
+                                    call_id,
+                                    elapsed_sec=elapsed,
+                                    path="persona_irrelevant_kb_override",
+                                    intent="question",
+                                    query_preview=query,
+                                )
+                                return merge_booking_intent_into_result(
+                                    {
+                                        "intent": "question",
+                                        "slots": {},
+                                        "confidence": 1.0,
+                                        "_persona_scope_matched": False,
+                                        "_kb_gate_hit": True,
+                                    },
+                                    state,
+                                    call_id=call_id,
+                                    query=query,
+                                    main_clause=main_clause,
+                                    classify_path="persona_irrelevant_kb_override",
+                                )
+
                             elapsed = time.time() - node_start
                             logger.info(
                                 "classify_intent_persona_chitchat",
@@ -431,6 +523,8 @@ async def classify_intent_node(state: ConversationState) -> dict:
                                 similarity=relevance["similarity"],
                                 threshold=DEFAULT_PERSONA_SIMILARITY_THRESHOLD,
                                 persona_owner=persona_owner,
+                                kb_strict_hits=kb_strict_hits,
+                                kb_top_score=round(kb_top_score, 4),
                                 note="핵심 절이 페르소나와 무관 — chitchat",
                             )
                             _log_intent_classify_timing(
@@ -608,11 +702,12 @@ async def classify_intent_node(state: ConversationState) -> dict:
                     prompt_len=len(classify_prompt),
                     prompt_preview=classify_prompt.replace("\n", " ")[:200])
         try:
+            # 짧은 JSON만 필요하나 Gemini MAX_TOKENS 잘림·thinking 예산 등으로 불완전 JSON이 나올 수 있어 여유 상한.
             result = await llm.generate_response(
                 classify_prompt,
                 context_docs=[],
                 system_prompt="의도 분류 및 쿼리 변환기",
-                max_output_tokens=512,
+                max_output_tokens=1024,
             )
         except Exception as llm_err:
             elapsed = time.time() - node_start
@@ -648,14 +743,27 @@ async def classify_intent_node(state: ConversationState) -> dict:
             parsed = _json.loads(json_str)
             intent = (parsed.get("intent") or "nlu_fallback").strip().lower()
             search_query = (parsed.get("search_query") or main_clause).strip()
-        except (_json.JSONDecodeError, ValueError, Exception):
-            raw_lower = raw.lower().replace('"', '').replace("'", "")
-            parts = raw_lower.split()
-            intent = parts[0] if parts else "nlu_fallback"
-            logger.info("classify_intent_json_parse_failed",
-                        call_id=call_id,
-                        raw_preview=raw[:100],
-                        fallback_intent=intent)
+        except (_json.JSONDecodeError, ValueError, Exception) as parse_err:
+            recovered = _recover_intent_from_partial_llm_json(raw, main_clause)
+            if recovered:
+                intent, search_query = recovered
+                logger.info(
+                    "classify_intent_json_recovered_partial",
+                    call_id=call_id,
+                    intent=intent,
+                    search_query_preview=(search_query or "")[:80],
+                    note="JSON 파싱 실패 → 잘린 응답에서 intent/search_query 정규식 복구",
+                )
+            else:
+                intent = "question"
+                search_query = (main_clause or "").strip()
+                logger.warning(
+                    "classify_intent_json_parse_failed",
+                    call_id=call_id,
+                    raw_preview=raw[:100],
+                    fallback_intent=intent,
+                    parse_error=str(parse_err)[:160],
+                )
 
         if intent == "out_of_scope" or (intent == "out" and "scope" in raw.lower()):
             intent = "out_of_scope"

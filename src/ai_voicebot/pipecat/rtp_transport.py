@@ -21,8 +21,8 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     StartFrame,
-    StartInterruptionFrame,
 )
+from src.ai_voicebot.pipecat.interruption_compat import StartInterruptionFrame
 # TTS가 내보내는 오디오 프레임 (GoogleTTSService 등이 출력)
 try:
     from pipecat.frames.frames import TTSAudioRawFrame
@@ -434,6 +434,15 @@ class SIPPBXOutputTransport(FrameProcessor):
                             ts_iso=datetime.now().isoformat(timespec="milliseconds"),
                             note="이 응답의 첫 오디오 RTP 전송 시점 (응답마다 로깅)")
                 self._first_audio_sent = True
+                try:
+                    from src.common.ai_response_latency_compare import mark_first_audio_and_compare
+
+                    mark_first_audio_and_compare(
+                        self._tts_sync_context,
+                        call_id=self._rtp_worker.media_session.call_id,
+                    )
+                except Exception:
+                    pass
             if not self._session_has_sent_audio:
                 self._session_has_sent_audio = True
             self._response_bytes += len(audio_data)

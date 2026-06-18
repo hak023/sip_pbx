@@ -677,6 +677,10 @@ class ConversationAgent:
                 "llm_rag_applied": result.get("llm_rag_applied") or [],
                 "llm_rag_context_source": result.get("llm_rag_context_source") or "",
                 "rag_search_trace": result.get("rag_search_trace") or {},
+                "llm_gen_elapsed_sec": result.get("llm_gen_elapsed_sec"),
+                "llm_first_sentence_elapsed_sec": result.get("llm_first_sentence_elapsed_sec"),
+                "llm_first_sentence_preview": result.get("llm_first_sentence_preview") or "",
+                "llm_first_sentence_source": result.get("llm_first_sentence_source") or "",
                 "semantic_cache_score": result.get("semantic_cache_score"),
                 "greeting_farewell_cache_score": result.get("greeting_farewell_cache_score"),
                 # 아웃바운드 전용: LLM이 추출한 답변 목록 + 유효 답변 여부

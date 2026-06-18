@@ -19,6 +19,15 @@ from typing import Any, Dict, Optional, List, Callable, Awaitable
 
 import structlog
 
+from src.common.ai_response_latency_compare import (
+    apply_llm_first_sentence_timing,
+    begin_turn,
+    mark_first_audio_and_compare,
+    mark_llm_complete,
+    mark_llm_start,
+    mark_stt_final,
+    mark_tts_text_pushed,
+)
 from src.common.call_data_record_logger import log_call_data
 from src.common.rag_hit_serializer import build_rag_hits_llm_context, build_rag_hits_retrieval
 from src.common.tts_output_sanitize import sanitize_voice_assistant_text
@@ -156,6 +165,8 @@ class RAGLLMProcessor(FrameProcessor):
         # 대기 안내 멘트 상태: 턴별 중복 발화 방지 + 멘트 순환 인덱스
         self._waiting_phrase_active: bool = False
         self._waiting_phrase_idx: int = 0
+        # 배치 vs 조기 TTS 체감 비교 로그용 턴 번호
+        self._latency_turn_seq: int = 0
 
         # HITL Manager (Phase 3): on_alert 연결 시 프론트에 hitl_requested 발송
         self._hitl_manager = None
@@ -868,11 +879,20 @@ class RAGLLMProcessor(FrameProcessor):
         tts_context = self._tts_sync_context or {}
         is_tts_active = tts_context.get("_tts_active", False)
         tts_pending_bytes = tts_context.get("_tts_pending_pcm_bytes", 0)
+        self._latency_turn_seq += 1
+        begin_turn(
+            self._tts_sync_context,
+            call_id=self._call_id or "",
+            turn_id=self._latency_turn_seq,
+            user_text_preview=queued_text,
+        )
+        mark_stt_final(self._tts_sync_context, call_id=self._call_id or "")
         logger.info(
             "timing_stt_final_to_rag",
             call=True,
             call_id=self._call_id or "",
             progress="timing",
+            turn_id=self._latency_turn_seq,
             ts_iso=ts_iso,
             text_preview=queued_text,
             tts_active_during_stt=is_tts_active,
@@ -1542,6 +1562,7 @@ class RAGLLMProcessor(FrameProcessor):
         
         result: Optional[Dict[str, Any]] = None
         agent_elapsed = 0.0
+        mark_llm_start(self._tts_sync_context)
         try:
             agent_start = time.time()
             
@@ -1635,6 +1656,48 @@ class RAGLLMProcessor(FrameProcessor):
             needs_human = result.get("needs_human", False)
             business_state = result.get("business_state", "")
             chunks = result.get("response_chunks", [])
+            _gen_elapsed = result.get("llm_gen_elapsed_sec")
+            _first_in_gen = result.get("llm_first_sentence_elapsed_sec")
+            if _first_in_gen is not None:
+                try:
+                    _gen_f = float(_gen_elapsed) if _gen_elapsed is not None else float(agent_elapsed)
+                    _overhead = max(0.0, float(agent_elapsed) - _gen_f)
+                    apply_llm_first_sentence_timing(
+                        self._tts_sync_context,
+                        offset_from_llm_start_sec=_overhead + float(_first_in_gen),
+                        sentence_preview=result.get("llm_first_sentence_preview") or "",
+                        source=result.get("llm_first_sentence_source") or "unknown",
+                        elapsed_within_generate_response_sec=float(_first_in_gen),
+                    )
+                except (TypeError, ValueError):
+                    pass
+            elif (response or "").strip():
+                # 캐시·템플릿 등 generate_response 미경유 — 첫 문장 길이 비율로 추정
+                _parts = re.split(r"(?<=[.?!])\s+", (response or "").strip())
+                _first = (_parts[0] if _parts else (response or "")).strip()
+                if _first:
+                    _ratio = len(_first) / max(len(response or ""), 1)
+                    apply_llm_first_sentence_timing(
+                        self._tts_sync_context,
+                        offset_from_llm_start_sec=float(agent_elapsed) * _ratio,
+                        sentence_preview=_first[:120],
+                        source="shortcut_char_ratio_estimate",
+                        elapsed_within_generate_response_sec=None,
+                    )
+            _tts_mode_planned = (
+                "chunked_after_llm_complete"
+                if chunks and len(chunks) > 1
+                else "batch_after_llm_complete"
+            )
+            mark_llm_complete(
+                self._tts_sync_context,
+                agent_elapsed_sec=agent_elapsed,
+                response_len=len(response or ""),
+                chunk_count=len(chunks or []),
+                tts_push_mode=_tts_mode_planned,
+                llm_first_sentence_elapsed_sec=_first_in_gen,
+                llm_first_sentence_source=result.get("llm_first_sentence_source"),
+            )
 
             # ── 아웃바운드: LLM이 추출한 답변을 _outbound_answers에 직접 적용 ──
             # generate_response_node가 JSON으로 반환한 answered 목록을 읽어
@@ -1939,6 +2002,17 @@ class RAGLLMProcessor(FrameProcessor):
                                response_len=len(response))
                 # Streaming RAG: 청크 단위 전송
                 tts_push_start = time.time()
+                _delivery = (
+                    "chunked_after_llm_complete"
+                    if chunks and len(chunks) > 1
+                    else "batch_after_llm_complete"
+                )
+                mark_tts_text_pushed(
+                    self._tts_sync_context,
+                    text_len=len(response),
+                    chunk_count=len(chunks) if chunks else 1,
+                    delivery_mode=_delivery,
+                )
                 
                 # 📌 실제 TTS로 나가는 최종 텍스트 로깅 (farewell 템플릿, HITL 멘트 등 모든 override 반영 후)
                 _llm_rag = result.get("llm_rag_applied") or []

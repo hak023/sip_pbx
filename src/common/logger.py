@@ -102,9 +102,23 @@ def setup_logging(
         level: 로그 레벨 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         format_type: 로그 포맷 (json, text)
         output: 로그 출력 (stdout, file)
-        file_path: 로그 파일 경로 (output=="file"일 때 사용, None이면 logs/app.log)
+        file_path: 로그 파일 경로 (output=="file"일 때만 사용, None이면 logs/app.log)
+
+    Note:
+        output이 "stdout"이면 file_path는 무시됩니다. 파일이 안 생기면 output을 "file"로 바꾸세요.
+        max_bytes/backup_count는 현재 구현에서 미사용(단순 append)입니다.
     """
     global _log_file_stream  # ⭐ 함수 시작 부분에 선언
+
+    out = (output or "stdout").strip().lower()
+    if out != "file" and file_path:
+        print(
+            "[sip-pbx][logging] WARNING: logging.file_path is set but logging.output is "
+            f"{output!r} (not 'file'). The file path is ignored; logs go to stdout only. "
+            "Set logging.output to 'file' in config/config.yaml to create app.log.",
+            file=sys.stderr,
+            flush=True,
+        )
     
     # 프로세서 체인 구성
     processors = [
@@ -131,7 +145,7 @@ def setup_logging(
     # 파일 출력 설정 — 항상 프로젝트 루트 기준으로 해서 실행 위치(cwd)에 영향받지 않음
     log_file_path = None
     log_stream = None  # ⭐ 파일 핸들 저장
-    if output == "file":
+    if out == "file":
         # 프로젝트 루트 = src/common/logger.py → src → 루트
         _project_root = Path(__file__).resolve().parent.parent.parent
         if file_path:
@@ -139,11 +153,20 @@ def setup_logging(
             resolved = p if p.is_absolute() else (_project_root / p)
         else:
             resolved = _project_root / "logs" / "app.log"
-        resolved.parent.mkdir(parents=True, exist_ok=True)
         log_file_path = resolved
-        # ⭐ append 모드로 변경 (기존 내용 유지, NULL 바이트 방지)
-        # ⭐ unbuffered 모드 (buffering=0는 binary만 가능하므로 line buffering=1 사용)
-        log_stream = open(log_file_path, "a", encoding="utf-8", buffering=1)
+        try:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            # ⭐ append 모드 (기존 내용 유지). line buffering=1
+            log_stream = open(resolved, "a", encoding="utf-8", buffering=1)
+        except OSError as e:
+            print(
+                "[sip-pbx][logging] ERROR: cannot open log file "
+                f"{resolved} ({type(e).__name__}: {e}). "
+                "On Windows, avoid Unix-only paths like /var/log/...; use e.g. logs/app.log.",
+                file=sys.stderr,
+                flush=True,
+            )
+            raise
         _log_file_stream = log_stream  # ⭐ 즉시 전역 변수에 저장
     else:
         log_stream = sys.stdout

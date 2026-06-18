@@ -8,18 +8,19 @@ import time
 
 # Gemini import 추적
 _import_logger_available = False
+_genai_import_start: float | None = None
 try:
     import structlog
     _logger = structlog.get_logger(__name__)
     _import_logger_available = True
     _logger.info("🔄 [LLM Module] Importing google.generativeai...")
     _genai_import_start = time.time()
-except:
+except Exception:
     pass
 
 import google.generativeai as genai
 
-if _import_logger_available:
+if _import_logger_available and _genai_import_start is not None:
     _genai_import_time = time.time() - _genai_import_start
     _logger.info(f"✅ [LLM Module] google.generativeai imported", elapsed=f"{_genai_import_time:.3f}s")
 

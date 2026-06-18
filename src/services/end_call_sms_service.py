@@ -160,7 +160,7 @@ async def send_end_call_summary_sms(
 
     sms_body = ""
     if llm_client:
-        logger.info("end_call_sms_llm_invoke", event="end_call_sms", call_id=call_id or "")
+        logger.info("end_call_sms_llm_invoke", call_id=call_id or "")
         try:
             gen = getattr(llm_client, "generate_response", None)
             if callable(gen):
@@ -173,7 +173,6 @@ async def send_end_call_summary_sms(
                 if (sms_body or "").strip():
                     logger.info(
                         "end_call_sms_llm_response",
-                        event="end_call_sms",
                         call_id=call_id or "",
                         response_preview=(sms_body or "").strip()[:220],
                     )
@@ -221,7 +220,6 @@ async def send_end_call_summary_sms(
 
     logger.info(
         "end_call_sms_sending",
-        event="end_call_sms",
         call_id=call_id or "",
         to=caller,
         body_len=len(sms_body),
@@ -241,7 +239,6 @@ async def send_end_call_summary_sms(
     )
     logger.info(
         "end_call_sms_result",
-        event="end_call_sms",
         call_id=call_id or "",
         success=result.get("success"),
         to=caller,

@@ -6,8 +6,9 @@
 
 ```mermaid
 flowchart TB
-    subgraph USER_AREA["실제 유저 영역"]
+    subgraph USER_AREA["유저 영역"]
         USER[유저 단말]
+        PC[PC Client]
     end
 
     subgraph CORE["지능망"]
@@ -15,7 +16,6 @@ flowchart TB
         CM --> WT[WTIMS]
         TGW[미디어 TGW]
         CM_API[통화매니저 API]
-        PC[PC Client]
     end
 
     subgraph NEW_STT["실시간 STT 처리"]

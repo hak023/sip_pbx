@@ -84,8 +84,11 @@ os.environ['ANONYMIZED_TELEMETRY'] = 'False'
 # 경고 메시지 숨기기
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 warnings.filterwarnings('ignore', category=FutureWarning, module='huggingface_hub')
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except ImportError:
+    pass  # requirements.txt에 urllib3 포함 권장
 
 # 프로젝트 루트를 Python 경로에 추가
 project_root = Path(__file__).parent.parent
@@ -119,6 +122,11 @@ def _apply_env_file(path: Path) -> None:
 
 
 _apply_env_file(project_root / ".env")
+
+# GCP 서비스 계정 JSON (STT 등) — .env / GOOGLE_APPLICATION_CREDENTIALS 미설정 시 기본 경로
+from src.common.gcp_application_credentials import ensure_google_application_credentials
+
+ensure_google_application_credentials()
 
 # UTF-8 인코딩 설정 + 바이너리 데이터 필터링
 class FilteredTextIO(io.TextIOWrapper):

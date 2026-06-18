@@ -75,5 +75,6 @@ class ConversationState(TypedDict, total=False):
     _caller_number: str            # 발신자 전화번호 (inbound=caller 번호, SMS 수신·예약 검색용)
     _persona_owner: str            # 페르소나 조회용 owner: inbound=callee(_owner), outbound=callee(상대방번호)
     _persona_scope_matched: bool   # classify_intent에서 페르소나 scope_keywords 매칭된 경우 True (domain_question_signal 산출용)
+    _kb_gate_hit: bool              # 페르소나 비관련이나 VectorDB strict 유사도로 question 승격된 경우 True
     _call_id: Optional[str]        # 통화 ID (로그/DB 연계용)
     _chitchat_template: str        # chitchat 즉시응답 템플릿 (classify_intent → generate_response)

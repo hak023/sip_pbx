@@ -217,8 +217,14 @@ class LoggingConfig(BaseModel):
     """로깅 설정"""
     level: LogLevel = Field(default=LogLevel.INFO, description="로그 레벨")
     format: LogFormat = Field(default=LogFormat.JSON, description="로그 포맷")
-    output: str = Field(default="stdout", description="로그 출력 (stdout, file)")
-    file_path: Optional[str] = Field(default=None, description="로그 파일 경로")
+    output: str = Field(
+        default="stdout",
+        description='로그 출력: "stdout" 또는 "file". stdout이면 file_path는 무시됨.',
+    )
+    file_path: Optional[str] = Field(
+        default=None,
+        description='파일 로그 경로 (output=="file"일 때만 사용). 상대 경로는 프로젝트 루트 기준.',
+    )
     max_bytes: int = Field(default=104857600, ge=1048576, description="최대 파일 크기 (바이트)")
     backup_count: int = Field(default=10, ge=1, le=100, description="백업 파일 수")
 

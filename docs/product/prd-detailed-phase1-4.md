@@ -1,11 +1,13 @@
-# SmartPBX AI - Detailed Product Requirements Document
+# SmartPBX AI - Detailed Product Requirements Document (부록)
 ## Active RAG 기반 지능형 통화 응대 시스템 - Phase 1-4 상세 요구사항
 
-**문서 버전**: v2.1  
+**문서 버전**: v2.2  
 **작성일**: 2026-01-30  
-**최종 갱신**: 2026-05-08  
+**최종 갱신**: 2026-05-11  
 **작성자**: Product Team  
 **상태**: Living — 세부 FR·Acceptance Criteria는 구현·리포트와 함께 주기적으로 재검토
+
+**문서 관계**: 본 파일은 **[prd.md](./prd.md)(마스터 PRD)** 의 **부록**이다. 제품 목표·범위·MM·사업 요약은 `prd.md`를 우선하고, 본 부록은 **FR·User Story·검수 기준**에 집중한다.
 
 ---
 
@@ -27,8 +29,8 @@
 본 문서는 SmartPBX AI의 Phase 1-4에 대한 상세 기능 요구사항과 User Story를 정의합니다. 각 Phase는 독립적으로 배포 가능하며(Incrementally Deliverable), 이전 Phase의 기능을 확장합니다.
 
 ### 범위
-- **In Scope**: Phase 1-4의 모든 AI 관련 기능 (Active RAG, AI-ARS, HITL, Agentic AI)
-- **Out of Scope**: 기본 SIP PBX 기능 (이미 구현 완료, 별도 PRD 참조)
+- **In Scope**: Phase 1-4의 모든 AI 관련 기능 (Active RAG, AI-ARS, HITL, Agentic AI) — **제품 목표·MM·사업 요약**은 [prd.md](./prd.md)를 본다.
+- **Out of Scope**: 기본 SIP PBX 기능 (이미 구현 완료, [prd.md](./prd.md) SIP Core 절 참조)
 
 ### 구현 정합 (2026-05)
 

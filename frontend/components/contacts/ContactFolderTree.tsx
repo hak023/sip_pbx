@@ -24,8 +24,8 @@ function dropIdForFolder(folderId: string): string {
   return `folder-drop-${folderId}`;
 }
 
-function sourceDotClass(source: string): string {
-  switch (source) {
+function sourceDotClass(source: string | undefined): string {
+  switch (source || "manual") {
     case "manual":
       return "bg-indigo-500";
     case "auto_llm":

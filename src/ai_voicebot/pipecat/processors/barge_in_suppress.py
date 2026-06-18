@@ -22,14 +22,9 @@ from pipecat.frames.frames import (
     Frame,
     InterruptionFrame,
     InterruptionTaskFrame,
-    StartInterruptionFrame,
 )
-# StopInterruptionFrame은 일부 pipecat 버전에 없음. 없으면 타입 체크에서 제외하고,
-# "Interruption" in type(frame).__name__ 로 그 외 Interruption 계열은 차단.
-try:
-    from pipecat.frames.frames import StopInterruptionFrame
-except ImportError:
-    StopInterruptionFrame = None
+from src.ai_voicebot.pipecat.interruption_compat import StartInterruptionFrame, StopInterruptionFrame
+
 _PIPECAT_AVAILABLE = True
 
 logger = structlog.get_logger(__name__)

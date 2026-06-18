@@ -127,3 +127,9 @@ recordings/
 data/
 
 config/gcp-key.json
+
+# 로컬 GCP JSON 경로 한 줄 (start-all.ps1 이 참조 — 커밋 금지)
+.gcp-credentials-path
+
+# Gemini / Google AI Studio API 키 한 줄 (start-all.ps1 이 참조 — 커밋 금지)
+.gemini-api-key

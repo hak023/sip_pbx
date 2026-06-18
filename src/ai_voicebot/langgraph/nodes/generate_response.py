@@ -320,12 +320,18 @@ async def generate_response_node(state: ConversationState) -> dict:
 
         chunks = []
         response = ""
+        llm_first_sentence_elapsed_sec: Optional[float] = None
+        llm_first_sentence_preview = ""
+        llm_first_sentence_source = "none"
         try:
             has_streaming = hasattr(llm, "generate_response_streaming")
             if has_streaming:
                 # async generator를 별도 태스크로 수집 — 파이프라인 CancelledError 시
                 # aclose()가 executor 실행 중인 generator와 충돌하는 RuntimeError 방지
+                llm_gen_t0 = time.perf_counter()
+
                 async def _collect_streaming() -> list:
+                    nonlocal llm_first_sentence_elapsed_sec, llm_first_sentence_preview, llm_first_sentence_source
                     result = []
                     async for sentence in llm.generate_response_streaming(
                         user_text=user_query,
@@ -333,6 +339,19 @@ async def generate_response_node(state: ConversationState) -> dict:
                         system_prompt=system_prompt,
                     ):
                         if sentence:
+                            if llm_first_sentence_elapsed_sec is None:
+                                llm_first_sentence_elapsed_sec = time.perf_counter() - llm_gen_t0
+                                llm_first_sentence_preview = sentence[:120]
+                                llm_first_sentence_source = "streaming"
+                                logger.info(
+                                    "llm_first_sentence_ready",
+                                    call_id=state.get("_call_id") or "",
+                                    category="timing",
+                                    progress="timing",
+                                    elapsed_sec=round(llm_first_sentence_elapsed_sec, 3),
+                                    sentence_preview=llm_first_sentence_preview,
+                                    note="스트리밍 LLM 첫 문장 완성 — 조기 TTS 가정 시 이 시점부터 TTS 가능",
+                                )
                             result.append(sentence)
                     return result
 
@@ -353,6 +372,13 @@ async def generate_response_node(state: ConversationState) -> dict:
                     context_docs=[rag_context] if rag_context else [],
                     system_prompt=system_prompt,
                 )
+                if response:
+                    _first_chunks = _split_into_chunks(response)
+                    if _first_chunks:
+                        llm_first_sentence_preview = _first_chunks[0][:120]
+                        llm_first_sentence_source = "batch_char_ratio_estimate"
+                        _ratio = len(_first_chunks[0]) / max(len(response), 1)
+                        llm_first_sentence_elapsed_sec = (time.time() - start) * _ratio
         except Exception as llm_err:
             elapsed_err = time.time() - start
             logger.warning("llm_request_failed",
@@ -416,6 +442,13 @@ async def generate_response_node(state: ConversationState) -> dict:
                 needs_follow_up = False
 
         elapsed = time.time() - start
+        if llm_first_sentence_elapsed_sec is None and response:
+            _fc = _split_into_chunks(response)
+            if _fc:
+                llm_first_sentence_preview = _fc[0][:120]
+                llm_first_sentence_source = "post_join_char_ratio_estimate"
+                _ratio = len(_fc[0]) / max(len(response), 1)
+                llm_first_sentence_elapsed_sec = elapsed * _ratio
         logger.info("llm_response_received",
                     call_site="generate_response_streaming",
                     request_sent_ts_iso=request_sent_at,
@@ -483,6 +516,14 @@ async def generate_response_node(state: ConversationState) -> dict:
             # rag_processor._process_with_agent에서 읽어 _outbound_answers에 직접 적용
             "outbound_answered": outbound_answered,
             "outbound_is_answer": outbound_is_answer,
+            "llm_gen_elapsed_sec": round(elapsed, 4),
+            "llm_first_sentence_elapsed_sec": (
+                round(llm_first_sentence_elapsed_sec, 4)
+                if llm_first_sentence_elapsed_sec is not None
+                else None
+            ),
+            "llm_first_sentence_preview": llm_first_sentence_preview,
+            "llm_first_sentence_source": llm_first_sentence_source,
             **_llm_exchange_rag_fields(state, rag_results, context_source=_rag_src),
         }
 

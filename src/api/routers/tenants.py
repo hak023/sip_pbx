@@ -11,7 +11,16 @@ router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
 
 # 하드코딩된 테넌트 목록 (추후 DB로 이관 가능)
+# VectorDB 시드(`src/services/seed_data.py` TENANT_CONFIGS)와 owner 정합 — 로그인·Chroma tenant_config 테스트용
 TENANTS_DATA = [
+    {
+        "owner": "1003",
+        "name": "이탈리안 비스트로",
+        "name_en": "Italian Bistro",
+        "type": "restaurant",
+        "description": "정통 이탈리아 요리 레스토랑 (시드 데이터)",
+        "is_active": True,
+    },
     {
         "owner": "1004",
         "name": "기상청",
