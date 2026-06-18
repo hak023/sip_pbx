@@ -1,8 +1,5 @@
 # STT와 Agent 연동 방안
 
-## 지능망 시스템에 STT와 Agent를 두고 처리하는 방안
-
-> 기존 다이어그램을 초안으로 복사했습니다. 향후 수정하여 완성할 예정입니다.
 
 ```mermaid
 flowchart TB
