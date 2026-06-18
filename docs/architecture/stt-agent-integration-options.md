@@ -9,7 +9,7 @@ flowchart TB
     end
 
     subgraph CORE["지능망"]
-        EX[교환기] --> CM[통화매니저 AS]
+        EX[교환기] <-->|SIP 연동| CM[통화매니저 AS]
         CM --> WT[WTIMS]
         TGW[미디어 TGW]
         CM_API[통화매니저 API]
