@@ -2,45 +2,62 @@
 지능망 내에 STT 서버를 두고 음성 AI Agent(Cloud)에는 AI 서버만 위치시키는 구조입니다.
 
 ```mermaid
-flowchart TB
-    subgraph USER_AREA["유저 영역"]
-        USER_DEVICE[유저 단말]
-        PC_CLIENT[PC Client]
+graph TD
+    %% 스타일 정의 (블루 & 화이트 컨설팅 펌 테마)
+    classDef default fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#334155,font-family:sans-serif;
+    classDef layerBox fill:#f8fafc,stroke:#94a3b8,stroke-width:2px,stroke-dasharray: 4 4,color:#0f172a,font-weight:bold;
+    classDef cloudBox fill:#eff6ff,stroke:#60a5fa,stroke-width:2px,stroke-dasharray: 4 4,color:#1d4ed8,font-weight:bold;
+    classDef nodeBox fill:#ffffff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a,font-weight:bold,rx:4px,ry:4px;
+    classDef clientBox fill:#ffffff,stroke:#475569,stroke-width:2px,color:#334155,font-weight:bold,rx:4px,ry:4px;
+
+    %% 계층별 Subgraph
+    subgraph User_Area ["유저 영역 (User Area)"]
+        direction LR
+        UserTerminal["유저 단말"]:::nodeBox
+        PCClient["PC Client"]:::clientBox
     end
 
-    subgraph CORE_NETWORK["코어망"]
-        EXCHANGE_SERVER[교환기]
-        MEDIA_TGW[미디어 TGW]
+    subgraph Core_Network ["코어망 (Core Network)"]
+        direction LR
+        Switch["교환기"]:::nodeBox
+        MediaTGW["미디어 TGW"]:::nodeBox
     end
 
-    subgraph INTELLIGENT_NETWORK["지능망"]
-        CALL_MANAGER_AS[통화매니저 AS]
-        WTIMS_SERVER[WTIMS]
-        CALL_MANAGER_API[통화매니저 API]
-        IN_STT_SERVER[STT 서버]
-    end
-    style IN_STT_SERVER fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
-
-    subgraph VOICE_AI_AGENT_CLOUD["음성 AI Agent(Cloud)"]
-        style VOICE_AI_AGENT_CLOUD fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
-        
-        AI_SERVER[AI 서버]
+    subgraph Intelligent_Network ["지능망 (Intelligent Network)"]
+        direction LR
+        CallManagerAS["통화매니저 AS"]:::nodeBox
+        WTIMS["WTIMS"]:::nodeBox
+        CallManagerAPI["통화매니저 API"]:::nodeBox
+        STTServer["STT 서버"]:::nodeBox
     end
 
-    EXCHANGE_SERVER <-->|SIP 연동| CALL_MANAGER_AS
-    CALL_MANAGER_AS --> WTIMS_SERVER
-    USER_DEVICE <-->|SIP 연동| EXCHANGE_SERVER
-    USER_DEVICE <-->|RTP 연동| MEDIA_TGW
-    MEDIA_TGW <-->|RTP 연동| WTIMS_SERVER
+    subgraph Cloud_Agent ["음성 AI Agent (Cloud)"]
+        direction LR
+        AIAgent["AI Agent 서버"]:::nodeBox
+    end
 
-    %% 연동 구간
-    CALL_MANAGER_AS -->|호 세션| AI_SERVER
-    AI_SERVER -->|호 세션| IN_STT_SERVER
-    WTIMS_SERVER -->|"미디어(TCP 200ms)"| IN_STT_SERVER
-    IN_STT_SERVER -->|전사| AI_SERVER
+    %% 연결선 및 프로토콜 흐름
+    UserTerminal <-->|SIP 연동| Switch
+    UserTerminal <-->|RTP 연동| MediaTGW
+    
+    Switch <-->|SIP 연동| CallManagerAS
+    MediaTGW <-->|RTP 연동| WTIMS
+    
+    CallManagerAS <-->|SDP 전달 및 협상| WTIMS
+    
+    CallManagerAS <-->|호 세션| AIAgent
+    AIAgent -->|호 세션| STTServer
+    WTIMS <-->|"미디어 (TCP 200ms)"| STTServer
+    
+    STTServer -->|전사 데이터| AIAgent
+    
+    AIAgent -->|전사 데이터 / 폭언 감지| CallManagerAPI
+    CallManagerAPI -->|호 제어 요청| CallManagerAS
+    CallManagerAPI -->|전사 데이터 / 폭언 감지| PCClient
 
-    %% AI Agent 연동
-    AI_SERVER <-->|폭언·자막·TIP| CALL_MANAGER_API
-    CALL_MANAGER_API -->|호 제어| CALL_MANAGER_AS
-    CALL_MANAGER_API -->|자막·폭언알림| PC_CLIENT
+    %% 서브그래프 스타일 적용
+    class User_Area layerBox;
+    class Core_Network layerBox;
+    class Intelligent_Network layerBox;
+    class Cloud_Agent cloudBox;
 ```
