@@ -47,7 +47,6 @@ graph TD
     CallManagerAS <-->|SDP 전달 및 협상| WTIMS
     
     CallManagerAS <-->|호 세션| AIAgent
-    AIAgent -->|호 세션| STTServer
     WTIMS <-->|"미디어 (TCP 200ms)"| STTServer
     
     STTServer -->|전사 데이터| AIAgent
