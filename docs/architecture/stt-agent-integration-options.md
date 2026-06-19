@@ -6,44 +6,44 @@
 ```mermaid
 flowchart TB
     subgraph USER_AREA["유저 영역"]
-        USER[유저 단말]
-        PC[PC Client]
+        USER_DEVICE[유저 단말]
+        PC_CLIENT[PC Client]
     end
 
-    subgraph CORE_NET["코어망"]
-        EX[교환기]
-        TGW[미디어 TGW]
+    subgraph CORE_NETWORK["코어망"]
+        EXCHANGE_SERVER[교환기]
+        MEDIA_TGW[미디어 TGW]
     end
 
-    subgraph CORE["지능망"]
-        CM[통화매니저 AS]
-        WT[WTIMS]
-        CM_API[통화매니저 API]
+    subgraph INTELLIGENT_NETWORK["지능망"]
+        CALL_MANAGER_AS[통화매니저 AS]
+        WTIMS_SERVER[WTIMS]
+        CALL_MANAGER_API[통화매니저 API]
     end
 
-    subgraph NEW_STT["음성 AI Agent(Cloud)"]
-        style NEW_STT fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
+    subgraph VOICE_AI_AGENT_CLOUD["음성 AI Agent(Cloud)"]
+        style VOICE_AI_AGENT_CLOUD fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
         
-        STT[STT 서버]
-        RT[AI 서버]
+        CLOUD_STT_SERVER[STT 서버]
+        AI_SERVER[AI 서버]
     end
 
-    EX <-->|SIP 연동| CM
-    CM --> WT
-    USER <-->|SIP 연동| EX
-    USER <-->|RTP 연동| TGW
-    TGW <-->|RTP 연동| WT
+    EXCHANGE_SERVER <-->|SIP 연동| CALL_MANAGER_AS
+    CALL_MANAGER_AS --> WTIMS_SERVER
+    USER_DEVICE <-->|SIP 연동| EXCHANGE_SERVER
+    USER_DEVICE <-->|RTP 연동| MEDIA_TGW
+    MEDIA_TGW <-->|RTP 연동| WTIMS_SERVER
 
     %% 연동 구간
-    CM -->|호 세션| RT
-    RT -->|호 세션| STT
-    WT -->|"미디어(TCP 200ms)"| STT
-    STT -->|전사| RT
+    CALL_MANAGER_AS -->|호 세션| AI_SERVER
+    AI_SERVER -->|호 세션| CLOUD_STT_SERVER
+    WTIMS_SERVER -->|"미디어(TCP 200ms)"| CLOUD_STT_SERVER
+    CLOUD_STT_SERVER -->|전사| AI_SERVER
 
     %% AI Agent 연동
-    RT <-->|폭언·자막·TIP| CM_API
-    CM_API -->|호 제어| CM
-    CM_API -->|자막·폭언알림| PC
+    AI_SERVER <-->|폭언·자막·TIP| CALL_MANAGER_API
+    CALL_MANAGER_API -->|호 제어| CALL_MANAGER_AS
+    CALL_MANAGER_API -->|자막·폭언알림| PC_CLIENT
 ```
 
 ## 방안 2. 지능망 내 STT 구성 및 Cloud AI 서버 연동
@@ -52,43 +52,43 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph USER_AREA["유저 영역"]
-        USER[유저 단말]
-        PC[PC Client]
+        USER_DEVICE[유저 단말]
+        PC_CLIENT[PC Client]
     end
 
-    subgraph CORE_NET["코어망"]
-        EX[교환기]
-        TGW[미디어 TGW]
+    subgraph CORE_NETWORK["코어망"]
+        EXCHANGE_SERVER[교환기]
+        MEDIA_TGW[미디어 TGW]
     end
 
-    subgraph CORE["지능망"]
-        CM[통화매니저 AS]
-        WT[WTIMS]
-        CM_API[통화매니저 API]
-        IN_STT[STT 서버]
+    subgraph INTELLIGENT_NETWORK["지능망"]
+        CALL_MANAGER_AS[통화매니저 AS]
+        WTIMS_SERVER[WTIMS]
+        CALL_MANAGER_API[통화매니저 API]
+        IN_STT_SERVER[STT 서버]
     end
-    style IN_STT fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
+    style IN_STT_SERVER fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
 
-    subgraph NEW_STT["음성 AI Agent(Cloud)"]
-        style NEW_STT fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
+    subgraph VOICE_AI_AGENT_CLOUD["음성 AI Agent(Cloud)"]
+        style VOICE_AI_AGENT_CLOUD fill:#f8faff,stroke:#0066cc,stroke-width:2px,stroke-dasharray: 5 5
         
-        RT[AI 서버]
+        AI_SERVER[AI 서버]
     end
 
-    EX <-->|SIP 연동| CM
-    CM --> WT
-    USER <-->|SIP 연동| EX
-    USER <-->|RTP 연동| TGW
-    TGW <-->|RTP 연동| WT
+    EXCHANGE_SERVER <-->|SIP 연동| CALL_MANAGER_AS
+    CALL_MANAGER_AS --> WTIMS_SERVER
+    USER_DEVICE <-->|SIP 연동| EXCHANGE_SERVER
+    USER_DEVICE <-->|RTP 연동| MEDIA_TGW
+    MEDIA_TGW <-->|RTP 연동| WTIMS_SERVER
 
     %% 연동 구간
-    CM -->|호 세션| RT
-    RT -->|호 세션| IN_STT
-    WT -->|"미디어(TCP 200ms)"| IN_STT
-    IN_STT -->|전사| RT
+    CALL_MANAGER_AS -->|호 세션| AI_SERVER
+    AI_SERVER -->|호 세션| IN_STT_SERVER
+    WTIMS_SERVER -->|"미디어(TCP 200ms)"| IN_STT_SERVER
+    IN_STT_SERVER -->|전사| AI_SERVER
 
     %% AI Agent 연동
-    RT <-->|폭언·자막·TIP| CM_API
-    CM_API -->|호 제어| CM
-    CM_API -->|자막·폭언알림| PC
+    AI_SERVER <-->|폭언·자막·TIP| CALL_MANAGER_API
+    CALL_MANAGER_API -->|호 제어| CALL_MANAGER_AS
+    CALL_MANAGER_API -->|자막·폭언알림| PC_CLIENT
 ```
