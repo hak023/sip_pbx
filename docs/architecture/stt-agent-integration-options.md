@@ -33,7 +33,6 @@ flowchart TB
     USER <-->|SIP 연동| EX
     USER <-->|RTP 연동| TGW
     TGW <-->|RTP 연동| WT
-    USER <-->|통화정보 확인| PC
 
     %% 연동 구간
     CM -->|호 세션| RT
@@ -81,7 +80,6 @@ flowchart TB
     USER <-->|SIP 연동| EX
     USER <-->|RTP 연동| TGW
     TGW <-->|RTP 연동| WT
-    USER <-->|통화정보 확인| PC
 
     %% 연동 구간
     CM -->|호 세션| RT
