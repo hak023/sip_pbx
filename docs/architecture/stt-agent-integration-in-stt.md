@@ -8,6 +8,7 @@ graph TD
     classDef layerBox fill:#f8fafc,stroke:#94a3b8,stroke-width:2px,stroke-dasharray: 4 4,color:#0f172a,font-weight:bold;
     classDef cloudBox fill:#eff6ff,stroke:#60a5fa,stroke-width:2px,stroke-dasharray: 4 4,color:#1d4ed8,font-weight:bold;
     classDef nodeBox fill:#ffffff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a,font-weight:bold,rx:4px,ry:4px;
+    classDef dashedNodeBox fill:#ffffff,stroke:#2563eb,stroke-width:2px,stroke-dasharray: 5 5,color:#1e3a8a,font-weight:bold,rx:4px,ry:4px;
     classDef clientBox fill:#ffffff,stroke:#475569,stroke-width:2px,color:#334155,font-weight:bold,rx:4px,ry:4px;
 
     %% 계층별 Subgraph
@@ -28,7 +29,7 @@ graph TD
         CallManagerAS["통화매니저 AS"]:::nodeBox
         WTIMS["WTIMS"]:::nodeBox
         CallManagerAPI["통화매니저 API"]:::nodeBox
-        STTServer["STT 서버"]:::nodeBox
+        STTServer["STT 서버"]:::dashedNodeBox
     end
 
     subgraph Cloud_Agent ["음성 AI Agent (Cloud)"]
