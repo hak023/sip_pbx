@@ -33,7 +33,7 @@ graph TD
         CallManagerAS["📞 통화매니저 AS"]:::nodeBox
         WTIMS["🎛️ WTIMS"]:::nodeBox
         CallManagerAPI["⚙️ 통화매니저 API"]:::nodeBox
-        STTServer["🎙️ STT 서버"]:::dashedNodeBox
+        STTServer["🎙️ 구축형 STT 서버"]:::dashedNodeBox
     end
 
     subgraph Cloud_Agent ["음성 AI Agent (Cloud)"]
@@ -45,29 +45,29 @@ graph TD
     %% 연결선 및 프로토콜 흐름 (위에서 아래로: Cloud -> Intelligent -> Core -> User)
     
     %% Cloud 내부
-    CloudSTT ==>|"<mark>전사 데이터</mark>"| AIAgent
+    CloudSTT --> AIAgent
     
     %% Cloud <-> Intelligent
-    AIAgent ==>|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| CallManagerAPI
+    AIAgent -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| CallManagerAPI
     AIAgent -.- CallManagerAS
-    CloudSTT <==>|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
+    CloudSTT <-->|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
+    STTServer --> AIAgent
     
     %% Intelligent 내부
-    STTServer ==>|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| CallManagerAPI
-    STTServer <==>|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
+    STTServer <-->|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
     CallManagerAPI -.- CallManagerAS
     CallManagerAS -.- WTIMS
     
     %% Intelligent <-> Core
     CallManagerAS -.- Switch
-    WTIMS <==> MediaTGW
+    WTIMS <--> MediaTGW
     
     %% Core <-> User
     Switch -.- UserTerminal
-    MediaTGW <==> UserTerminal
+    MediaTGW <--> UserTerminal
     
     %% Intelligent <-> User
-    CallManagerAPI ==>|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| PCClient
+    CallManagerAPI -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| PCClient
 
     %% 서브그래프 스타일 적용
     class User_Area userLayer;
