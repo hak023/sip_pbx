@@ -13,8 +13,8 @@ graph TD
     %% 계층별 Subgraph
     subgraph User_Area ["유저 영역 (User Area)"]
         direction LR
-        UserTerminal["유저 단말"]:::nodeBox
-        PCClient["PC Client"]:::clientBox
+        UserTerminal["📱 유저 단말"]:::nodeBox
+        PCClient["💻 PC Client"]:::clientBox
     end
 
     subgraph Core_Network ["코어망 (Core Network)"]
@@ -36,24 +36,30 @@ graph TD
         STTServer["STT 서버"]:::nodeBox
     end
 
-    %% 연결선 및 프로토콜 흐름
-    UserTerminal <-->|SIP 연동| Switch
-    UserTerminal <-->|RTP 연동| MediaTGW
+    %% 연결선 및 프로토콜 흐름 (위에서 아래로: Cloud -> Intelligent -> Core -> User)
     
-    Switch <-->|SIP 연동| CallManagerAS
-    MediaTGW <-->|RTP 연동| WTIMS
+    %% Cloud 내부
+    STTServer -->|"<mark>전사 데이터</mark>"| AIAgent
     
+    %% Cloud <-> Intelligent
+    STTServer <-->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| CallManagerAPI
+    STTServer <-->|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
+    AIAgent <-->|호 세션| CallManagerAS
+    
+    %% Intelligent 내부
+    CallManagerAPI <-->|호 제어 요청| CallManagerAS
     CallManagerAS <-->|SDP 전달 및 협상| WTIMS
     
-    CallManagerAS <-->|호 세션| AIAgent
-    WTIMS <-->|"미디어 (TCP 200ms)"| STTServer
+    %% Intelligent <-> Core
+    CallManagerAS <-->|SIP 연동| Switch
+    WTIMS <-->|RTP 연동| MediaTGW
     
-    STTServer -->|전사 데이터| AIAgent
+    %% Core <-> User
+    Switch <-->|SIP 연동| UserTerminal
+    MediaTGW <-->|RTP 연동| UserTerminal
     
-    %% 하위 계층에서 상위 계층으로 가는 데이터는 레이아웃 꼬임을 방지하기 위해 방향성만 맞춘 표준 연결선 사용 (상위 컴포넌트 기준 시작)
-    CallManagerAPI <-->|전사 데이터 / 폭언 감지| STTServer
-    CallManagerAS <-->|호 제어 요청| CallManagerAPI
-    PCClient <-->|전사 데이터 / 폭언 감지| CallManagerAPI
+    %% Intelligent <-> User
+    CallManagerAPI <-->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| PCClient
 
     %% 서브그래프 스타일 적용
     class User_Area layerBox;
