@@ -15,17 +15,11 @@ graph TD
     classDef dashedNodeBox fill:#ffffff,stroke:#2563eb,stroke-width:2px,stroke-dasharray: 5 5,color:#1e3a8a,font-weight:bold,rx:4px,ry:4px;
     classDef clientBox fill:#ffffff,stroke:#475569,stroke-width:2px,color:#334155,font-weight:bold,rx:4px,ry:4px;
 
-    %% 계층별 Subgraph
-    subgraph User_Area ["유저 영역 (User Area)"]
+    %% 계층별 Subgraph (위에서 아래로 선언하여 레이아웃 고정)
+    subgraph Cloud_Agent ["음성 AI Agent (Cloud)"]
         direction LR
-        UserTerminal["📱 유저 단말"]:::nodeBox
-        PCClient["💻 PC Client"]:::clientBox
-    end
-
-    subgraph Core_Network ["코어망 (Core Network)"]
-        direction LR
-        Switch["🔀 교환기"]:::nodeBox
-        MediaTGW["📡 미디어 TGW"]:::nodeBox
+        AIAgent["🧠 AI Agent 서버"]:::nodeBox
+        CloudSTT["🎙️ Cloud STT 서버"]:::nodeBox
     end
 
     subgraph Intelligent_Network ["지능망 (Intelligent Network)"]
@@ -36,10 +30,16 @@ graph TD
         STTServer["🎙️ 구축형 STT 서버"]:::dashedNodeBox
     end
 
-    subgraph Cloud_Agent ["음성 AI Agent (Cloud)"]
+    subgraph Core_Network ["코어망 (Core Network)"]
         direction LR
-        AIAgent["🧠 AI Agent 서버"]:::nodeBox
-        CloudSTT["🎙️ Cloud STT 서버"]:::nodeBox
+        Switch["🔀 교환기"]:::nodeBox
+        MediaTGW["📡 미디어 TGW"]:::nodeBox
+    end
+
+    subgraph User_Area ["유저 영역 (User Area)"]
+        direction LR
+        UserTerminal["📱 유저 단말"]:::nodeBox
+        PCClient["💻 PC Client"]:::clientBox
     end
 
     %% 핵심 연동선 및 RTP 연동
@@ -47,6 +47,10 @@ graph TD
     AIAgent -->|"<mark>미디어 (TCP 200ms)</mark>"| CloudSTT
     AIAgent -->|"<mark>미디어 (TCP 200ms)</mark>"| STTServer
     CallManagerAPI -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| PCClient
+    
+    %% 제어 연동 (통화매니저AS)
+    CallManagerAS -.- WTIMS
+    CallManagerAS -.- Switch
     
     %% 미디어/RTP 연동
     WTIMS <-->|RTP 연동| MediaTGW
