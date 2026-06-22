@@ -36,6 +36,14 @@ graph TD
         STTServer["STT 서버"]:::nodeBox
     end
 
+    %% 계층간 레이아웃 강제 (위에서 아래로)
+    UserTerminal ~~~ Switch
+    PCClient ~~~ CallManagerAPI
+    Switch ~~~ CallManagerAS
+    MediaTGW ~~~ WTIMS
+    CallManagerAS ~~~ AIAgent
+    CallManagerAPI ~~~ STTServer
+
     %% 연결선 및 프로토콜 흐름
     UserTerminal <-->|SIP 연동| Switch
     UserTerminal <-->|RTP 연동| MediaTGW
@@ -50,9 +58,10 @@ graph TD
     
     STTServer -->|전사 데이터| AIAgent
     
-    STTServer -->|전사 데이터 / 폭언 감지| CallManagerAPI
-    CallManagerAPI -->|호 제어 요청| CallManagerAS
-    CallManagerAPI -->|전사 데이터 / 폭언 감지| PCClient
+    %% 하위 계층에서 상위 계층으로 가는 데이터는 레이아웃 꼬임을 방지하기 위해 역방향 화살표 사용
+    CallManagerAPI <-- "전사 데이터 / 폭언 감지" --- STTServer
+    CallManagerAS <-- "호 제어 요청" --- CallManagerAPI
+    PCClient <-- "전사 데이터 / 폭언 감지" --- CallManagerAPI
 
     %% 서브그래프 스타일 적용
     class User_Area layerBox;
