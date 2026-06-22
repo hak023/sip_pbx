@@ -51,9 +51,9 @@ graph TD
     
     STTServer -->|전사 데이터| AIAgent
     
-    AIAgent -->|전사 데이터 / 폭언 감지| CallManagerAPI
-    CallManagerAPI -->|호 제어 요청| CallManagerAS
-    CallManagerAPI -->|전사 데이터 / 폭언 감지| PCClient
+    CallManagerAPI <-->|전사 데이터 / 폭언 감지| AIAgent
+    CallManagerAS <-->|호 제어 요청| CallManagerAPI
+    PCClient <-->|전사 데이터 / 폭언 감지| CallManagerAPI
 
     %% 서브그래프 스타일 적용
     class User_Area layerBox;
