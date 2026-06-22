@@ -1,5 +1,5 @@
-# 방안 3. 지능망/Cloud 혼합 STT 구성 (Hybrid)
-지능망 내에 STT 서버를 두고 음성 AI Agent(Cloud) 내에도 추가로 STT 서버를 구성하는 하이브리드 구조입니다.
+# 욕설/폭언 감지 실시간 STT 서버 구성 방안 (Cloud 및 구축형 STT)
+욕설/폭언 감지 서비스를 위해 음성 AI Agent(Cloud) 내에 실시간 STT 서버를 구성하고 추후 구축형 STT를 추가로 구축 예정.
 
 ```mermaid
 graph TD
@@ -42,31 +42,10 @@ graph TD
         CloudSTT["🎙️ Cloud STT 서버"]:::nodeBox
     end
 
-    %% 연결선 및 프로토콜 흐름 (위에서 아래로: Cloud -> Intelligent -> Core -> User)
-    
-    %% Cloud 내부
-    CloudSTT --> AIAgent
-    
-    %% Cloud <-> Intelligent
+    %% 핵심 연동선 (요청하신 4개의 플로우만 표현)
     AIAgent -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| CallManagerAPI
-    AIAgent -.- CallManagerAS
-    CloudSTT <-->|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
-    AIAgent <--> STTServer
-    
-    %% Intelligent 내부
-    STTServer <-->|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
-    CallManagerAPI -.- CallManagerAS
-    CallManagerAS -.- WTIMS
-    
-    %% Intelligent <-> Core
-    CallManagerAS -.- Switch
-    WTIMS <--> MediaTGW
-    
-    %% Core <-> User
-    Switch -.- UserTerminal
-    MediaTGW <--> UserTerminal
-    
-    %% Intelligent <-> User
+    AIAgent -->|"<mark>미디어 (TCP 200ms)</mark>"| CloudSTT
+    AIAgent -->|"<mark>미디어 (TCP 200ms)</mark>"| STTServer
     CallManagerAPI -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| PCClient
 
     %% 서브그래프 스타일 적용
