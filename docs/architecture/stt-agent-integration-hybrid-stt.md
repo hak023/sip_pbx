@@ -51,7 +51,7 @@ graph TD
     AIAgent -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| CallManagerAPI
     AIAgent -.- CallManagerAS
     CloudSTT <-->|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
-    STTServer --> AIAgent
+    AIAgent <--> STTServer
     
     %% Intelligent 내부
     STTServer <-->|"<mark>미디어 (TCP 200ms)</mark>"| WTIMS
