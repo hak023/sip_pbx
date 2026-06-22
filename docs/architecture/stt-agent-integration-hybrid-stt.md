@@ -42,11 +42,15 @@ graph TD
         CloudSTT["🎙️ Cloud STT 서버"]:::nodeBox
     end
 
-    %% 핵심 연동선 (요청하신 4개의 플로우만 표현)
+    %% 핵심 연동선 및 RTP 연동
     AIAgent -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| CallManagerAPI
     AIAgent -->|"<mark>미디어 (TCP 200ms)</mark>"| CloudSTT
     AIAgent -->|"<mark>미디어 (TCP 200ms)</mark>"| STTServer
     CallManagerAPI -->|"<mark>전사 데이터</mark> / <mark>폭언 감지</mark>"| PCClient
+    
+    %% 미디어/RTP 연동
+    WTIMS <-->|RTP 연동| MediaTGW
+    MediaTGW <-->|RTP 연동| UserTerminal
 
     %% 서브그래프 스타일 적용
     class User_Area userLayer;
