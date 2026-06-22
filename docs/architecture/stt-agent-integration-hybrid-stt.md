@@ -55,6 +55,11 @@ graph TD
     %% 미디어/RTP 연동
     WTIMS <-->|RTP 연동| MediaTGW
     MediaTGW <-->|RTP 연동| UserTerminal
+    
+    %% 레이아웃 강제 고정을 위한 투명 링크 (화면에 보이지 않음)
+    AIAgent ~~~ CallManagerAS
+    AIAgent ~~~ WTIMS
+    CallManagerAS ~~~ Switch
 
     %% 서브그래프 스타일 적용
     class User_Area userLayer;
