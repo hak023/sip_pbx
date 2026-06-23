@@ -54,12 +54,6 @@ sequenceDiagram
     end
 ```
 
-## PC Client 전사 UI 예시
-
-평시 대화 중 사용자 간의 발화 내용은 PC Client의 대화창 UI에 아래와 같이 실시간 텍스트로 렌더링되어 표시됩니다.
-
-![PC Client 대화 UI 예시](./images/pc_client_chat_ui.png)
-
 ## 시나리오 설명
 
 1. **평시 대화 전사 (PC Client 표시)**
