@@ -22,13 +22,13 @@ sequenceDiagram
 
     %% 1. 평시 대화 (전사 및 UI 표시)
     rect rgb(245, 255, 250)
-    Note right of U: 1. 평시 대화 및 PC Client 전사 표시
+    Note right of U: 1. 평시 대화 및<br/>PC Client 전사 표시
     U->>MT: 음성 발화 송신
     MT->>W: 음성 패킷 전달
-    W->>STT: 음성 스트리밍 전달 (TCP 200ms)
-    STT-->>STT: 음성 인식 (Speech-to-Text)
+    W->>STT: 음성 스트리밍 전달<br/>(TCP 200ms)
+    STT-->>STT: 음성 인식<br/>(Speech-to-Text)
     STT->>AI: 전사 데이터(텍스트) 전달
-    AI-->>AI: 텍스트 분석 (정상 대화 판단)
+    AI-->>AI: 텍스트 분석<br/>(정상 대화 판단)
     AI->>CAPI: 전사 데이터 전송
     CAPI->>PC: 전사 데이터 푸시
     Note over PC: PC Client 대화 UI에<br/>전사된 발화 내용 표시
@@ -36,19 +36,19 @@ sequenceDiagram
 
     %% 2. 욕설/폭언 감지 및 흐름
     rect rgb(255, 240, 245)
-    Note right of U: 2. 욕설/폭언 감지 및 자동 호 종료
-    U->>MT: 음성 발화 송신 (욕설/폭언 포함)
+    Note right of U: 2. 욕설/폭언 감지 및<br/>자동 호 종료
+    U->>MT: 음성 발화 송신<br/>(욕설/폭언 포함)
     MT->>W: 음성 패킷 전달
-    W->>STT: 음성 스트리밍 전달 (TCP 200ms)
-    STT-->>STT: 음성 인식 (Speech-to-Text)
+    W->>STT: 음성 스트리밍 전달<br/>(TCP 200ms)
+    STT-->>STT: 음성 인식<br/>(Speech-to-Text)
     STT->>AI: 전사 데이터(텍스트) 전달
-    AI-->>AI: 전사 텍스트 기반 욕설/폭언 판단!
+    AI-->>AI: 전사 텍스트 기반<br/>욕설/폭언 판단!
     AI->>CAPI: 폭언 감지 알림
-    CAPI->>PC: 폭언 감지 이벤트 알림 (PC Client)
+    CAPI->>PC: 폭언 감지 이벤트 알림<br/>(PC Client)
     Note over PC: PC Client 화면에<br/>폭언 감지 경고 UI 표시
     CAPI->>CAS: 폭언 시나리오 적용 요청
     CAS->>W: 폭언 안내멘트 송출 요청
-    Note right of W: 안내멘트: "부적절한 내용이 감지되어 민원처리법에 따라 통화가 종료됩니다."
+    Note right of W: 안내멘트:<br/><br/>"부적절한 내용이 감지되어<br/><br/>민원처리법에 따라 통화가 종료됩니다."
     W->>MT: 폭언 안내멘트 오디오 송출
     MT->>U: 폭언 안내멘트 재생
     CAS->>S: 안내멘트 송출 후 호 종료 요청
@@ -95,17 +95,17 @@ sequenceDiagram
 
     %% 1. AI 봇 인사말 응대
     rect rgb(240, 248, 255)
-    Note right of Caller: 1. AI 봇 인사말 응대 및 용무 확인
+    Note right of Caller: 1. AI 봇 인사말 응대<br/>및 용무 확인
     AIBot->>MT: AI 인사말 송출
-    Note over Caller, Callee: "어떤 용무로 전화했는지 말씀해주세요."
+    Note over Caller, Callee: "어떤 용무로 전화했는지<br/><br/>말씀해주세요."
     MT->>Caller: 인사말 재생
     
     Caller->>MT: 음성 발화 (용무 답변)
-    Note over Caller, Callee: "시세보다 저렴한 상가가 있어 연락드렸습니다."
+    Note over Caller, Callee: "시세보다 저렴한 상가가 있어<br/><br/>연락드렸습니다."
     MT->>AIBot: 음성 패킷 전달
     
     AIBot->>STT: 음성 스트리밍 전달
-    STT-->>STT: 음성 인식 (Speech-to-Text)
+    STT-->>STT: 음성 인식<br/>(Speech-to-Text)
     STT->>AI: 전사 데이터 전달
     end
     
@@ -126,7 +126,7 @@ sequenceDiagram
         CAS->>S: 착신 유저 호 연결 요청
         S->>Callee: 호 연결 (Establish)
         CAS->>MS: 스팸 의심 안내멘트 송출 요청
-        Note right of MS: 안내멘트: "스팸의심 전화입니다."
+        Note right of MS: 안내멘트:<br/><br/>"스팸의심 전화입니다."
         MS->>MT: 안내멘트 오디오 송출
         MT->>Callee: 안내멘트 재생 (착신 유저에게)
         end
