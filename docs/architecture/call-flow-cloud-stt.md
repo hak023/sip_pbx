@@ -25,9 +25,9 @@ sequenceDiagram
     S->>CAS: 호 처리 및 제어 요청
     CAS-->>S: 라우팅 및 호 제어 응답
     S->>MT: 미디어 연결 요청
-    MT<-->>U: RTP 미디어 스트림 수립
+    MT->>U: RTP 미디어 스트림 수립
     CAS->>W: 미디어 포크(Forking) 요청
-    W<-->>STT: TCP 200ms 미디어 스트리밍 채널 수립 (STT 전송용)
+    W->>STT: TCP 200ms 미디어 스트리밍 채널 수립 (STT 전송용)
     end
 
     %% 2. 평시 대화 (전사 및 UI 표시)
