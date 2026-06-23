@@ -101,7 +101,7 @@ sequenceDiagram
     MT->>Caller: 인사말 재생
     
     Caller->>MT: 음성 발화 (용무 답변)
-    Note left of Caller: "시세보다 저렴한 상가가 있어 연락드렸습니다."
+    Note over Caller, Callee: "시세보다 저렴한 상가가 있어 연락드렸습니다."
     MT->>AIBot: 음성 패킷 전달
     
     AIBot->>STT: 음성 스트리밍 전달
