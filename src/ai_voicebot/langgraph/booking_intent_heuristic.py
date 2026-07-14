@@ -11,9 +11,14 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 from typing import Any, Dict, Mapping, Tuple
 
+import structlog
+
 from src.common.call_data_record_logger import log_call_data
+
+_logger = structlog.get_logger(__name__)
 
 # classify_intent._BOOKING_ACTION_PATTERNS 와 동기화 + 음성 STT 변형
 BOOKING_ACTION_PATTERNS: tuple[str, ...] = (
@@ -69,6 +74,29 @@ def booking_voice_enabled() -> bool:
 
 def booking_voice_intent_strict() -> bool:
     return (os.environ.get("BOOKING_VOICE_INTENT_STRICT") or "").strip() == "1"
+
+
+def _booking_context_ttl_minutes() -> int:
+    """booking_context 활성 상태 유지 시간 임계값(분). 기본 15분."""
+    return int(os.environ.get("BOOKING_CONTEXT_TTL_MINUTES") or "15")
+
+
+def _is_booking_context_expired(bc: dict) -> bool:
+    """
+    booking_context.last_activity_at 기준으로 TTL 초과 여부를 반환한다.
+
+    - last_activity_at 없으면 False (하위 호환 — 타임스탬프 없는 레거시 컨텍스트는 만료 처리 안 함)
+    - 파싱 실패 시 False (안전 방향)
+    """
+    last_activity = (bc or {}).get("last_activity_at")
+    if not last_activity:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(last_activity).rstrip("Z"))
+        elapsed_minutes = (datetime.utcnow() - dt).total_seconds() / 60
+        return elapsed_minutes > _booking_context_ttl_minutes()
+    except (ValueError, TypeError, OverflowError):
+        return False
 
 
 def _combined_text(user_query: str, user_query_raw: str, main_clause: str) -> str:
@@ -206,9 +234,44 @@ def merge_booking_intent_into_result(
     main_clause: str,
     classify_path: str,
 ) -> Dict[str, Any]:
-    """classify_intent 반환 dict에 예약 휴리스틱을 적용한다."""
+    """
+    classify_intent 반환 dict에 예약 휴리스틱을 적용한다.
+
+    Gate 1 — LLM 직접 분류 보호:
+      _llm_classified=True 가 result에 있으면 LLM이 이미 의도를 확정한 것이므로
+      booking 승격을 차단한다. (booking_context 활성 상태여도 마찬가지)
+
+    Gate 2 — TTL 만료:
+      booking_context.last_activity_at 기준 BOOKING_CONTEXT_TTL_MINUTES(기본 15분) 초과 시
+      booking_active=False로 처리하여 stale 컨텍스트로 인한 오분류를 방지한다.
+    """
+    # Gate 1: LLM이 직접 분류한 의도는 booking 승격에서 면제
+    if result.get("_llm_classified"):
+        _logger.info(
+            "booking_intent_merge_llm_classified_skip",
+            call_id=call_id,
+            intent=result.get("intent"),
+            classify_path=classify_path,
+            note="LLM 직접 분류 결과 — booking 승격 차단",
+        )
+        return result
+
     user_query_raw = (state.get("user_query_raw") or "").strip()
     bc = state.get("booking_context") or {}
+
+    # Gate 2: TTL 만료 확인
+    if _is_booking_context_expired(bc):
+        ttl = _booking_context_ttl_minutes()
+        last_activity = bc.get("last_activity_at", "unknown")
+        _logger.info(
+            "booking_context_expired_ttl",
+            call_id=call_id,
+            last_activity_at=last_activity,
+            ttl_minutes=ttl,
+            note=f"booking_context 활성 중이나 마지막 활동 {ttl}분 초과 → 만료 처리, booking 승격 차단",
+        )
+        return result
+
     # messages 는 LangChain 객체 등으로 체크포인트 직렬화 시 비어 보일 수 있음 →
     # booking_agent 가 세팅하는 JSON 친화 플래그로 보강 (예약 멀티턴 유지)
     booking_active = bool(

@@ -362,6 +362,17 @@ async def classify_intent_node(state: ConversationState) -> dict:
                                 note="scope_keyword 매칭이나 booking 동작 패턴 감지 → LLM 3차로 위임",
                             )
                             # LLM 3차 분류로 fall-through
+                        elif _booking_active:
+                            # booking_context 활성 상태: scope_keyword fast-path 우회, LLM 3차 강제
+                            logger.info(
+                                "classify_intent_booking_active_skip_scope_keyword",
+                                query_preview=query[:50],
+                                main_clause_preview=main_clause[:50],
+                                matched_keyword=matched_kw,
+                                persona_owner=persona_owner,
+                                note="booking_context 활성 → scope_keyword fast-path 스킵, LLM 3차 강제",
+                            )
+                            # LLM 3차 분류로 fall-through
                         else:
                             elapsed = time.time() - node_start
                             logger.info(
@@ -563,6 +574,17 @@ async def classify_intent_node(state: ConversationState) -> dict:
                             note="페르소나 관련 발화이나 booking 동작 패턴 감지 → LLM 3차 분류로 위임",
                         )
                         # LLM 3차 분류로 fall-through (return 없이 계속)
+                    elif _booking_active:
+                        # booking_context 활성: 페르소나 관련 발화여도 LLM이 판단하게 함
+                        logger.info(
+                            "classify_intent_booking_active_skip_persona_question",
+                            query_preview=query[:50],
+                            main_clause_preview=main_clause[:50],
+                            similarity=relevance["similarity"],
+                            persona_owner=persona_owner,
+                            note="booking_context 활성 → persona_question fast-path 스킵, LLM 3차 강제",
+                        )
+                        # LLM 3차 분류로 fall-through
                     else:
                         elapsed = time.time() - node_start
                         logger.info(
@@ -647,11 +669,14 @@ async def classify_intent_node(state: ConversationState) -> dict:
                 f"\n참고: 위 발화는 복합 발화입니다. 핵심 요청은 \"{main_clause}\" 입니다.\n"
             )
 
-        # 0.5차: booking_context 활성 힌트 (키워드 감지 대체)
+        # 0.5차: booking_context 활성 힌트
+        # fast-path(scope_keyword·유사도)를 건너뛰었으므로 LLM이 최종 판단자임.
+        # "예약 연속 vs 별개 질문"을 명확히 구분하도록 지시한다.
         if _booking_active:
             _compound_note += (
                 "\n⚠️ 현재 예약 대화가 진행 중입니다. "
-                "발화가 예약 흐름의 연장선(추가 질문·확인·수정 포함)이면 booking으로 분류하세요. "
+                "발화가 예약 흐름의 연장선(날짜·시간·인원 확인, 수정 요청, 확인 응답 등)이면 booking으로 분류하세요. "
+                "반면, 예약과 무관한 정보 질문(예: 주차, 메뉴, 위치, 가격 등)이면 question으로 분류하세요. "
                 "통화 종료·상담원 연결 의도가 명확할 때만 farewell/transfer로 분류하세요.\n"
             )
 
@@ -794,12 +819,37 @@ async def classify_intent_node(state: ConversationState) -> dict:
         _log_intent_classify_timing(
             call_id, elapsed_sec=elapsed, path="llm_merged", intent=intent, query_preview=query
         )
+
+        # call_data_record: LLM 의사결정 전체 기록
+        # - prompt_full: LLM에 보낸 분류 프롬프트 전체
+        # - raw_response: LLM이 돌려준 원문
+        # - intent_decided: 최종 결정 intent (VALID_INTENTS 폴백 포함)
+        # - booking_active: booking_context 활성 상태 (fast-path 스킵 여부 판단 근거)
+        if call_id:
+            log_call_data(
+                call_id,
+                "llm",
+                "classify_intent_llm",
+                prompt_full=classify_prompt,
+                raw_response=raw,
+                intent_decided=intent,
+                search_query=search_query,
+                booking_active=_booking_active,
+                is_compound=_is_compound,
+                elapsed_sec=round(elapsed, 3),
+                request_sent_at=request_sent_at,
+                response_received_at=response_received_at,
+            )
+
         return merge_booking_intent_into_result(
             {
                 "intent": intent,
                 "slots": {},
                 "confidence": confidence,
                 "rewritten_query": search_query,
+                # LLM이 직접 분류: booking_intent_heuristic이 booking_context_active로
+                # 강제 승격하지 않도록 차단 플래그를 설정한다.
+                "_llm_classified": True,
             },
             state,
             call_id=call_id,

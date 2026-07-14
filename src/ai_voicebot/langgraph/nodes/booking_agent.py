@@ -645,6 +645,10 @@ async def booking_agent_node(state: ConversationState) -> dict:
     else:
         booking_context["booking_flow_active"] = True
 
+    # TTL 추적: 마지막 booking 활동 시각을 기록한다.
+    # booking_intent_heuristic 이 15분 초과 시 booking_context 를 만료 처리한다.
+    booking_context["last_activity_at"] = datetime.utcnow().isoformat() + "Z"
+
     elapsed = time.time() - node_start
     logger.info(
         "booking_agent_node_complete",

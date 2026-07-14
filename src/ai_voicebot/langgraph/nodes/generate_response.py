@@ -502,10 +502,37 @@ async def generate_response_node(state: ConversationState) -> dict:
             else:
                 confidence = rag_confidence
 
-        # llm_exchange는 rag_processor에서 통화 단위로 기록 (중복 방지)
+        # llm_exchange: 의사결정 전체 기록
+        # - voice call(rag_processor 경로): rag_processor에서도 llm_exchange를 기록하지만
+        #   여기서 기록한 후 _llm_exchange_logged=True 플래그를 반환해 중복을 방지한다.
+        # - SIP chat(langgraph direct 경로): rag_processor를 거치지 않으므로 여기서만 기록됨.
         _rag_src = "vector_knowledge" if rag_results else "llm_prompt_no_reference"
+        _call_id_for_log = state.get("_call_id") or ""
+        _llm_rag_applied = build_rag_hits_llm_context(rag_results or [], max_items=8)
+        if _call_id_for_log:
+            log_call_data(
+                _call_id_for_log,
+                "llm",
+                "llm_exchange",
+                user_text=user_query,
+                user_text_full=user_query,
+                user_text_len=len(user_query or ""),
+                response=response,
+                response_full=response,
+                response_len=len(response),
+                intent=intent,
+                confidence=confidence,
+                needs_follow_up=needs_follow_up,
+                rag_hit_count=len(rag_results or []),
+                elapsed_sec=round(elapsed, 3),
+                llm_rag_context_source=_rag_src,
+                llm_rag_applied=_llm_rag_applied,
+                llm_rag_applied_count=len(_llm_rag_applied),
+                rag_search_trace=state.get("rag_search_trace") or {},
+            )
 
         return {
+            "_llm_exchange_logged": True,  # rag_processor 중복 기록 방지 플래그
             "response": response,
             "response_chunks": chunks,
             "messages": updated_messages,

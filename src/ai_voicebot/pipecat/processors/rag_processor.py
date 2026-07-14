@@ -2024,10 +2024,18 @@ class RAGLLMProcessor(FrameProcessor):
                            response_full=response,
                            response_len=len(response),
                            note="실제 TTS 텍스트 (모든 override 반영 후)")
+                # generate_response_node에서 이미 llm_exchange를 기록한 경우 중복 방지.
+                # rag_processor(음성 경로)는 TTS override 이후 최종 텍스트를 추가로 기록하되
+                # event를 llm_exchange_tts_final로 구분해 분석 시 두 시점을 모두 확인 가능하게 한다.
+                _exchange_event = (
+                    "llm_exchange_tts_final"
+                    if result.get("_llm_exchange_logged")
+                    else "llm_exchange"
+                )
                 log_call_data(
                     self._call_id or "",
                     "llm",
-                    "llm_exchange",
+                    _exchange_event,
                     user_text=user_text,
                     user_text_full=user_text,
                     user_text_len=len(user_text or ""),
