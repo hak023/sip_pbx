@@ -18,15 +18,16 @@
 
 `design/`의 동명·유사 주제와 겹칠 수 있다. **구현 스택·컴포넌트 경계**는 아래를 우선한다.
 
-| 문서                                                                                                                | 설명                                                          |
-| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [technical-architecture.md](architecture/technical-architecture.md)                                                 | **현재 리포** 기준 기술 아키텍처(구현·스택)                   |
-| [production-deployment-architecture.md](architecture/production-deployment-architecture.md)                         | **상용 통합** 목표(교환기/WTIMS/API/용량/비용/외부 연동 개발) |
-| [ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md)                                             | AI Voicebot 백엔드                                            |
-| [frontend-architecture.md](architecture/frontend-architecture.md)                                                   | Next.js 운영 콘솔                                             |
-| [voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md)                                     | Voice AI 대화 엔진                                            |
-| [realtime-call-dashboard-design.md](architecture/realtime-call-dashboard-design.md)                                 | 실시간 통화 대시보드 설계(문서)                               |
-| [realtime-call-dashboard-implementation-summary.md](architecture/realtime-call-dashboard-implementation-summary.md) | 위 항목 구현 요약                                             |
+| 문서                                                                                                                | 설명                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [technical-architecture.md](architecture/technical-architecture.md)                                                 | **현재 리포** 기준 기술 아키텍처(구현·스택)                                           |
+| [production-deployment-architecture.md](architecture/production-deployment-architecture.md)                         | **상용 통합** 목표(교환기/WTIMS/API/용량/비용/외부 연동 개발)                         |
+| [ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md)                                             | AI Voicebot 백엔드                                                                    |
+| [frontend-architecture.md](architecture/frontend-architecture.md)                                                   | Next.js 운영 콘솔                                                                     |
+| [voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md)                                     | Voice AI 대화 엔진                                                                    |
+| [realtime-call-dashboard-design.md](architecture/realtime-call-dashboard-design.md)                                 | 실시간 통화 대시보드 설계(문서)                                                       |
+| [realtime-call-dashboard-implementation-summary.md](architecture/realtime-call-dashboard-implementation-summary.md) | 위 항목 구현 요약                                                                     |
+| [self-service-ai-assistant-architecture.md](architecture/self-service-ai-assistant-architecture.md)                 | **Brownfield Architecture(초안)** — 셀프서비스 AI 도우미 컴포넌트·통합 지점·소스 트리 |
 
 **기타**: [architecture/](architecture/) 내 나머지 `.md`는 INDEX에 모두 열거하지 않는다. 폴더 목록·검색으로 보완한다.
 
@@ -40,6 +41,25 @@
 | [prd-detailed-phase1-4.md](product/prd-detailed-phase1-4.md)                     | Phase 1–4 **부록** — 상세 FR·User Story                                                          |
 | [project-plan.md](product/project-plan.md)                                       | 시장·재무·GTM **원문 보관**(기획 시점; 요약은 `prd.md`)                                          |
 | [self-service-ai-assistant-brief.md](product/self-service-ai-assistant-brief.md) | **Project Brief(초안)** — 셀프서비스 AI 도우미(본인 번호 통화·문자 시 사용법·설정 안내·자동설정) |
+| [self-service-ai-assistant-prd.md](product/self-service-ai-assistant-prd.md)     | **Brownfield PRD(초안)** — 셀프서비스 AI 도우미 Epic 1·Story 1.1~1.9, FR/NFR/CR                  |
+
+---
+
+## Dev Stories (`docs/stories/`) — 셀프서비스 AI 도우미 Epic 1
+
+BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파일은 Dev 에이전트가 아키텍처 문서를 다시 읽지 않아도 되도록 Dev Notes에 충분한 컨텍스트를 포함한다.
+
+| Story | 문서 | 상태 |
+|---|---|---|
+| 1.1 | [1.1.self-call-detection.story.md](stories/1.1.self-call-detection.story.md) | Draft |
+| 1.2 | [1.2.self-service-conversation-lane.story.md](stories/1.2.self-service-conversation-lane.story.md) | Draft |
+| 1.3 | [1.3.self-service-manual-rag.story.md](stories/1.3.self-service-manual-rag.story.md) | Draft |
+| 1.4 | [1.4.settings-catalog-readonly.story.md](stories/1.4.settings-catalog-readonly.story.md) | Draft |
+| 1.5 | [1.5.onboarding-checklist.story.md](stories/1.5.onboarding-checklist.story.md) | Draft |
+| 1.6 | [1.6.settings-query-tool.story.md](stories/1.6.settings-query-tool.story.md) | Draft |
+| 1.7 | [1.7.usage-stats-tool.story.md](stories/1.7.usage-stats-tool.story.md) | Draft |
+| 1.8 | [1.8.auto-config-write-tool.story.md](stories/1.8.auto-config-write-tool.story.md) | Draft |
+| 1.9 | [1.9.config-change-history-page.story.md](stories/1.9.config-change-history-page.story.md) | Draft |
 
 ---
 
