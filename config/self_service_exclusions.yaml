@@ -1,0 +1,31 @@
+# 셀프서비스 자동설정(쓰기) 제외 목록 (Story 1.8)
+#
+# update_self_service_setting Tool이 실제 변경 함수를 호출하기 전에 반드시 확인하는
+# 하드 게이트다. 여기 등록된 (domain, field)는 어떤 대화 흐름·프롬프트 지시로도
+# 우회할 수 없다(IV2 — 코드 레벨 강제, LLM 판단에 의존하지 않음).
+#
+# fields: ["*"] 이면 도메인 전체를 제외한다. 특정 필드만 나열하면 그 필드만 제외되고
+# 나머지 writable_fields는 계속 자동설정 가능하다.
+#
+# ⚠️ settings_catalog.py의 `destructive` 플래그(Story 1.4)는 "안전측 기본값" 신호였을
+# 뿐이며, 실제 쓰기 허용 여부는 본 Story에서 도메인별로 재검토해 이 목록으로 확정했다.
+# 예: ai-escalation/chat-relay는 destructive=True이지만 실제로는 자동설정의 핵심
+# 시나리오(Story 1.8 Story 본문 예시)이므로 제외하지 않는다.
+#
+# 신규 도메인 추가 시: settings_catalog.py에 update_fn을 등록하지 않으면 자동으로
+# "쓰기 미지원"으로 처리되므로(domain_not_writable), 이 파일에 반드시 넣어야 하는
+# 것은 "update_fn은 있지만 특정 필드만 막고 싶은 경우"뿐이다.
+
+excluded:
+  general:
+    fields: ["*"]
+    reason: "테넌트 프로필(TENANTS_DATA)은 정적 시드 데이터이며 실제 변경 함수가 존재하지 않습니다."
+  integrations:
+    fields: ["*"]
+    reason: "Google Calendar 연동은 OAuth 리디렉션이 필요해 대화형 자동설정으로 처리할 수 없습니다."
+  call-control:
+    fields: ["*"]
+    reason: "착신 규칙은 여러 건의 목록형 데이터라 개별 규칙 ID 없이는 자동설정할 수 없습니다."
+  contacts:
+    fields: ["*"]
+    reason: "연락처는 여러 건의 목록형 데이터라 개별 연락처 ID 없이는 자동설정할 수 없습니다."

@@ -35,6 +35,9 @@ from src.api.routers import messages as messages_router
 from src.api.routers import chat as chat_router
 from src.api.routers import google_calendar as google_calendar_router
 from src.api.routers import ringback as ringback_router
+from src.api.routers import self_service as self_service_router
+from src.api.routers import self_service_test as self_service_test_router
+from src.api.routers import settings_ai_assistant as settings_ai_assistant_router
 from src.api.http_error_logging import register_http_error_logging
 from src.booking.database import init_db
 from src.call_control.db import init_db as init_call_control_db
@@ -73,6 +76,9 @@ app.include_router(chat_router.router)       # /api/chat prefix already in route
 app.include_router(google_calendar_router.router)  # /api/google prefix already in router
 app.include_router(ringback_router.router)         # /api/ringback prefix already in router
 app.include_router(call_control_api.router)        # /api/call-control
+app.include_router(self_service_router.router)      # /api/self-service (Story 1.9)
+app.include_router(self_service_test_router.router)  # /api/self-service/test (BMAD QA 자동 테스트, 기본 비활성화)
+app.include_router(settings_ai_assistant_router.router)  # /api/settings/ai-assistant/docs
 
 
 def _serialize_active_sessions(cm: Any) -> List[Dict[str, Any]]:

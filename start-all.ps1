@@ -494,12 +494,18 @@ try {
     # 로컬에 캐시된 HuggingFace 모델만 사용 → 시작 시 HEAD 요청 503 방지
     $env:HF_HUB_OFFLINE = "1"
     $env:TRANSFORMERS_OFFLINE = "1"
+    # 셀프서비스 AI 도우미 QA 자동 테스트 엔드포인트(/api/self-service/test/*) 활성화
+    # (BMAD QA 단계 전용 — 운영 배포 시에는 이 줄을 제거하거나 0으로 바꿀 것)
+    $env:SELF_SERVICE_QA_TEST_MODE = "1"
     # 세션에 이미 로드된 GCP / Gemini 키가 python 자식 프로세스로 전달됨
     if ($env:GOOGLE_APPLICATION_CREDENTIALS) {
         Write-Host "🔑 Backend 환경: GOOGLE_APPLICATION_CREDENTIALS 설정됨 (STT/TTS 등)" -ForegroundColor DarkGray
     }
     if ($env:GEMINI_API_KEY) {
         Write-Host "🔑 Backend 환경: GEMINI_API_KEY 설정됨" -ForegroundColor DarkGray
+    }
+    if ($env:SELF_SERVICE_QA_TEST_MODE -eq "1") {
+        Write-Host "🧪 셀프서비스 QA 테스트 모드 활성화됨: POST /api/self-service/test/converse" -ForegroundColor Yellow
     }
     python -m src.main
 } finally {

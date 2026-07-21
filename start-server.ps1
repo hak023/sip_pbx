@@ -224,6 +224,9 @@ try {
     # 환경 변수 설정
     $env:SIP_PBX_CONFIG = $Config
     $env:SIP_PBX_LOG_LEVEL = $LogLevel
+    # 셀프서비스 AI 도우미 QA 자동 테스트 엔드포인트(/api/self-service/test/*) 활성화
+    # (BMAD QA 단계 전용 — 운영 배포 시에는 이 줄을 제거하거나 0으로 바꿀 것)
+    $env:SELF_SERVICE_QA_TEST_MODE = "1"
 
     # 서버 실행
     Write-ColorOutput "✨ Starting server... (Press Ctrl+C to stop)" "Green"

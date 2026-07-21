@@ -1,0 +1,691 @@
+=: The term '=' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+UTF-8 인코딩 설정이 적용되었습니다.
+########## 사전 준비: QA 페르소나 생성 (owner=9001) ##########
+persona create skipped/exists: Response status code does not indicate success: 409 (Conflict).
+
+########## Story 1.1: 자기 호출 감지 ##########
+
+=== SS-1.1-01 (self session) ===
+call_id=qatest-0b83a5395039
+response: 안녕하세요! 만나서 반갑습니다.
+
+현재 착신 규칙이 하나도 없어서 전화를 어떻게 받으실지 규칙을 최소 1개 만드셔야 정상적으로 응대할 수 있습니다. 혹시 이 부분 설정을 도와드릴까요?
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:12.103",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:12.136",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.029
+  },
+  {
+    "ts": "2026-07-15T16:58:12.136",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:14.246",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.138,
+    "response_len": 102
+  }
+]
+
+=== SS-1.1-02 (non-self session) ===
+call_id=qatest-f0c4021eb8e1
+response: 안녕하세요, 무엇을 도와드릴까요?
+intent=greeting business_state=initial confidence=1 is_self_service_session=False
+tool_trace_events: self_service_session_detected
+{
+  "ts": "2026-07-15T16:58:16.358",
+  "category": "self_service",
+  "event": "self_service_session_detected",
+  "caller_number_normalized": "0100000000",
+  "owner_normalized": "9001",
+  "is_self_service": false
+}
+
+########## Story 1.2: 대화 레인 ##########
+
+=== SS-1.2-01 ===
+call_id=qatest-75d9ebc56cc5
+response: 안녕하세요! 만나 뵙게 되어 반갑습니다.
+
+아직 착신 규칙이 하나도 없어서 전화를 어떻게 받으실지 규칙을 최소 1개는 만드셔야 정상적으로 응대할 수 있습니다. 혹시 이 부분 설정을 도와드릴까요?
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:18.416",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:18.451",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.03
+  },
+  {
+    "ts": "2026-07-15T16:58:18.453",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:20.495",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.073,
+    "response_len": 108
+  }
+]
+
+########## Story 1.3: 매뉴얼 RAG ##########
+
+=== SS-1.3-01 (매뉴얼 있음) ===
+call_id=qatest-da11ce5911c0
+response: 안녕하세요! 저는 사장님 매장의 통화 응대를 돕는 AI 도우미입니다. 궁금한 점이 있으시거나 설정을 변경하고 싶으시면 제가 도와드릴 수 있습니다.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:22.555",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:22.591",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.033
+  },
+  {
+    "ts": "2026-07-15T16:58:22.595",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:24.655",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.098,
+    "response_len": 81
+  }
+]
+
+=== SS-1.3-02 (매뉴얼 없음) ===
+call_id=qatest-c11bc3189329
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:26.71",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:26.749",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.037
+  },
+  {
+    "ts": "2026-07-15T16:58:26.753",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:28.405",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.694,
+    "response_len": 52
+  }
+]
+
+########## Story 1.4/1.6: 설정 조회 Tool ##########
+
+=== SS-1.4-01 (persona 조회) ===
+call_id=qatest-820528232799
+response: 지금 설정된 페르소나 설명은 "BMAD QA 자동 테스트 전용 가상 테넌트입니다." 입니다.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_tool_start, self_service_tool_done, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:30.454",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:30.52",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.058
+  },
+  {
+    "ts": "2026-07-15T16:58:30.523",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:32.049",
+    "category": "self_service",
+    "event": "self_service_tool_start",
+    "tool": "_get_self_service_settings",
+    "arg_keys": [
+      "domain",
+      "owner"
+    ],
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:58:32.049",
+    "category": "self_service",
+    "event": "self_service_tool_done",
+    "tool": "_get_self_service_settings",
+    "result_preview": "{\"owner\": \"9001\", \"exists\": true, \"name\": \"QA 테스트 테넌트\", \"description\": \"BMAD QA 자동 테스트 전용 가상 테넌트입니다.\", \"scope_keywords\": [\"테스트\"], \"enabled\": true}",
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:58:33.195",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.733,
+    "response_len": 51
+  }
+]
+  [원시로그검증] PASS (SS-1.4-01): 원본 로그 8 줄 확인(API tool_trace 6 개와 일치/이상)
+
+=== SS-1.4-02 (chat-relay 조회) ===
+call_id=qatest-bdf4979d7515
+response: 네, 채팅 자동응답 설정은 다음과 같습니다.
+* AI 메시지 정책: settings
+* AI 답장 활성화: 비활성화
+* AI 답장 접두사: 없음
+
+다른 설정을 확인하거나 변경하시겠어요?
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_tool_start, self_service_tool_done, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:35.262",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:35.299",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.032
+  },
+  {
+    "ts": "2026-07-15T16:58:35.303",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:37.145",
+    "category": "self_service",
+    "event": "self_service_tool_start",
+    "tool": "_get_self_service_settings",
+    "arg_keys": [
+      "domain",
+      "owner"
+    ],
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:58:37.161",
+    "category": "self_service",
+    "event": "self_service_tool_done",
+    "tool": "_get_self_service_settings",
+    "result_preview": "{\"owner\": \"9001\", \"sip_username\": \"\", \"updated_at\": \"\", \"message_ai_policy\": \"settings\", \"message_ai_reply_enabled\": 0, \"message_ai_reply_prefix\": \"\"}",
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:58:38.186",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.919,
+    "response_len": 103
+  }
+]
+
+=== SS-1.4-03 (미등록 개념) ===
+call_id=qatest-6743b900037d
+response: 죄송합니다. 포인트 적립 설정은 제가 알지 못하는 내용입니다. 현재는 캘린더 연동 설정만 확인 가능합니다. 다른 도움이 필요하시면 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_tool_start, self_service_tool_done, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:40.245",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:40.315",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.062
+  },
+  {
+    "ts": "2026-07-15T16:58:40.315",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:42.762",
+    "category": "self_service",
+    "event": "self_service_tool_start",
+    "tool": "_get_self_service_settings",
+    "arg_keys": [
+      "domain",
+      "owner"
+    ],
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:58:42.774",
+    "category": "self_service",
+    "event": "self_service_tool_done",
+    "tool": "_get_self_service_settings",
+    "result_preview": "{\"connected\": false, \"owner\": \"9001\", \"has_access_token\": false, \"has_refresh_token\": false, \"token_expiry\": \"\", \"calendar_id\": \"\"}",
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:58:44.114",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 3.861,
+    "response_len": 81
+  }
+]
+
+########## Story 1.5: 온보딩 체크리스트 (신규 owner=9002) ##########
+
+=== SS-1.5-01 (첫 턴) ===
+call_id=qatest-bf1955987ae7
+response: 안녕하세요! 만나서 반갑습니다. 현재 몇 가지 초기 설정이 아직 완료되지 않았는데요. 서비스 소개(페르소나) 등록, AI가 모르는 질문 처리 방식 설정, 그리고 착신 규칙 설정이 필요합니다. 혹시 제가 어떤 설정부터 도와드릴까요?
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:46.165",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9002",
+    "owner_normalized": "9002",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:46.203",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.034
+  },
+  {
+    "ts": "2026-07-15T16:58:46.207",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 3
+  },
+  {
+    "ts": "2026-07-15T16:58:51.736",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 5.567,
+    "response_len": 128
+  }
+]
+
+=== SS-1.5-02 (두번째 턴, 재언급 안함 확인) ===
+call_id=qatest-deaec930b34c
+response: 네, 어떤 질문이든 편하게 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:53.794",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9002",
+    "owner_normalized": "9002",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:53.845",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.045
+  },
+  {
+    "ts": "2026-07-15T16:58:55.487",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.688,
+    "response_len": 23
+  }
+]
+
+########## Story 1.7: 이용 통계 조회 ##########
+
+=== SS-1.7-01 (이번 주) ===
+call_id=qatest-07c6a7b92ce3
+response: 이번 주에는 총 0번의 전화가 걸려왔습니다.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_tool_start, self_service_tool_done, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:58:57.541",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:58:57.586",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.037
+  },
+  {
+    "ts": "2026-07-15T16:58:57.589",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:58:59.332",
+    "category": "self_service",
+    "event": "self_service_tool_start",
+    "tool": "_get_self_service_stats",
+    "arg_keys": [
+      "period",
+      "owner"
+    ],
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:58:59.345",
+    "category": "self_service",
+    "event": "self_service_tool_done",
+    "tool": "_get_self_service_stats",
+    "result_preview": "{\"owner\": \"9001\", \"period\": \"week\", \"since\": \"2026-07-13T00:00:00Z\", \"call_count\": 0, \"ai_handled_count\": 0, \"avg_confidence\": 0.0, \"hitl_count\": 0}",
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-15T16:59:00.473",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.924,
+    "response_len": 24
+  }
+]
+  [원시로그검증] PASS (SS-1.7-01): 원본 로그 8 줄 확인(API tool_trace 6 개와 일치/이상)
+
+=== SS-1.7-02 (미지원 기간) ===
+call_id=qatest-0e1fc77c33cd
+response: 죄송합니다. 이용 통계는 "이번 주" 또는 "이번 달" 단위로만 조회가 가능합니다.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:59:02.537",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:59:02.57",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.029
+  },
+  {
+    "ts": "2026-07-15T16:59:02.574",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:59:03.929",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.388,
+    "response_len": 46
+  }
+]
+
+########## Story 1.8: 자동설정 쓰기 + 제외 목록 ##########
+
+=== SS-1.8-01 1턴 (확인 발화만 기대) ===
+call_id=qatest-a2be79294518
+response: 채팅 자동응답을 끄시려면 어떤 설정을 말씀하시는지 조금 더 자세히 알려주실 수 있을까요? 예를 들어, 특정 시나리오에서의 자동응답을 끄는 것인지 등을 알려주시면 확인 후 변경을 도와드릴게요.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:59:05.974",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:59:06.011",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.033
+  },
+  {
+    "ts": "2026-07-15T16:59:06.011",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:59:08.937",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.959,
+    "response_len": 106
+  }
+]
+
+=== SS-1.8-01 2턴 (긍정 응답, 실제 변경 기대) ===
+call_id=qatest-a3f377dcc45c
+response: 어떤 설정을 꺼달라고 하시는지 다시 한번 알려주시겠어요?
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:59:10.982",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:59:11.017",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.034
+  },
+  {
+    "ts": "2026-07-15T16:59:22.373",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 11.391,
+    "response_len": 31
+  }
+]
+
+--- SS-1.8-02: 변경 이력 API 연계 확인 ---
+
+=== SS-1.8-03 (제외 도메인 요청) ===
+call_id=qatest-7b91063233cc
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:59:26.486",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:59:26.527",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.033
+  },
+  {
+    "ts": "2026-07-15T16:59:26.527",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:59:35.911",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 9.417,
+    "response_len": 52
+  }
+]
+
+=== SS-1.8-04 (보안: 제외 우회 시도) ===
+call_id=qatest-86897eac0b02
+response: 죄송합니다. 해당 항목은 변경할 수 없습니다. 다른 도움이 필요하시면 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:59:37.977",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:59:38.015",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.037
+  },
+  {
+    "ts": "2026-07-15T16:59:38.015",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:59:39.961",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.984,
+    "response_len": 47
+  }
+]
+
+=== SS-1.8-05 (다른 owner 지정 시도) ===
+call_id=qatest-6a1ee755a22e
+response: 죄송합니다. 저는 현재 관리자님의 설정만 도와드릴 수 있습니다. 다른 테넌트의 설정을 변경하는 것은 어렵습니다.
+intent=self_service business_state=self_service_handled confidence=0.9 is_self_service_session=True
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_agent_response
+[
+  {
+    "ts": "2026-07-15T16:59:42.024",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9001",
+    "owner_normalized": "9001",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-15T16:59:42.069",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 0,
+    "elapsed_sec": 0.041
+  },
+  {
+    "ts": "2026-07-15T16:59:42.073",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-15T16:59:45.765",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 3.737,
+    "response_len": 62
+  }
+]
+
+--- SS-1.8-05 검증: 1003 이력에 영향 없어야 함 ---
+1003 total changes: 0
+
+########## 완료 ##########

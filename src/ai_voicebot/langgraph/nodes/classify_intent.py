@@ -253,6 +253,24 @@ async def classify_intent_node(state: ConversationState) -> dict:
         )
         return {"intent": "outbound_answer", "slots": {}, "confidence": 1.0}
 
+    # 셀프서비스 모드: 발신측=착신측(자기 자신에게 연락) — LLM classify 완전 스킵
+    # 설계: docs/architecture/self-service-ai-assistant-architecture.md
+    # outbound_purpose와 상호 배타적이어야 하나(발신/수신 시나리오가 다름), 방어적으로
+    # outbound 체크를 먼저 수행하므로 두 플래그가 동시에 참이어도 기존 outbound 동작이
+    # 우선되어 안전하다(CR1 — 기존 경로 무영향).
+    if state.get("is_self_service_session"):
+        elapsed = time.time() - node_start
+        logger.info(
+            "classify_intent_self_service_skip",
+            call_id=call_id,
+            elapsed_sec=round(elapsed, 4),
+            note="셀프서비스 모드 — LLM classify 스킵, self_service_agent 직행",
+        )
+        _log_intent_classify_timing(
+            call_id, elapsed_sec=elapsed, path="self_service_skip", intent="self_service"
+        )
+        return {"intent": "self_service", "slots": {}, "confidence": 1.0}
+
     query = state.get("user_query", "").strip()
     if not query:
         elapsed = time.time() - node_start

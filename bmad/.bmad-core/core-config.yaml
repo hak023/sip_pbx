@@ -1,22 +1,32 @@
+# NOTE(2026-07-16): 이 파일은 원래 `sip-pbx/bmad/`를 프로젝트 루트로 가정한 BMAD 표준 스캐폴드
+# (단일 monolithic docs/prd.md, docs/architecture.md)로 생성되었으나, 실제 팀은 그 이후
+# `sip-pbx/docs/`(bmad/ 밖, sip-pbx/ 바로 아래) 아래에 기능별로 분리된 문서 체계를 직접 구축해
+# 사용해왔다(Story 1.1~1.12, docs/qa/* 모두 이 경로 기준). 아래 경로는 모두 실제로 쓰이는
+# `sip-pbx/docs/`를 가리키도록 `../docs/...`로 수정한 것이다(기준 위치: sip-pbx/bmad/).
+# 상세 배경: sip-pbx/docs/stories/1.1.self-call-detection.story.md 상단 안내 참고.
 markdownExploder: true
 qa:
-  qaLocation: docs/qa
+  qaLocation: ../docs/qa
 prd:
-  prdFile: docs/prd.md
+  prdFile: ../docs/product/prd.md
   prdVersion: v4
   prdSharded: false
-  prdShardedLocation: docs/prd
+  prdShardedLocation: ../docs/product
   epicFilePattern: epic-{n}*.md
 architecture:
-  architectureFile: docs/architecture.md
+  architectureFile: ../docs/architecture/technical-architecture.md
   architectureVersion: v4
-  architectureSharded: false
-  architectureShardedLocation: docs/architecture
-customTechnicalDocuments: null
+  architectureSharded: true
+  architectureShardedLocation: ../docs/architecture
+# 브라운필드(기능별) PRD/아키텍처: 마스터 prd.md/technical-architecture.md 외에 기능 단위로
+# 별도 문서가 존재한다. 새 기능 작업 시 아래 목록에 없으면 먼저 docs/INDEX.md에서 검색할 것.
+customTechnicalDocuments:
+  - ../docs/product/self-service-ai-assistant-brief.md
+  - ../docs/product/self-service-ai-assistant-prd.md
+  - ../docs/architecture/self-service-ai-assistant-architecture.md
 devLoadAlwaysFiles:
-  - docs/architecture/coding-standards.md
-  - docs/architecture/tech-stack.md
-  - docs/architecture/source-tree.md
-devDebugLog: .ai/debug-log.md
-devStoryLocation: docs/stories
+  - ../docs/architecture/coding-standards.md
+  - ../docs/architecture/technical-architecture.md
+devDebugLog: ../.ai/debug-log.md
+devStoryLocation: ../docs/stories
 slashPrefix: BMad

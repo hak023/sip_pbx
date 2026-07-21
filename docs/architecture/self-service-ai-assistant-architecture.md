@@ -1,7 +1,7 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement Architecture
 
 **작성일**: 2026-07-14
-**버전**: 0.1 (Draft — 완성 초안, 팀 리뷰 필요)
+**버전**: 0.4 (2026-07-20 갱신 — Epic 2: 설정 카탈로그/Screen Graph 동적화 아키텍처 추가)
 **상태**: 초안 — Story 착수 전
 **관련 문서**:
 - [self-service-ai-assistant-prd.md](../product/self-service-ai-assistant-prd.md) — 본 아키텍처의 입력 PRD (FR1-11, NFR1-4, CR1-4, Epic 1 Story 1.1-1.9)
@@ -33,10 +33,12 @@
 
 ### Change Log
 
-| Change    | Date       | Version | Description                                                                     | Author                        |
-| --------- | ---------- | ------- | ------------------------------------------------------------------------------- | ----------------------------- |
-| 초안 생성 | 2026-07-14 | 0.1     | PRD 기반 브라운필드 아키텍처 최초 작성, 셀프콜 감지 지점을 코드 추적으로 재확정 | Copilot (BMAD Architect 역할) |
+| Change       | Date       | Version | Description                                                                                                                                                                                                                                                                                                                               | Author                        |
+| ------------ | ---------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| 초안 생성    | 2026-07-14 | 0.1     | PRD 기반 브라운필드 아키텍처 최초 작성, 셀프콜 감지 지점을 코드 추적으로 재확정                                                                                                                                                                                                                                                           | Copilot (BMAD Architect 역할) |
 | 구현 전 검토 | 2026-07-14 | 0.2     | Story 1.4~1.9 작성 과정에서 발견된 드리프트 반영: StatisticsCollector(전역 싱글턴, 부적합) → call_record_db(owner 스코프) 정정, `self_service/onboarding.py` 컴포넌트 보완, Source Tree에 `config/self_service_exclusions.yaml`·Story 1.9 라우터 파일 추가, `_route_after_classify`/`_LANGGRAPH_SCHEMA_VERSION=8` 실제 코드로 재검증 완료 | Copilot (BMAD Architect 역할) |
+| 범위 추가    | 2026-07-20 | 0.3     | 통화 이력 자연어 질의(Call History NLQ) 신규 컴포넌트 `self_service/call_history_query.py` 추가(PRD FR15/NFR5, Story 1.13) — 새 벡터 임베딩 없이 기존 `call_record_db.get_call_records_page` 구조화 검색/집계로 구현                                                                                                                      | Copilot (BMAD Architect 역할) |
+| Epic 2 신설  | 2026-07-20 | 0.4     | 설정 카탈로그/Screen Graph 동적화(§Epic 2 Component Architecture 신설) — DB 저장소 + 함수 화이트리스트 레지스트리 패턴, 프론트엔드 다운로드/업로드 API, IntelliDecision 키워드 힌트 제거 방향 반영(PRD Epic 2, Story 2.1~2.8)                                                                                                             | Copilot (BMAD Architect 역할) |
 
 ---
 
@@ -102,15 +104,15 @@ def is_self_service_session(caller_number: str, owner: str) -> bool:
 
 ### Existing Technology Stack
 
-| Category            | Current Technology   | Version | Usage in Enhancement                                 | Notes                                                             |
-| ------------------- | -------------------- | ------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| Backend Language    | Python               | 3.11+   | 신규 모듈 전부                                       | 기존과 동일                                                       |
-| API Framework        | FastAPI               | —       | Story 1.9 전용 조회 API 1개 신규 추가(본 Epic 유일 예외) | 기존 라우터 패턴 재사용, 그 외 Story는 신규 엔드포인트 없음 |
-| 대화 오케스트레이션 | LangGraph            | —       | 신규 노드 1개(`self_service_agent`) + state 필드 1개 | `agent.py` 그래프에 조건부 엣지 추가                              |
-| Vector DB           | ChromaDB             | —       | 신규 doc_type(`self_service_manual`)                 | 기존 owner 필터 재사용                                            |
-| 체크포인터          | AsyncSqliteSaver     | —       | 변경 없음                                            | `_LANGGRAPH_SCHEMA_VERSION` 증가만 필요                           |
-| 프론트엔드          | Next.js (App Router) | —       | 신규 페이지 1개                                      | 기존 `settings/persona` 컨벤션 재사용                             |
-| LLM                 | Gemini 계열          | —       | 변경 없음                                            | 프롬프트만 신규                                                   |
+| Category            | Current Technology   | Version | Usage in Enhancement                                     | Notes                                                       |
+| ------------------- | -------------------- | ------- | -------------------------------------------------------- | ----------------------------------------------------------- |
+| Backend Language    | Python               | 3.11+   | 신규 모듈 전부                                           | 기존과 동일                                                 |
+| API Framework       | FastAPI              | —       | Story 1.9 전용 조회 API 1개 신규 추가(본 Epic 유일 예외) | 기존 라우터 패턴 재사용, 그 외 Story는 신규 엔드포인트 없음 |
+| 대화 오케스트레이션 | LangGraph            | —       | 신규 노드 1개(`self_service_agent`) + state 필드 1개     | `agent.py` 그래프에 조건부 엣지 추가                        |
+| Vector DB           | ChromaDB             | —       | 신규 doc_type(`self_service_manual`)                     | 기존 owner 필터 재사용                                      |
+| 체크포인터          | AsyncSqliteSaver     | —       | 변경 없음                                                | `_LANGGRAPH_SCHEMA_VERSION` 증가만 필요                     |
+| 프론트엔드          | Next.js (App Router) | —       | 신규 페이지 1개                                          | 기존 `settings/persona` 컨벤션 재사용                       |
+| LLM                 | Gemini 계열          | —       | 변경 없음                                                | 프롬프트만 신규                                             |
 
 ### New Technology Additions
 
@@ -211,6 +213,157 @@ def is_self_service_session(caller_number: str, owner: str) -> bool:
 - **Existing Components**: `call_context.py`(LLM 클라이언트 획득), `call_data_record_logger.py`(로깅)
 - **New Components**: `self_service/tools.py`
 
+#### `self_service/intent_tier.py` (IntelliDecision, Story 1.10)
+
+**Responsibility**: 설정 변경 관련 발화가 "탐색성(궁금해서 물어봄)"인지 "실행성(명확히 변경 요청)"인지에 대한
+**참고용 힌트**를 발화 종결 어미 패턴으로 산출한다. 최종 판단은 이 힌트가 아니라 LLM이
+`self_service_agent_node`의 시스템 프롬프트 지시(§few-shot 2건 포함)를 따라 내린다 —
+`.github/copilot-instructions.md`의 "의도 분류는 키워드 매칭보다 LLM 판단을 우선한다" 원칙 준수.
+**Integration Points**: `self_service_agent_node`가 시스템 프롬프트 조립 전에 호출해 힌트 문자열을
+프롬프트에 삽입하고, `call_data_record`에 `self_service_intent_tier_hint` 이벤트로 로깅한다(사후 검증용).
+**Key Interfaces**: `classify_intent_tier_hint(user_query: str) -> str` (`"actionable_hint"` |
+`"informational_hint"` | `"unclear"` 중 하나, 예외 없이 항상 값 반환 — best-effort).
+**Dependencies**: 없음(순수 함수, 외부 I/O 없음 — `self_service/detection.py`와 동일한 설계 원칙).
+**Technology Stack**: 순수 Python 정규식/문자열 매칭. LLM 호출 없음(지연 시간 영향 없음, NFR1 준수).
+
+#### `self_service/screen_graph.py` (Screen Graph, Story 1.11)
+
+**Responsibility**: 설정 카탈로그 도메인 ↔ 프론트엔드 화면(라우트) ↔ 화면 내 UI 요소를 연결하는
+**경량 명시적 지식 그래프**. `docs/design/SELF_SERVICE_SCREEN_GUIDED_GRAPHRAG_RESEARCH.md` 리서치
+결론에 따라 Full GraphRAG(LLM 엔터티 추출 + Leiden 클러스터링)는 채택하지 않고, `settings_catalog.py`와
+동일한 정적 레지스트리(`_register_screen()`) 패턴으로 구현한다 — 그래프 DB·추가 인프라 불필요.
+**Integration Points**: `self_service_agent_node`가 RAG 검색 결과의 `related_domain`(매뉴얼 인덱서가
+이미 부여, Story 1.3/어제 작업)으로 조회해 화면 안내 정보를 시스템 프롬프트에 주입(GraphRAG의
+"Local Search" 패턴 재현 — 매뉴얼 Q&A → 도메인 → 화면 1-hop 확장). `settings_ai_assistant.py`
+API가 동일 레지스트리를 프론트엔드(Story 1.12)에 노출.
+**Key Interfaces**:
+- `get_screen_for_domain(domain: str) -> Optional[ScreenEntry]`
+- `describe_screen_for_conversation(domain: str) -> str` (대화체 안내 문구 생성, best-effort)
+- `list_all_screens() -> List[ScreenEntry]` (프론트엔드 열람용)
+**Dependencies**: 없음(순수 함수, 정적 등록 데이터만 참조 — 실제 프론트엔드 코드 조사 기반으로
+수작업 등록, LLM 자동 추출 아님 → 환각 방지).
+**Technology Stack**: 순수 Python dict 레지스트리. 프론트엔드 전용 화면이 없는 도메인(예: persona —
+`ai-escalation`으로 리다이렉트된 레거시 화면만 있고 실제 name/description은 지식베이스에서 관리됨)은
+등록하지 않아 "존재하지 않는 화면 안내" 리스크를 원천 차단한다.
+
+#### `self_service/call_history_query.py` (Call History NLQ, Story 1.13)
+
+**Responsibility**: 테넌트 관리자가 자연어로 질의하는 자기 번호(owner)의 통화 이력을 3가지 유형으로
+응답한다 — (1) 키워드 검색, (2) 기간별 최다 발신 번호 집계, (3) 오늘자 미응답 번호 조회(PRD FR15).
+PRD NFR5가 명시하듯, 이는 개념적으로는 RAG(자연어 질의 → 지식 소스 검색)이지만, 통화 이력은
+이미 SQLite `call_records`에 구조화되어 있고 요약 텍스트(`call_summary`)까지 함께 저장되어 있으므로,
+Screen Graph(Story 1.11)가 Full GraphRAG 대신 경량 정적 레지스트리를 택한 것과 동일한 원칙으로
+**새 벡터 임베딩 파이프라인을 구축하지 않는다**(신규 인프라 투자 없이라는 브리프의 설계 목표와 정합).
+**Integration Points**: `self_service/tools.py`가 3개 LangGraph Tool(`search_call_history_by_keyword`,
+`get_top_caller`, `get_missed_calls_today`)로 노출해 `self_service_agent_node`의 LLM에 bind된다.
+**Key Interfaces**:
+- `search_call_history_by_keyword(owner: str, keyword: str, limit: int = 20) -> List[Dict]`
+- `get_top_caller(owner: str, period: str) -> Dict` (period: "today"|"week"|"month")
+- `get_missed_calls_today(owner: str) -> List[Dict]`
+**Dependencies**:
+- **Existing Components**: `src.common.call_record_db.get_call_records_page(owner=..., since=...)`
+  (Story 1.7이 이미 검증한 동일 함수 재사용 — 새 파라미터·스키마 변경 없음).
+- **New Components**: 없음(리프 컴포넌트, `settings_catalog.py`/`stats.py`와 독립).
+**Technology Stack**: 순수 Python(인메모리 필터링/`collections.Counter` 집계), 외부 I/O 없음(SQL 조회 외).
+기존 데이터 재사용으로 환각 방지(응답 근거가 항상 DB 원본 데이터).
+
+> **미응답(missed call) 판정 주의**: `call_records`에는 명시적 "answered/missed" 플래그가 없다. 코드
+> 조사 결과, `_cleanup_call()`(`sip_endpoint.py`)은 CANCEL(미응답 종료)도 동일 경로로 호출되며 이때
+> `has_recording`(RTP 미디어 수신 여부)와 `is_ai_handled`는 모두 False로 남는다 — 따라서
+> `has_recording=False AND is_ai_handled=False`를 "미응답" 프록시로 사용한다(Story 1.13 Task 0에서 실제
+> 통화 데이터로 재검증 필요 — 사람이 직접 받았으나 녹음이 실패한 엣지 케이스는 오판될 수 있음).
+
+---
+
+## Epic 2 Component Architecture: 설정 카탈로그/Screen Graph 동적화
+
+### 핵심 설계 결정: "메타데이터 동적화" vs "완전 노코드"
+
+Epic 1의 `settings_catalog.py`/`screen_graph.py`는 도메인마다 (a) 실제 서비스 함수를 호출하는
+`get_fn`/`update_fn`(**실행 로직**)과 (b) 스키마·라벨·허용값·화면 정보(**서술 메타데이터**)를
+같은 Python 딕셔너리 안에 뒤섞어 등록했다. Epic 2는 이 둘을 명확히 분리한다.
+
+```
+[변경 전] Python 코드 안에 실행 로직 + 메타데이터가 함께 하드코딩
+[변경 후] 실행 로직(콜러블)은 코드에 남고, "이름 → 콜러블" 화이트리스트만 코드에 유지
+          서술 메타데이터(스키마/라벨/허용값/화면정보)는 DB로 이전 → 프론트엔드 편집 가능
+```
+
+**보안 원칙(중요)**: DB 설정이 참조할 수 있는 것은 코드에 미리 등록된 함수 **이름 문자열**뿐이다.
+DB에 임의의 Python 표현식이나 새 함수 정의를 넣어 실행하는 구조는 **채택하지 않는다**(RCE 위험).
+따라서 완전히 새로운 도메인(신규 서비스 로직)은 여전히 코드 배포가 필요하며, Epic 2가 동적화하는
+범위는 "이미 존재하는 함수의 노출 방식(라벨·허용값·writable 여부·화면 안내 문구)"으로 한정된다.
+
+### New Components (Epic 2)
+
+#### `src/common/self_service_catalog_config_db.py`
+
+**Responsibility**: 카탈로그·Screen Graph 메타데이터를 저장하는 SQLite 테이블
+(`self_service_catalog_config`) CRUD + 버전 관리. 기존 `self_service_config_change_db.py`와
+동일한 컨벤션(`booking.db` 공유, stdlib `logging.getLogger` 사용 — repo 메모 §로깅 컨벤션 참고).
+**Key Interfaces**:
+- `get_active_config() -> dict` (현재 활성 버전 전체 설정)
+- `save_new_version(config: dict, uploaded_by: str) -> int` (신규 버전 저장, 아직 비활성)
+- `activate_version(version_id: int) -> bool` (해당 버전을 활성화 = 롤백도 이 함수로 구현)
+- `list_versions(limit: int = 20) -> list[dict]`
+**Dependencies**: `src.booking.database.get_db()` (기존 공유 DB 파일, 신규 엔진 없음).
+
+#### `src/ai_voicebot/self_service/catalog_config_loader.py`
+
+**Responsibility**: `self_service_catalog_config_db`에서 활성 설정을 로드해 in-memory 캐시로
+서빙하고, 업로드 시 캐시를 무효화한다. `settings_catalog.py`/`screen_graph.py`가 하드코딩
+딕셔너리 대신 이 로더를 호출하도록 리팩터링된다(Story 2.2/2.3).
+**Key Interfaces**:
+- `get_cached_config() -> dict` (캐시 우선, 없으면 DB 조회 후 캐시)
+- `invalidate_cache() -> None` (업로드/롤백 직후 호출)
+- `validate_config(raw: dict) -> tuple[bool, list[str]]` (스키마 검증 — 필수 키, 타입,
+  참조 함수명이 화이트리스트에 실재하는지 확인. 실패 사유 목록 반환)
+**Dependencies**: `self_service_catalog_config_db.py`, 아래 함수 화이트리스트.
+
+#### 함수 화이트리스트 레지스트리 (기존 `settings_catalog.py`/`screen_graph.py` 내부 확장)
+
+기존 `_get_persona`/`_update_chat_relay` 등 실행 함수들은 그대로 코드에 남기되, 아래처럼 이름
+문자열로 조회 가능한 딕셔너리에 등록한다(신규 함수 추가 시에도 여전히 코드 변경 필요 —
+§Non-Goals와 일치):
+
+```python
+_GET_FN_REGISTRY: Dict[str, Callable] = {
+    "get_persona": _get_persona,
+    "get_chat_relay": _get_chat_relay,
+    ...
+}
+_UPDATE_FN_REGISTRY: Dict[str, Callable] = {
+    "update_persona": _update_persona,
+    "update_chat_relay": _update_chat_relay,
+    ...
+}
+```
+
+DB 설정 레코드는 `get_fn_ref: "get_persona"`처럼 이름만 저장하며, 로더가 이 이름을 위 레지스트리에서
+찾아 실제 콜러블로 치환한다. 이름이 레지스트리에 없으면 `validate_config()`가 즉시 거부한다.
+
+#### `src/api/routers/settings_ai_assistant.py` (수정 — 신규 엔드포인트 추가)
+
+**Responsibility**: FR18/FR19 — 설정 내보내기/가져오기 REST API.
+**Key Interfaces**:
+- `GET /api/settings/ai-assistant/catalog-config/export` (현재 활성 설정 JSON 반환)
+- `POST /api/settings/ai-assistant/catalog-config/import` (업로드 파일 검증 후 신규 버전 저장,
+  검증 실패 시 400 + 오류 목록 반환)
+- `POST /api/settings/ai-assistant/catalog-config/activate/{version_id}` (롤백/버전 전환)
+- `GET /api/settings/ai-assistant/catalog-config/versions` (버전 이력 목록)
+
+#### 프론트엔드: `settings/ai-assistant/docs` 신규 탭 "설정 관리"(가칭)
+
+기존 "이용 매뉴얼 Q&A"/"AI 변경 가능 설정"/"화면 안내" 탭에 이어 4번째 탭 추가. 다운로드 버튼,
+업로드(파일 선택 + 미리보기 diff + 확정) UI, 버전 이력 표·롤백 버튼을 포함한다(Story 2.4/2.5).
+
+### IntelliDecision 변경 (Story 2.6)
+
+`self_service/intent_tier.py`(정규식 키워드 힌트)는 제거되거나 deprecated 처리된다.
+`self_service_agent.py` 시스템 프롬프트의 `[발화 유형 참고 신호]` 섹션도 함께 제거된다. 대안으로
+전용 분류 LLM 호출을 추가하는 방안은 **채택하지 않는다**(NFR1 지연 예산 보호 — 기존 메인 LLM
+호출의 few-shot 지시만으로 충분한 정확도가 QA로 이미 실증되었기 때문, PRD §Non-Goals 참고).
+
 ### Component Interaction Diagram
 
 ```mermaid
@@ -310,8 +463,14 @@ sip-pbx/src/
     self_service/                        # 신규 패키지
     │   ├── __init__.py
     │   ├── detection.py                 # is_self_service_session()
-    │   ├── settings_catalog.py          # 도메인 레지스트리(조회 Story 1.4 + 변경 Story 1.8)
+    │   ├── settings_catalog.py          # 도메인 레지스트리(조회 Story 1.4 + 변경 Story 1.8,
+    │   │                                #   Epic 2부터 catalog_config_loader 기반으로 리팩터링)
     │   ├── onboarding.py                 # 온보딩 체크리스트 판정 로직(Story 1.5)
+    │   ├── intent_tier.py                # 탐색성/실행성 발화 힌트(Story 1.10 도입, Story 2.6에서 제거/deprecated 예정)
+    │   ├── screen_graph.py               # 도메인↔화면↔UI요소 경량 지식 그래프(Story 1.11,
+    │   │                                #   Epic 2부터 catalog_config_loader 기반으로 리팩터링)
+    │   ├── call_history_query.py         # 통화 이력 자연어 질의(키워드 검색/Top 발신자/미응답 조회, Story 1.13)
+    │   ├── catalog_config_loader.py       # 신규(Epic 2) — 카탈로그/Screen Graph 설정 캐시 로더·검증
     │   └── tools.py                     # LangGraph Tool 래퍼
     ├── langgraph/
     │   ├── agent.py                     # 기존 파일 수정: process_utterance()에 detection 호출 추가,
@@ -320,9 +479,12 @@ sip-pbx/src/
     │   └── nodes/
     │       ├── classify_intent.py       # 기존 파일 수정: is_self_service_session 조기 반환 분기 추가
     │       └── self_service_agent.py    # 신규 (booking_agent.py 병렬 구조)
+  common/
+    self_service_catalog_config_db.py    # 신규(Epic 2) — 카탈로그/Screen Graph 설정 DB CRUD·버전 관리
   api/routers/
     self_service_config_changes.py       # 신규(가칭) — Story 1.9 전용 조회 API 1개
-                                          #   (본 Epic에서 유일하게 신규 REST 엔드포인트가 필요한 지점)
+                                          #   (Epic 1에서 유일하게 신규 REST 엔드포인트가 필요한 지점)
+    settings_ai_assistant.py             # 기존 파일 수정(Epic 2) — export/import/activate/versions 엔드포인트 추가
   migrations/
     00XX_self_service_config_changes.sql # 신규 마이그레이션
 
@@ -331,7 +493,9 @@ config/
 
 sip-pbx/frontend/app/settings/
   ai-assistant/                          # 신규 프론트엔드 페이지
-  └── page.tsx
+  ├── page.tsx
+  └── docs/
+      └── page.tsx                      # Epic 2부터 "설정 관리"(다운로드/업로드/버전 이력) 탭 추가
 ```
 
 ### Integration Guidelines

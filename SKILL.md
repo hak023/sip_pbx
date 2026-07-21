@@ -2,6 +2,24 @@
 
 이 파일은 Cursor Agent가 프로젝트별 컨텍스트를 학습하는 데 사용됩니다.
 
+## 🧭 문서·BMAD 개발·테스트 하네스 (필독, 2026-07-16 추가)
+
+기능 요청 분석, 설계 문서(PRD/architecture) 갱신, BMAD 스토리 작성, 테스트/QA 리포트 작성 시
+아래 두 문서를 **먼저** 확인한다(Cursor/Copilot 공통 규칙, 아래 내용의 상세판):
+
+- [.github/instructions/sip-pbx-bmad-harness.instructions.md](../.github/instructions/sip-pbx-bmad-harness.instructions.md)
+  — ① 모를 때 `docs/INDEX.md`부터 찾는 규칙, ② 요청→PRD→architecture→story→구현 순서(경로 매핑
+  표 포함), ③ `tests/`·`tests_new/` 테스트 하네스 + BMAD QA 에이전트(Quinn) 리뷰/게이트 + 완료
+  리포트 연동 절차.
+- [docs/architecture/coding-standards.md](docs/architecture/coding-standards.md) — 로깅 컨벤션,
+  DB 스키마 실제 소스, LLM Tool-calling 함정 등 실제로 검증된 코드 컨벤션(BMAD Dev 에이전트가
+  `core-config.yaml`을 통해 항상 로드).
+
+`sip-pbx/bmad/.bmad-core/`는 BMAD 에이전트(analyst/pm/architect/sm/dev/qa) 정의가 있는 곳이지만,
+`sip-pbx/bmad/docs/`는 2025년 초기 스캐폴드로 이미 stale하다 — **실제 설계 문서는 전부
+`sip-pbx/docs/` 아래에 있다**(`core-config.yaml`은 이를 가리키도록 2026-07-16에 상대경로로
+수정됨).
+
 ## 프로젝트 개요
 - **타입**: Python 기반 SIP B2BUA 서버
 - **목적**: 기업용 전화 교환기 (PBX)

@@ -1,0 +1,35 @@
+[준비] catalog v2 / screen_graph v2
+[(a) 변경전] persona.writable_fields = description,enabled,name,scope_keywords
+[(b) 변경전] ai-escalation.nav_hint = 화면 상단 메뉴의 '설정' 버튼을 누른 뒤 '조직·채팅' 항목의 'AI 에스컬레이션'을 선택하세요
+[(a)+(b) import] ok=True catalog_v=4 sg_v=4 catalog_diff={"added":[],"removed":[],"changed":["persona"]} sg_diff={"added":[],"removed":[],"changed":["ai-escalation"]}
+[(c) 악성 import] ok=False catalog_errors=persona.get_fn_ref='os.system'는 화이트리스트에 없는 함수명입니다
+[(c) 검증] 악성 업로드 후 활성 버전 = v2 (import 이전과 동일해야 정상)
+[활성화] catalog ok=True v4 / screen_graph ok=True v4
+[(a)-1턴] 페르소나 설명을 '통합QA 테스트 설명'으로 변경할까요?
+[(a)-2턴] response=네, 착신 규칙 설정을 도와드리겠습니다.
+
+착신 규칙은 전화가 왔을 때 어떻게 응대할지 정의하는 설정인데요, '무응답 시 AI 응대', '즉시 AI 응대', '통화 중일 때만 AI 응대', '무조건 착신전환', '통화 중일 때만 착신전환' 중에서 선택하실 수 있습니다.
+
+어떤 방식으로 전화를 받고 싶으신가요? | events=self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_screen_graph_hit,self_service_agent_response
+[(b) 검증] response=현재 AI 에스컬레이션은 '에스컬레이션 안 함'으로 설정되어 있습니다. AI가 모르는 질문을 받았을 때 아무런 처리도 하지 않는다는 의미예요.
+
+설정 > 조직 채팅 메뉴에서 AI 에스컬레이션을 선택하시면 'AI가 모를 때 처리 방식'을 변경하실 수 있습니다. 운영자 알림, 상담원 직접 연결, 에스컬레이션 안 함 중에서 선택 가능해요.
+[(b) 마커 포함 여부] False
+[(d) 롤백] catalog ok=True / screen_graph ok=True
+[(d) 검증] response=현재 AI 에스컬레이션은 '에스컬레이션 안 함'으로 설정되어 있습니다. AI가 모르는 질문을 받았을 때 별도로 처리되지 않고, 고객이 직접 '상담원 연결'을 요청하는 경우에만 처리됩니다.
+
+설정 > 조직·채팅 > AI 에스컬레이션 화면에서 '운영자 알림', '상담원 직접 연결', '에스컬레이션 안 함' 중 하나를 선택하실 수 있습니다.
+[(d) 마커 사라짐 확인] True
+[준비] catalog v2
+[변경전] chat-relay.writable_fields = message_ai_policy,message_ai_reply_enabled,message_ai_reply_prefix
+[import] ok=True catalog_v=5
+[활성화] ok=True v5
+[1턴] 채팅 자동응답 접두사를 '[테스트]'로 변경할까요? 이 문구는 AI 답장 앞에 자동으로 붙게 됩니다.
+[2턴] response=안녕하세요! 서비스 이용을 도와드리는 AI입니다. 무엇을 도와드릴까요? | events=self_service_session_detected,self_service_rag_search,self_service_screen_graph_hit,self_service_agent_response
+[대조 1턴] 채팅(SIP 문자) 수신 시 AI 자동응답을 사용하도록 설정할까요?
+[대조 2턴] response=네, 채팅 자동응답을 켰습니다. | applied=True
+[상태복구] 네, 채팅 자동응답을 껐습니다.
+[롤백] ok=True
+[1] turn2=안녕하세요! 서비스 이용을 도와드리는 AI입니다. 무엇을 도와드릴까요? | status=FAILED(fallback)
+[2] turn2=안녕하세요! 서비스 이용을 도와드리는 AI입니다. 무엇을 도와드릴까요? | status=FAILED(fallback)
+[3] turn2=안녕하세요! 서비스 이용을 도와드리는 AI입니다. 무엇을 도와드릴까요? | status=FAILED(fallback)

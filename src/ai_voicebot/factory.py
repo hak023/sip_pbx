@@ -30,6 +30,9 @@ _global_google_tts_service = None
 # 🔥 LLM Client Singleton (API 엔드포인트에서 재사용)
 _global_llm_client = None
 
+# 🔥 AI Orchestrator Singleton (rag/embedder/vector_db 재사용 — QA 테스트 엔드포인트 등)
+_global_ai_orchestrator = None
+
 
 def _build_google_stt_service(config: Dict[str, Any] = None):
     """GoogleSTTService 인스턴스 생성 (Singleton·파이프라인 전용 공통)."""
@@ -521,7 +524,11 @@ async def create_ai_orchestrator(config: Dict[str, Any]) -> Optional[AIOrchestra
         )
         orch_elapsed = time.time() - orch_start
         logger.info(f"🔧 [FACTORY] Orchestrator created: {orch_elapsed:.3f}s")
-        
+
+        # ✅ Orchestrator Singleton 저장 (QA 테스트 엔드포인트 등에서 rag/embedder/vector_db 재사용)
+        global _global_ai_orchestrator
+        _global_ai_orchestrator = orchestrator
+
         factory_total = time.time() - factory_start
         logger.info(f"🔧 [FACTORY] ⭐ TOTAL FACTORY TIME: {factory_total:.2f}s")
         
@@ -694,4 +701,18 @@ def get_llm_client():
     """
     global _global_llm_client
     return _global_llm_client
+
+
+def get_ai_orchestrator():
+    """
+    전역 AIOrchestrator 반환(`create_ai_orchestrator()` 성공 후 채워짐).
+
+    `.rag`(RAGEngine, `.embedder`/`.vector_db` 포함)·`.llm`·`.org_manager` 등을 그대로
+    재사용하려는 코드(예: 셀프서비스 QA 테스트 엔드포인트)에서 사용한다.
+
+    Returns:
+        AIOrchestrator 인스턴스 또는 None(아직 초기화 전)
+    """
+    global _global_ai_orchestrator
+    return _global_ai_orchestrator
 

@@ -43,6 +43,7 @@ from src.ai_voicebot.langgraph.nodes.response_shortcuts import (
     help_response_node,
 )
 from src.ai_voicebot.langgraph.nodes.booking_agent import booking_agent_node
+from src.ai_voicebot.langgraph.nodes.self_service_agent import self_service_agent_node
 from src.common.call_data_record_logger import log_call_data
 
 logger = structlog.get_logger(__name__)
@@ -110,7 +111,31 @@ async def _invoke_graph_with_node_timing(
             elif mode == "values" and isinstance(chunk, dict):
                 last_values = chunk
                 prev_wall = time.perf_counter()
-    except TypeError:
+    except Exception as e:
+        # [2026-07-15] 원인 규명: astream(stream_mode=["updates","values"])가 스트림 도중
+        # 예외(TypeError 등)를 던지면, 과거에는 무조건 stream_mode="values" 단일 모드로
+        # 그래프를 처음부터 다시 실행했다. 이 때문에 Tool-calling이 있는 노드(RAG 검색·LLM
+        # 호출·쓰기 Tool 실행 등 부작용 있는 작업)가 한 번의 API 호출 안에서 2회 실행되고,
+        # 최종 응답이 1차 실행의 정상 응답이 아니라 2차 실행 결과로 덮어써지는 버그가 있었다
+        # (QA 자동 테스트에서 발견, docs/reports/2026-07/2026-07-15_self_service_bmad_qa_step3_execution_result.md §7).
+        # 이미 최소 1개의 values 청크(= 그래프가 실제로 진행되어 부작용이 발생했을 가능성)를
+        # 받은 상태라면, 절대 처음부터 다시 실행하지 않고 지금까지의 결과를 그대로 반환한다.
+        logger.warning(
+            "langgraph_astream_updates_values_failed",
+            error=str(e), error_type=type(e).__name__,
+            has_partial_result=last_values is not None,
+            note="values 청크 수신 후 실패 시 재실행 없이 부분 결과 사용(부작용 중복 방지)",
+        )
+        if last_values is not None:
+            rounded = {k: round(v, 4) for k, v in sorted(node_sec.items(), key=lambda x: -x[1])}
+            return last_values, rounded
+        if node_sec:
+            # values 청크는 없지만 updates 청크(노드 실행 흔적)는 이미 있었다 — 부작용이 이미
+            # 발생했을 가능성이 있으므로 재실행하지 않고 실패로 처리한다(호출부의 ainvoke
+            # 폴백이 1회만 발생하도록 — 여기서 재시도까지 하면 최악의 경우 3회 실행됨).
+            return None, {}
+        # 아직 values/updates 청크를 하나도 못 받은 경우에만(=부작용 발생 가능성이 낮음) 단일
+        # 모드로 한 번 더 시도한다.
         try:
             values_kwargs: Dict[str, Any] = {"stream_mode": "values"}
             if config:
@@ -121,12 +146,11 @@ async def _invoke_graph_with_node_timing(
                     last_values = chunk
                     _ = time.perf_counter() - prev
                     prev = time.perf_counter()
-        except Exception as e:
-            logger.debug("langgraph_astream_values_only_failed", error=str(e))
+        except Exception as e2:
+            logger.warning(
+                "langgraph_astream_values_only_failed", error=str(e2), error_type=type(e2).__name__,
+            )
             return None, {}
-    except Exception as e:
-        logger.debug("langgraph_astream_updates_values_failed", error=str(e))
-        return None, {}
 
     rounded = {k: round(v, 4) for k, v in sorted(node_sec.items(), key=lambda x: -x[1])}
     return last_values, rounded
@@ -207,14 +231,19 @@ def _route_after_classify(state: ConversationState) -> str:
     아웃바운드 모드(outbound_purpose 존재)이면 route_utterance·classify 전체 스킵하고
     generate_response 로 직행한다. classify_intent LLM 호출 비용(~1.5초)은 이미 소요됐지만
     이후 route→cache→rewrite→RAG(~10초)를 완전 제거한다.
+
+    셀프서비스 모드(intent=="self_service")이면 self_service_agent로 직행한다
+    (booking과 동일한 우회 레인 패턴 — 캐시/RAG/HITL 생략).
     """
     if state.get("outbound_purpose"):
         return "generate_response"
+    if state.get("intent") == "self_service":
+        return "self_service_agent"
     return "route_utterance"
 
 
 # 토폴로지 변경 시 버전 증가 → 기존 프로세스 내 캐시 무효화
-_LANGGRAPH_SCHEMA_VERSION = 8  # 2026-04-20: booking_flow_active + persona_chitchat skip during booking
+_LANGGRAPH_SCHEMA_VERSION = 9  # 2026-07-14: self_service_agent 노드/엣지 추가 (Story 1.2)
 _compiled_graph_entry = None  # (version, compiled_graph) — 동기 MemorySaver 캐시(레거시)
 _compiled_async_entry = None  # (version, compiled_graph) — AsyncSqliteSaver + ainvoke
 _async_graph_compile_lock = asyncio.Lock()
@@ -249,6 +278,7 @@ def _build_state_graph():
     graph.add_node("check_greeting_farewell_cache", check_greeting_farewell_cache_node)
     graph.add_node("greeting_farewell_kb", greeting_farewell_kb_node)
     graph.add_node("booking_agent", booking_agent_node)
+    graph.add_node("self_service_agent", self_service_agent_node)
 
     # ── 엣지 정의 ──
     graph.set_entry_point("classify_intent")
@@ -260,6 +290,7 @@ def _build_state_graph():
         {
             "generate_response": "generate_response",
             "route_utterance": "route_utterance",
+            "self_service_agent": "self_service_agent",
         },
     )
 
@@ -282,6 +313,9 @@ def _build_state_graph():
 
     # booking_agent → update_state → END (캐시/RAG/HITL 스킵)
     graph.add_edge("booking_agent", "update_state")
+
+    # self_service_agent → update_state → END (캐시/RAG/HITL 스킵, booking_agent와 동일 우회 패턴)
+    graph.add_edge("self_service_agent", "update_state")
 
     # greeting/farewell 캐시 검색 후 분기
     graph.add_conditional_edges(
@@ -545,6 +579,24 @@ class ConversationAgent:
         # 발신자 전화번호 (kwargs로 전달, 없으면 빈 문자열)
         caller_number: str = kwargs.get("caller_number") or kwargs.get("_caller_number") or ""
 
+        # ── 셀프서비스 AI 도우미: 발신측=착신측(자기 자신에게 연락) 판별 ──
+        # 설계: docs/architecture/self-service-ai-assistant-architecture.md
+        #       음성(rag_processor.py)·문자(sip_message_ai_reply.py) 두 채널이
+        #       공통으로 거치는 이 지점에서만 판별 — SIP 프로토콜 레이어는 수정하지 않는다.
+        from src.ai_voicebot.self_service.detection import is_self_service_session
+        from src.common.sip_owner import normalize_owner_username
+
+        _is_self_service = is_self_service_session(caller_number, _persona_owner)
+        if call_id:
+            log_call_data(
+                call_id,
+                "self_service",
+                "self_service_session_detected",
+                caller_number_normalized=normalize_owner_username(caller_number),
+                owner_normalized=normalize_owner_username(_persona_owner),
+                is_self_service=_is_self_service,
+            )
+
         # ── call_context ContextVar 레지스트리에 직렬화 불가 객체 등록 ──
         # checkpointer(AsyncSqliteSaver/MemorySaver)가 state를 msgpack 직렬화할 때
         # LLMClient 등이 포함되면 "Type is not msgpack serializable" 오류가 발생.
@@ -577,6 +629,7 @@ class ConversationAgent:
             "_caller_number": caller_number,   # 발신자 전화번호 (예약 검색·SMS용)
             "_persona_owner": _persona_owner,  # 페르소나 조회 owner
             "_call_id": call_id or "",         # 통화 ID → RAG/로그 call 키
+            "is_self_service_session": _is_self_service,  # 발신측=착신측 판별 결과 (Story 1.1)
         }
         if is_outbound_session:
             invoke_state["outbound_purpose"] = outbound_purpose
@@ -626,6 +679,11 @@ class ConversationAgent:
             # 예약 컨텍스트 (발화 간 히스토리) 보존
             if "booking_context" in result:
                 self._state["booking_context"] = result["booking_context"]
+            # 셀프서비스 Tool-calling 대화 기억 (발화 간 히스토리) 보존 — 2026-07-15 수정.
+            # 없으면 booking_context와 달리 매 턴 사라져서 "확인 발화 → 긍정 응답" 2턴
+            # 쓰기 플로우(Story 1.8)가 항상 처음부터 다시 시작하는 문제가 있었다.
+            if "self_service_tool_messages" in result:
+                self._state["self_service_tool_messages"] = result["self_service_tool_messages"]
 
             total_elapsed = time.time() - utterance_start
 

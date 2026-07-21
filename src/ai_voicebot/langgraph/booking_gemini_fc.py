@@ -38,7 +38,23 @@ def _json_type_to_glm(t: str) -> "glm.Type":
 
 
 def _json_schema_to_glm_schema(schema: Optional[dict]) -> Optional["glm.Schema"]:
-    """OpenAPI-style JSON Schema subset → glm.Schema (예약 도구용)."""
+    """OpenAPI-style JSON Schema subset → glm.Schema (예약 도구용).
+
+    [2026-07-21, Story 1.14 근본 원인 수정] Python 함수 파라미터를 `Any`로 선언하면(예:
+    `self_service/tools.py::_update_self_service_setting`의 `value: Any` — 필드마다 boolean/
+    enum 문자열/자유 문자열 등 타입이 제각각이라 의도적으로 `Any`로 둠) Pydantic이 생성하는
+    JSON Schema는 `{"title": "Value"}`처럼 `type` 키 자체가 없다. 기존 코드는
+    `st in ("object", "")`로 "명시적 object 선언"과 "타입 정보 자체가 없음(Any)"을 똑같이
+    취급해 **`type` 없는 필드를 전부 프로퍼티 0개짜리 OBJECT로 선언**해 버렸다 — Gemini
+    function-calling은 선언된 스키마에 맞춰 인자를 생성하므로, 실제로는 문자열/불리언 값을
+    보내야 하는데 스키마상 "빈 OBJECT"만 허용되면 짧은 값(불리언/enum)은 우연히 통과해도
+    긴 자유 문자열 값(예: persona.description)은 스키마를 만족시키지 못해 아예 아무 응답도
+    생성하지 못하는(완전히 빈 candidate) 현상으로 이어졌다(결함③, Epic 2 Story 2.7에서 발견).
+    수정: `type`이 없고 `properties`도 없는 필드(=Any/무제약)는 OBJECT로 취급하지 않고
+    STRING으로 취급한다 — Gemini 스키마에 "any" 타입이 없으므로 가장 관대한 원시 타입인
+    문자열로 선언하고, 호출측(`tools.py::_coerce_value()`)이 이미 문자열→불리언 등 후처리를
+    담당하므로 안전하다.
+    """
     if not schema or not isinstance(schema, dict):
         return None
 
@@ -54,7 +70,7 @@ def _json_schema_to_glm_schema(schema: Optional[dict]) -> Optional["glm.Schema"]
             out.items = sub
         return out
 
-    if st in ("object", "") or "properties" in schema:
+    if st == "object" or (st == "" and "properties" in schema):
         props_map: dict[str, glm.Schema] = {}
         for key, sub in (schema.get("properties") or {}).items():
             if isinstance(sub, dict):
@@ -68,6 +84,10 @@ def _json_schema_to_glm_schema(schema: Optional[dict]) -> Optional["glm.Schema"]
             required=req,
             description=str(schema.get("description", "") or "")[:2000],
         )
+
+    if st == "":
+        # 타입 정보가 전혀 없는 필드(Python `Any`) — OBJECT가 아니라 가장 관대한 STRING으로 취급.
+        st = "string"
 
     desc = str(schema.get("description", "") or "")[:2000]
     fmt = str(schema.get("format", "") or "")

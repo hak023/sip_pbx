@@ -1,11 +1,11 @@
 'use client';
 
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiJson } from '@/lib/api';
 import { formatCallControlStatusLine } from '@/lib/call-control-display';
 import { getTenantOwner } from '@/lib/tenant';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const MAIN_NAV = [
   { href: '/knowledge', label: '지식베이스' },
@@ -31,6 +31,9 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { kind: 'heading', label: '조직·채팅' },
   { kind: 'link', href: '/settings/ai-escalation', label: 'AI 에스컬레이션' },
   { kind: 'link', href: '/settings/chat-relay', label: '채팅·SIP MESSAGE' },
+  { kind: 'divider' },
+  { kind: 'heading', label: '셀프서비스 AI 도우미' },
+  { kind: 'link', href: '/settings/ai-assistant', label: 'AI 도우미 변경 이력' },
 ];
 
 const SETTINGS_LINK_HREFS = SETTINGS_NAV.filter(
@@ -102,11 +105,10 @@ function SettingsDropdown() {
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
-        className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-          settingsActive || open
+        className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${settingsActive || open
             ? 'bg-indigo-50 text-indigo-700'
             : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-        }`}
+          }`}
         aria-expanded={open}
         aria-haspopup="menu"
       >
@@ -142,9 +144,8 @@ function SettingsDropdown() {
                 href={item.href}
                 role="menuitem"
                 onClick={() => setOpen(false)}
-                className={`block px-3 py-2 text-sm ${
-                  active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'
-                }`}
+                className={`block px-3 py-2 text-sm ${active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'
+                  }`}
               >
                 {item.label}
               </Link>
@@ -188,11 +189,10 @@ export function AppHeader() {
                   <Link
                     key={href}
                     href={href}
-                    className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                      isActive
+                    className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive
                         ? 'bg-indigo-50 text-indigo-700'
                         : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-                    }`}
+                      }`}
                   >
                     {label}
                   </Link>

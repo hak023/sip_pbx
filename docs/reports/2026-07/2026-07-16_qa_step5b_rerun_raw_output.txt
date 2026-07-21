@@ -1,0 +1,66 @@
+UTF-8 인코딩 설정이 적용되었습니다.
+########## 재검증: 쓰기 불가 도메인 (RAG 색인 완료 후) ##########
+
+=== ID-CC01-v2 (call-control) ===
+call_id=qatest-6f5ad1022dec
+response: 착신 규칙을 추가하고 싶으시군요. 현재 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 죄송하지만, 제가 직접 착신 규칙을 추가해 드릴 수는 없습니다. 다른 도움이 필요하시면 말씀해 주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 2
+
+=== ID-CT01-v2 (contacts) ===
+call_id=qatest-e9fef46ca580
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 2
+
+=== ID-G01-v2 (general) ===
+call_id=qatest-e48150a09181
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 2
+
+=== ID-I01-v2 (integrations) ===
+call_id=qatest-25e28c0c10a7
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 2
+
+=== ID-B01-v2 (booking) ===
+call_id=qatest-af6515dae040
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 1
+
+########## 재검증: Case 2 탐색성(매뉴얼 기반) ##########
+
+=== ID-Q02-v2 (채팅 자동응답 궁금) ===
+call_id=qatest-cfb4486565f8
+response: 안녕하세요! 문의하신 내용에 대해 답변해 드릴게요.
+
+네, 문자로 온 문의도 AI가 자동으로 답장하는 기능이 있습니다. 설정 > 채팅에서 "SIP MESSAGE 수신 시 AI 자동응답 사용"을 켜두시면 됩니다.
+
+아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만드셔야 정상적으로 응대할 수 있어요. 혹시 설정을 도와드릴까요?
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_tool_start, self_service_tool_done, self_service_agent_response
+rag_hit_count: 1
+
+=== ID-Q03-v2 (예약 슬롯 인원 궁금) ===
+call_id=qatest-7672ba8acb76
+response: 안녕하세요! 네, 슬롯을 만들 때 '예약 가능 인원'을 지정하시면 한 슬롯에 여러 명의 예약을 받을 수 있습니다.
+
+아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있어요. 혹시 이 설정을 도와드릴까요?
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 1
+
+=== ID-Q04-v2 (캘린더 연동 이점 궁금) ===
+call_id=qatest-8384a412a9f7
+response: Google 캘린더 연동을 하시면 이후 예약이 자동으로 Google 캘린더에 반영됩니다. 설정 > 일반에서 "Google 계정 연동" 버튼으로 로그인하여 사용하실 수 있습니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 2
+
+=== ID-Q05-v2 (대조군 — 순수 정보 질의) ===
+call_id=qatest-0a2eee3ee08b
+response: 운영 대시보드에서 상태를 '부재중'으로 바꾸시면, AI 개입 요청은 자동으로 "확인 후 별도로 안내드리겠습니다"라는 응답으로 처리되고 요청 내역은 이력에 기록됩니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_intent_tier_hint, self_service_agent_response
+rag_hit_count: 1
+
+########## 완료 ##########

@@ -1,0 +1,32 @@
+UTF-8 인코딩 설정이 적용되었습니다.
+########## 사전 준비: 매뉴얼 색인 확인/보강 (owner=9003) ##########
+매뉴얼 색인 total=52 indexed=True
+
+=== SG-CONV-01 (ai-escalation 관련 탐색성) ===
+response: 네, AI가 모르는 질문을 받았을 때 관리자님께 직접 연결(호전환)하도록 설정할 수 있습니다. 이 기능을 사용하시려면 먼저 '설정 > 착신 제어' 화면에서 호전환 대상 내선을 미리 등록해 두셔야 해요. 설정이 필요하시면 말씀해주세요.
+rag_hit_count: 2
+has_screen_guidance: True
+
+=== SG-CONV-02 (chat-relay 관련 탐색성) ===
+response: 네, SIP MESSAGE 수신 시 AI 자동응답 기능을 켜두시면 문자로 들어온 질문에도 AI가 자동으로 답장합니다. 설정 > 채팅 화면에서 "SIP MESSAGE 수신 시 AI 자동응답 사용" 토글을 켜서 사용하실 수 있습니다.
+rag_hit_count: 1
+has_screen_guidance: True
+
+=== SG-CONV-03 (integrations/general 관련 탐색성) ===
+response: 안녕하세요! 구글 캘린더를 연동하시면 이후 예약이 자동으로 구글 캘린더에 반영되어 편리하게 확인하실 수 있습니다. 설정 > 일반에서 "Google 계정 연동" 버튼을 눌러 로그인하시면 됩니다.
+
+아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만드셔야 정상적으로 응대할 수 있습니다. 혹시 이 설정에 대한 도움이 필요하시면 말씀해주세요.
+rag_hit_count: 2
+has_screen_guidance: False
+
+=== SG-CONV-04 (대조군 - 화면 무관) ===
+response: 운영 대시보드에서 본인 상태를 "부재중"으로 전환하시면 됩니다. 부재중 상태에서는 AI 개입 요청이 자동으로 "확인 후 별도로 안내드리겠습니다"라는 응답으로 처리되고, 요청 내역은 이력에 기록됩니다.
+rag_hit_count: 1
+has_screen_guidance: False
+
+=== SG-CONV-05 (persona 관련 - 화면 없음 확인) ===
+response: 페르소나 설명은 변경할 수 있습니다. 어떤 내용으로 바꾸고 싶으신가요? 말씀해주시면 제가 설정을 도와드릴 수 있습니다.
+rag_hit_count: 2
+has_screen_guidance: True
+
+########## 완료 ##########

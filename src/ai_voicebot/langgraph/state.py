@@ -67,6 +67,14 @@ class ConversationState(TypedDict, total=False):
     # ── 예약 에이전트 ──
     booking_context: dict         # 예약 진행 중 수집된 슬롯 정보 (날짜, 시간, 인원 등)
 
+    # ── 셀프서비스 AI 도우미 ──
+    # 설계: docs/architecture/self-service-ai-assistant-architecture.md
+    is_self_service_session: bool  # 발신측=착신측(자기 자신에게 연락) 여부. True면 self_service_agent 레인으로 라우팅(Story 1.2).
+    # [2026-07-15] Tool-calling 루프의 멀티턴 대화 기억(SystemMessage 제외 LangChain 메시지 목록).
+    # booking_context["messages"](booking_agent.py)와 동일 패턴 — 확인 발화→긍정 응답 등 2턴 이상
+    # 필요한 Story 1.8 자동설정 흐름에서 직전 턴 맥락을 유지하기 위해 필요.
+    self_service_tool_messages: list
+
     # ── 내부 참조 (직렬화 가능 값만 — 객체 참조는 call_context.py ContextVar 사용) ──
     # 직렬화 불가 객체(_llm_client, _rag_engine, _embedder, _vector_db, _org_manager,
     # _hangup_callback)는 call_context.py의 ContextVar로 이동.

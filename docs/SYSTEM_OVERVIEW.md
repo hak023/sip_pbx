@@ -2,29 +2,29 @@
 
 **AI SIP PBX**는 Python 기반 **SIP B2BUA(Back-to-Back User Agent)** 위에 **실시간 음성 AI**, **웹 운영 콘솔**, **지식·연락처·문자·예약**을 한데 묶은 통합 플랫폼이다.
 
-| 항목 | 내용 |
-|------|------|
-| **대상 독자** | 제품·운영·엔지니어링 이해관계자, 시스템 아키텍처 검토에 참여하는 팀 |
-| **최종 수정** | 2026-05-08 (부록·상용 아키텍처 링크 갱신) |
+| 항목               | 내용                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| **대상 독자**      | 제품·운영·엔지니어링 이해관계자, 시스템 아키텍처 검토에 참여하는 팀                                                             |
+| **최종 수정**      | 2026-07-20 (§4.11 셀프서비스 AI 도우미에 통화 이력 자연어 질의(Call History NLQ, Story 1.13) 반영)                              |
 | **이전 문서 백업** | 상세 항목·API 표가 필요하면 [`SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md`](SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md) 참고 |
 
 ### 다이어그램 (PNG) — 문서·교육 자료 등에 삽입
 
 렌더된 그림은 `docs/images/system-overview/` 에 있으며, 편집용 Mermaid 소스는 `docs/diagrams/system-overview/`의 `01-`…`11-` 접두 `.md` 파일(아래 표·[README](diagrams/system-overview/README.md))이다. PNG는 **`mermaid-frontend.json` + `mermaid-frontend.css`** 로 생성해 **밝은 UI 톤·카드형 패널·넉넉한 노드 간격**을 맞춘다(상세·재생성: [diagrams/system-overview/README.md](diagrams/system-overview/README.md)).
 
-| PNG | 절 | 소스(`.md`) |
-|-----|----|--------------|
-| [`01-logical-architecture.png`](images/system-overview/01-logical-architecture.png) | §3.1 | [`01-logical-architecture.md`](diagrams/system-overview/01-logical-architecture.md) |
-| [`02-inbound-voice-sequence.png`](images/system-overview/02-inbound-voice-sequence.png) | §3.3 | [`02-inbound-voice-sequence.md`](diagrams/system-overview/02-inbound-voice-sequence.md) |
-| [`03-rtp-modes.png`](images/system-overview/03-rtp-modes.png) | §4.2 | [`03-rtp-modes.md`](diagrams/system-overview/03-rtp-modes.md) |
-| [`04-smart-barge-in.png`](images/system-overview/04-smart-barge-in.png) | §4.3 | [`04-smart-barge-in.md`](diagrams/system-overview/04-smart-barge-in.md) |
-| [`05-intent-routing.png`](images/system-overview/05-intent-routing.png) | §4.4 | [`05-intent-routing.md`](diagrams/system-overview/05-intent-routing.md) |
-| [`06-knowledge-flow.png`](images/system-overview/06-knowledge-flow.png) | §4.5 | [`06-knowledge-flow.md`](diagrams/system-overview/06-knowledge-flow.md) |
-| [`07-booking-tools.png`](images/system-overview/07-booking-tools.png) | §4.6 | [`07-booking-tools.md`](diagrams/system-overview/07-booking-tools.md) |
-| [`08-sip-message-sequence.png`](images/system-overview/08-sip-message-sequence.png) | §4.7 | [`08-sip-message-sequence.md`](diagrams/system-overview/08-sip-message-sequence.md) |
-| [`09-ringback-suno.png`](images/system-overview/09-ringback-suno.png) | §4.9 | [`09-ringback-suno.md`](diagrams/system-overview/09-ringback-suno.md) |
-| [`10-call-control-priority.png`](images/system-overview/10-call-control-priority.png) | §4.10 | [`10-call-control-priority.md`](diagrams/system-overview/10-call-control-priority.md) |
-| [`11-outbound-campaign.png`](images/system-overview/11-outbound-campaign.png) | §4.8 | [`11-outbound-campaign.md`](diagrams/system-overview/11-outbound-campaign.md) |
+| PNG                                                                                     | 절    | 소스(`.md`)                                                                             |
+| --------------------------------------------------------------------------------------- | ----- | --------------------------------------------------------------------------------------- |
+| [`01-logical-architecture.png`](images/system-overview/01-logical-architecture.png)     | §3.1  | [`01-logical-architecture.md`](diagrams/system-overview/01-logical-architecture.md)     |
+| [`02-inbound-voice-sequence.png`](images/system-overview/02-inbound-voice-sequence.png) | §3.3  | [`02-inbound-voice-sequence.md`](diagrams/system-overview/02-inbound-voice-sequence.md) |
+| [`03-rtp-modes.png`](images/system-overview/03-rtp-modes.png)                           | §4.2  | [`03-rtp-modes.md`](diagrams/system-overview/03-rtp-modes.md)                           |
+| [`04-smart-barge-in.png`](images/system-overview/04-smart-barge-in.png)                 | §4.3  | [`04-smart-barge-in.md`](diagrams/system-overview/04-smart-barge-in.md)                 |
+| [`05-intent-routing.png`](images/system-overview/05-intent-routing.png)                 | §4.4  | [`05-intent-routing.md`](diagrams/system-overview/05-intent-routing.md)                 |
+| [`06-knowledge-flow.png`](images/system-overview/06-knowledge-flow.png)                 | §4.5  | [`06-knowledge-flow.md`](diagrams/system-overview/06-knowledge-flow.md)                 |
+| [`07-booking-tools.png`](images/system-overview/07-booking-tools.png)                   | §4.6  | [`07-booking-tools.md`](diagrams/system-overview/07-booking-tools.md)                   |
+| [`08-sip-message-sequence.png`](images/system-overview/08-sip-message-sequence.png)     | §4.7  | [`08-sip-message-sequence.md`](diagrams/system-overview/08-sip-message-sequence.md)     |
+| [`09-ringback-suno.png`](images/system-overview/09-ringback-suno.png)                   | §4.9  | [`09-ringback-suno.md`](diagrams/system-overview/09-ringback-suno.md)                   |
+| [`10-call-control-priority.png`](images/system-overview/10-call-control-priority.png)   | §4.10 | [`10-call-control-priority.md`](diagrams/system-overview/10-call-control-priority.md)   |
+| [`11-outbound-campaign.png`](images/system-overview/11-outbound-campaign.png)           | §4.8  | [`11-outbound-campaign.md`](diagrams/system-overview/11-outbound-campaign.md)           |
 
 ---
 
@@ -63,14 +63,14 @@
 
 ### 2.2 기존 상용/일반적 구성 (As-Is) vs 본 시스템 (To-Be)
 
-| 구분 | 일반적 As-Is | 본 시스템 To-Be |
-|------|----------------|-----------------|
-| **지식** | 수개월 시나리오·정적 FAQ | 통화/문자 기반 **자동 적재** + RAG, 시맨틱 캐시 |
-| **대화** | ARS 트리, 규칙 매칭 | **의도 분류 + LLM 추론** + 필요 시 **툴 호출** |
-| **상담 연계** | 별도 CTI, 수동 | **HITL·호전환·에스컬레이션 모드**를 동일 PBX 흐름에 통합 |
-| **음성 UX** | 긴 TTS, 끼어들기 제한 | **VAD + 턴 전략 + 스마트 바지인**, 20ms 격자 **연속 RTP** (AI 모드) |
-| **멀티채널** | 음성/문자 분리 제품 | **SIP MESSAGE·RCS/SMS**와 **동일 에이전트**를 맞댈 수 있음(설정 기반) |
-| **착신 정책** | PBX/헤더에 분산 | **착신 제어 DB + 스케줄**로 “직접/지연 AI/즉시 AI/전달/그룹”을 한 곳에서 |
+| 구분          | 일반적 As-Is             | 본 시스템 To-Be                                                          |
+| ------------- | ------------------------ | ------------------------------------------------------------------------ |
+| **지식**      | 수개월 시나리오·정적 FAQ | 통화/문자 기반 **자동 적재** + RAG, 시맨틱 캐시                          |
+| **대화**      | ARS 트리, 규칙 매칭      | **의도 분류 + LLM 추론** + 필요 시 **툴 호출**                           |
+| **상담 연계** | 별도 CTI, 수동           | **HITL·호전환·에스컬레이션 모드**를 동일 PBX 흐름에 통합                 |
+| **음성 UX**   | 긴 TTS, 끼어들기 제한    | **VAD + 턴 전략 + 스마트 바지인**, 20ms 격자 **연속 RTP** (AI 모드)      |
+| **멀티채널**  | 음성/문자 분리 제품      | **SIP MESSAGE·RCS/SMS**와 **동일 에이전트**를 맞댈 수 있음(설정 기반)    |
+| **착신 정책** | PBX/헤더에 분산          | **착신 제어 DB + 스케줄**로 “직접/지연 AI/즉시 AI/전달/그룹”을 한 곳에서 |
 
 ---
 
@@ -134,18 +134,18 @@
 
 ### §4 하위 목차
 
-| 절 | 주제 | **Journey**(사용자·상황) | **시스템**도식(기술) |
-|----|------|----------------------------|----------------------|
-| [4.1](#41-sip-pbxb2bua) | SIP·B2BUA | 12 | 01 |
-| [4.2](#42-rtp) | RTP | 13 | 03 |
-| [4.3](#43-ai-음성) | 음성 | 14 | 04 |
-| [4.4](#44-langgraph) | 의도 | 15 | 05 |
-| [4.5](#45-지식) | 지식·HITL | 16 | 06, 02 |
-| [4.6](#46-예약) | 예약 | 17 | 07 |
-| [4.7](#47-문자) | 문자 | 18 | 08 |
-| [4.8](#48-outbound) | Outbound | 19 | 11 |
-| [4.9](#49-연결음) | 연결음 | 20 | 09 |
-| [4.10](#410-착신) | 착신 제어 | 21 | 10 |
+| 절                      | 주제      | **Journey**(사용자·상황) | **시스템**도식(기술) |
+| ----------------------- | --------- | ------------------------ | -------------------- |
+| [4.1](#41-sip-pbxb2bua) | SIP·B2BUA | 12                       | 01                   |
+| [4.2](#42-rtp)          | RTP       | 13                       | 03                   |
+| [4.3](#43-ai-음성)      | 음성      | 14                       | 04                   |
+| [4.4](#44-langgraph)    | 의도      | 15                       | 05                   |
+| [4.5](#45-지식)         | 지식·HITL | 16                       | 06, 02               |
+| [4.6](#46-예약)         | 예약      | 17                       | 07                   |
+| [4.7](#47-문자)         | 문자      | 18                       | 08                   |
+| [4.8](#48-outbound)     | Outbound  | 19                       | 11                   |
+| [4.9](#49-연결음)       | 연결음    | 20                       | 09                   |
+| [4.10](#410-착신)       | 착신 제어 | 21                       | 10                   |
 
 ---
 
@@ -1746,12 +1746,12 @@ flowchart LR
 
 > **주의**: 링 그룹 **SIP** 동시/순차는 제품·리포트 **최신** 본 뒤 배포.
 
-| 모델 | 경험에 대응 |
-|------|-------------|
-| `direct` | 곧장 인간 |
-| `no_answer_ai` | N초 **무응답** 후 AI |
-| `immediate_ai` | 첫 응답 **AI** (이후 사람 가능) |
-| `forward_*` / `ring_group` | **전달**·**헌트** |
+| 모델                       | 경험에 대응                     |
+| -------------------------- | ------------------------------- |
+| `direct`                   | 곧장 인간                       |
+| `no_answer_ai`             | N초 **무응답** 후 AI            |
+| `immediate_ai`             | 첫 응답 **AI** (이후 사람 가능) |
+| `forward_*` / `ring_group` | **전달**·**헌트**               |
 
 `AnnouncementProfile` + `greeting_override`로 **같은 규칙**에 **맞는** 인사 TTS.
 
@@ -1894,21 +1894,84 @@ flowchart LR
 
 ---
 
+### 4.11 셀프서비스 AI 도우미
+
+테넌트 관리자가 **자기 자신의 번호**로 전화하거나 문자를 보내면, 고객 응대용 AI 대신 "서비스 사용법을 안내하고 설정을 도와주는 AI"가 응답한다(`is_self_service_session` 감지, `self_service_agent_node`). 대시보드에 접속하지 않고도 대화만으로 서비스를 이해·설정할 수 있게 하는 것이 목표다.
+
+**처리 flow**
+
+```mermaid
+flowchart LR
+  call["관리자 본인 번호 통화/문자"] --> detect["자기 호출 감지"]
+  detect --> lane["셀프서비스 대화 레인"]
+  lane --> rag["매뉴얼 RAG 검색"]
+  lane --> onboarding["온보딩 체크리스트"]
+  lane --> tools["설정 조회/통계/자동설정 Tool"]
+  lane --> history["통화 이력 자연어 질의"]
+  tools --> catalog["설정 카탈로그(7개 도메인)"]
+  tools --> audit["변경 이력 감사 로그"]
+  history --> callrecords[("call_records 구조화 검색/집계")]
+```
+
+- **매뉴얼 RAG**: `doc_type=self_service_manual` 전용 RAGEngine 인스턴스로 사용법 Q&A를 검색해 답변한다(테넌트 고객용 지식과 완전 격리).
+- **온보딩 체크리스트**: 세션 첫 턴에 미완료 초기 설정(페르소나 미등록, AI 에스컬레이션 미결정, 착신 규칙 없음)을 안내한다.
+- **설정 카탈로그**: persona·ai-escalation·call-control·chat-relay·contacts·general·integrations 7개 도메인의 조회 함수를 한 곳에 등록해 AI가 항상 최신 값을 확인하도록 한다.
+- **이용 통계 조회**: 이번 주/이번 달 통화 수·평균 confidence·HITL 발생 건수를 대화로 확인할 수 있다.
+- **통화 이력 자연어 질의(Story 1.13)**: 자기 번호(owner)의 통화 이력을 자연어로 질의할 수 있다 — (1) 키워드로 대화한 통화 검색, (2) 기간별 최다 발신 번호 집계, (3) 오늘자 미응답(수신 못한) 번호 조회. 새 벡터 임베딩 파이프라인 없이 기존 `call_records`(SQLite)를 구조화 검색/집계하는 Tool-calling으로 구현되었다.
+- **자동설정(쓰기)**: persona·ai-escalation·chat-relay 3개 도메인은 확인 발화 후 실제 값을 변경할 수 있다. 나머지 4개 도메인(call-control·contacts·general·integrations)은 목록형 데이터이거나 실제 변경 함수가 없어 제외 목록(`config/self_service_exclusions.yaml`)으로 명시적으로 차단된다. 모든 변경은 `self_service_config_changes` 테이블과 통화 데이터 레코드에 이중 기록된다.
+- **변경 이력 화면**: `설정 > AI 도우미 변경 이력`(`/settings/ai-assistant`)에서 관리자는 AI가 대화로 실제 바꾼 설정(도메인·필드·이전값→새값·시각·call_id)을 확인할 수 있다(`GET /api/self-service/config-changes`).
+- **Tool-calling 실행 방식**: 실제 LLM 클라이언트(`LLMClient`)가 LangChain 모델을 노출하지 않으므로, Tool 호출은 `booking_agent_node`와 동일한 Gemini 네이티브 function calling 경로(`booking_gemini_fc.py` 재사용)로 동작한다(bind_tools 시도 → Gemini 네이티브 FC → 프롬프트 전용 순 폴백). 확인→실행처럼 2턴 이상 필요한 쓰기 플로우를 위해 `state["self_service_tool_messages"]`에 턴 간 Tool 대화 히스토리를 보존한다. 2026-07-15 자동 QA 테스트로 검증됨(상세: [2026-07-15_self_service_epic1_bmad_qa_step4_final_report.md](reports/2026-07/2026-07-15_self_service_epic1_bmad_qa_step4_final_report.md)).
+
+**수용 기준(문서 수준)**
+- 셀프서비스 세션 감지부터 RAG·온보딩·Tool 실행까지의 흐름이 설명된다.
+- 쓰기 가능/불가 도메인의 구분 기준과 제외 목록 메커니즘이 명시된다.
+
+**상세 설계**: [self-service-ai-assistant-architecture.md](architecture/self-service-ai-assistant-architecture.md), [self-service-ai-assistant-prd.md](product/self-service-ai-assistant-prd.md), [Story 1.1~1.13](INDEX.md#dev-stories-docsstories--셀프서비스-ai-도우미-epic-1), [통합 QA 문서](qa/self-service-ai-assistant-master-qa.md)
+
+> **Epic 2 완료(2026-07-21, Story 2.1~2.8 전체 Done)**: `settings_catalog.py`/`screen_graph.py`가
+> 하드코딩 Python 레지스트리라 신규 설정 추가 시 코드 배포가 필요한 구조적 한계를 해소하기 위해,
+> 설정 메타데이터(라벨/허용값/화면 안내/writable 여부)를 SQLite(`self_service_catalog_config`
+> 테이블, 버전 관리+롤백)로 이관했다. 실제 Python 콜러블은 코드에 남기고 "이름 문자열
+> 화이트리스트"만 DB가 참조하도록 해 임의 코드 실행을 원천 차단한다(RCE 방지).
+> `설정 > AI 도우미 > 도움말 > 설정 관리` 탭에서 관리자가 현재 설정을 JSON으로 다운로드하고,
+> 편집 후 업로드(서버 검증 → diff 미리보기 → 확정 적용)해 서버 재배포 없이 반영할 수 있다 —
+> 업로드 직후 재시작 없이 즉시 반영됨을 실서버로 실증 완료(IV2, 통합 QA Branch L). 버전 이력·
+> 롤백 버튼도 동일 화면에서 제공된다. IntelliDecision(§위)의 정규식 키워드 힌트는 완전히
+> 제거되었으며(`intent_tier.py` 삭제), 제거 전/후 IntelliDecision QA 16건 비교 결과 회귀 없음을
+> 확인했다. 통합 QA 중 Epic 2와 무관한 신규 결함(persona 등 문자열 값 필드의 확인→실행 2턴
+> 흐름에서 Gemini 빈 응답 재현율이 다른 필드보다 현저히 높음, Story 1.8 기존 기능 영향)을
+> 발견해 별도 후속 Story(1.14)로 문서화·완화책을 구현했다. `manual_indexer.py`의 매뉴얼 섹션-도메인
+> 매핑도 하드코딩 키워드 매칭 대신 매뉴얼 문서 자체의 명시적 `{domain: xxx}` 태그를 우선 사용하도록
+> 동적화했다(태그 없는 섹션은 기존 키워드 매칭으로 폴백, Story 2.8).
+> 상세: [Story 2.1~2.8](INDEX.md), [구현 리포트](reports/2026-07/2026-07-21_self_service_epic2_story_2.1_to_2.5_implementation.md), [IV2 검증+힌트 제거 리포트](reports/2026-07/2026-07-21_self_service_epic2_story2.5_iv2_and_story2.6_hint_removal.md), [Epic 2 완료 리포트](reports/2026-07/2026-07-21_self_service_epic2_completion_report.md), [통합 QA Branch L](qa/self-service-ai-assistant-master-qa.md)
+
+> **Story 1.14 완료(2026-07-21)**: Epic 2 QA에서 발견한 persona 등 문자열 값 필드의 확인→실행
+> 2턴 흐름 Gemini 빈 응답 문제의 **근본 원인**을 규명·수정했다. 도구 파라미터의 Python `Any`
+> 타입이 생성하는 JSON Schema(타입 정보 없음)를 Gemini 함수 선언으로 변환하는 코드
+> (`booking_gemini_fc.py::_json_schema_to_glm_schema`)가 이를 "프로퍼티 0개짜리 OBJECT"로
+> 잘못 변환해, 실제로는 문자열 값을 받아야 하는 필드를 빈 객체로 선언하고 있었던 것이 원인이다.
+> STRING으로 올바르게 변환하도록 수정 후 실서버로 persona.description 확인→실행 흐름을 6회
+> 반복 검증한 결과 성공률이 0%→67%로 개선됨을 확인했다(재시도 강화·명확한 재안내 메시지는
+> 보조 방어망으로 유지).
+> 상세: [Story 1.14](stories/1.14.empty-candidate-string-field-mitigation.story.md)
+
+---
+
 ## 5. 기술 스택
 
-| 층 | 기술 |
-|----|------|
-| **런타임** | Python 3.11+, **asyncio** |
-| **API** | **FastAPI**, structlog |
-| **실시간** | **python-socketio** / aiohttp |
-| **SIP/RTP** | 자체 B2BUA + RTP (코덱·SDP 조작) |
-| **Voice 프레임워크** | **Pipecat** (VAD, STT/TTS 프레임, 파이프라인) |
-| **에이전트** | **LangGraph** + **LangChain** tools, **checkpointer** (SQLite 권장 패키지) |
-| **LLM/STT/TTS** | **Google Cloud** (Gemini, STT, TTS) |
-| **벡터 DB** | **ChromaDB** + **sentence-transformers** 계열 임베딩 |
-| **관계 DB** | **SQLite** (예약, 착신제어, 통화 기록 등) |
-| **프론트** | **Next.js** (App Router), **TypeScript**, Tailwind, **Zustand** 등 |
-| **통화음 생성** | **Suno API** (sunoapi.org), **pydub**/ffmpeg(디코딩) |
+| 층                   | 기술                                                                       |
+| -------------------- | -------------------------------------------------------------------------- |
+| **런타임**           | Python 3.11+, **asyncio**                                                  |
+| **API**              | **FastAPI**, structlog                                                     |
+| **실시간**           | **python-socketio** / aiohttp                                              |
+| **SIP/RTP**          | 자체 B2BUA + RTP (코덱·SDP 조작)                                           |
+| **Voice 프레임워크** | **Pipecat** (VAD, STT/TTS 프레임, 파이프라인)                              |
+| **에이전트**         | **LangGraph** + **LangChain** tools, **checkpointer** (SQLite 권장 패키지) |
+| **LLM/STT/TTS**      | **Google Cloud** (Gemini, STT, TTS)                                        |
+| **벡터 DB**          | **ChromaDB** + **sentence-transformers** 계열 임베딩                       |
+| **관계 DB**          | **SQLite** (예약, 착신제어, 통화 기록 등)                                  |
+| **프론트**           | **Next.js** (App Router), **TypeScript**, Tailwind, **Zustand** 등         |
+| **통화음 생성**      | **Suno API** (sunoapi.org), **pydub**/ffmpeg(디코딩)                       |
 
 **외부 옵션**: **ngrok** (Suno·웹훅), **Google Calendar OAuth** (예약·캘린더), **SMS/RCS** 연동(리포트·`booking_notify`·`end_call_sms` 등).
 

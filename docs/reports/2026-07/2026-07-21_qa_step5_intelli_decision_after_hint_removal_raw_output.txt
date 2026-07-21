@@ -1,0 +1,876 @@
+UTF-8 인코딩 설정이 적용되었습니다.
+########## 사전 준비: QA 페르소나 생성 (owner=9003) ##########
+persona create skipped/exists: Response status code does not indicate success: 409 (Conflict).
+
+########## Case 1: persona (완전/불완전) ##########
+
+=== ID-P01 1턴 (완전한 정보) ===
+call_id=qatest-a3372b6b13bf
+response: 페르소나 설명을 '친절한 카페 매니저입니다'로 설정할까요?
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:04.471",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:04.526",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.05
+  },
+  {
+    "ts": "2026-07-21T13:52:04.548",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:04.548",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:06.428",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.952,
+    "response_len": 32
+  }
+]
+
+=== ID-P01 2턴 (긍정) ===
+call_id=qatest-5feddad2c5e2
+response: 안녕하세요! 서비스 이용을 도와드리는 AI입니다. 무엇을 도와드릴까요?
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:08.558",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:08.612",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.05
+  },
+  {
+    "ts": "2026-07-21T13:52:08.644",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:11.676",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 3.112,
+    "response_len": 39
+  }
+]
+
+=== ID-P02 (불완전 — 새 값 없음) ===
+call_id=qatest-7678e9c03a96
+response: 페르소나 설명을 어떻게 바꿔드릴까요? 새로운 설명을 알려주시면 반영해 드릴게요.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:13.77",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:13.812",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.04
+  },
+  {
+    "ts": "2026-07-21T13:52:13.843",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:13.846",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:15.201",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.429,
+    "response_len": 44
+  }
+]
+
+########## Case 1: ai-escalation (완전/불완전) ##########
+
+=== ID-E01 1턴 (Story 1.10 예문 B, 완전) ===
+call_id=qatest-9dd8b11b569a
+response: AI가 에스컬레이션하지 않도록 설정할까요? 이 경우 고객이 먼저 '상담원 연결해 주세요'라고 명시적으로 요청하면 그때만 별도 처리됩니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:17.249",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:17.316",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.065
+  },
+  {
+    "ts": "2026-07-21T13:52:17.345",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:17.347",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:20.055",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.804,
+    "response_len": 76
+  }
+]
+
+=== ID-E01 2턴 (긍정, 실행 기대) ===
+call_id=qatest-df4509edea73
+response: 네, AI 에스컬레이션 모드를 '에스컬레이션 안 함'으로 변경했습니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_screen_graph_hit, self_service_tool_start, self_service_auto_config_applied, self_service_tool_done, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:22.111",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:22.157",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.044
+  },
+  {
+    "ts": "2026-07-21T13:52:22.18",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:24.005",
+    "category": "self_service",
+    "event": "self_service_tool_start",
+    "tool": "_update_self_service_setting",
+    "arg_keys": [
+      "field",
+      "value",
+      "domain",
+      "owner",
+      "call_id"
+    ],
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-21T13:52:24.109",
+    "category": "self_service",
+    "event": "self_service_auto_config_applied",
+    "domain": "ai-escalation",
+    "field": "escalation_mode",
+    "old_value": "none",
+    "new_value": "none"
+  },
+  {
+    "ts": "2026-07-21T13:52:24.113",
+    "category": "self_service",
+    "event": "self_service_tool_done",
+    "tool": "_update_self_service_setting",
+    "result_preview": "{\"ok\": true, \"old_value\": \"none\", \"new_value\": \"none\"}",
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-21T13:52:24.875",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.762,
+    "response_len": 39
+  }
+]
+  [원시로그검증] PASS (ID-E01): 원본 로그 9 줄 확인
+
+=== ID-E02 (불완전 — 방식 불명) ===
+call_id=qatest-c76daecd4a42
+response: AI 에스컬레이션 방식을 어떻게 변경하시겠어요? '상담원에게 연결', '아무것도 안 함', 'HITL(사람의 개입)' 중에서 선택하실 수 있습니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:26.984",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:27.036",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.048
+  },
+  {
+    "ts": "2026-07-21T13:52:27.067",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:27.068",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:29.016",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.027,
+    "response_len": 82
+  }
+]
+
+########## Case 1: chat-relay (완전/불완전) ##########
+
+=== ID-C01 1턴 (완전) ===
+call_id=qatest-260c72f40688
+response: 채팅 자동응답을 끄시겠어요?
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:31.078",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:31.129",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 4,
+    "elapsed_sec": 0.047
+  },
+  {
+    "ts": "2026-07-21T13:52:31.161",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:31.167",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:35.246",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 4.164,
+    "response_len": 15
+  }
+]
+
+=== ID-C01 2턴 (긍정) ===
+call_id=qatest-e7a216d81c25
+response: 네, 채팅 자동응답 기능을 껐습니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_screen_graph_hit, self_service_tool_start, self_service_auto_config_applied, self_service_tool_done, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:37.317",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:37.358",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.037
+  },
+  {
+    "ts": "2026-07-21T13:52:37.379",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:39.191",
+    "category": "self_service",
+    "event": "self_service_tool_start",
+    "tool": "_update_self_service_setting",
+    "arg_keys": [
+      "field",
+      "value",
+      "domain",
+      "owner",
+      "call_id"
+    ],
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-21T13:52:39.225",
+    "category": "self_service",
+    "event": "self_service_auto_config_applied",
+    "domain": "chat-relay",
+    "field": "message_ai_reply_enabled",
+    "old_value": "0",
+    "new_value": "False"
+  },
+  {
+    "ts": "2026-07-21T13:52:39.23",
+    "category": "self_service",
+    "event": "self_service_tool_done",
+    "tool": "_update_self_service_setting",
+    "result_preview": "{\"ok\": true, \"old_value\": 0, \"new_value\": false, \"result\": {\"owner\": \"9003\", \"sip_username\": \"\", \"updated_at\": \"2026-07-21 13:52:39\", \"message_ai_policy\": \"settings\", \"message_ai_reply_enabled\": 0, \"m",
+    "round_idx": 0
+  },
+  {
+    "ts": "2026-07-21T13:52:40.243",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.923,
+    "response_len": 20
+  }
+]
+
+=== ID-C02 (불완전 — on/off 불명) ===
+call_id=qatest-931b19af096c
+response: 채팅 자동응답 설정 중에 어떤 부분을 어떻게 바꾸고 싶으신가요? 예를 들어, AI 답변 사용 여부나 답변 접두사 등을 말씀해 주시면 됩니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:42.305",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:42.378",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.068
+  },
+  {
+    "ts": "2026-07-21T13:52:42.405",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:42.41",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:44.114",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.804,
+    "response_len": 78
+  }
+]
+
+########## Case 1: 쓰기 불가 도메인 (거부 확인) ##########
+
+=== ID-CC01 (call-control) ===
+call_id=qatest-ffe25998ed47
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:46.21",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:46.257",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.043
+  },
+  {
+    "ts": "2026-07-21T13:52:46.291",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:46.293",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:48.682",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.469,
+    "response_len": 52
+  }
+]
+
+=== ID-CT01 (contacts) ===
+call_id=qatest-fc5a08da7a95
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:50.765",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:50.818",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.048
+  },
+  {
+    "ts": "2026-07-21T13:52:50.847",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:50.849",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:53.857",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 3.087,
+    "response_len": 52
+  }
+]
+
+=== ID-G01 (general) ===
+call_id=qatest-0c7d117cee83
+response: 안녕하세요! 어떤 도움을 드릴까요?
+
+혹시 아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 이 부분 설정하시는 것을 도와드릴까요?
+
+우리 회사 이름을 다른 이름으로 바꾸는 기능은 제가 지원하지 않습니다. 죄송합니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:52:55.91",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:52:55.974",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.058
+  },
+  {
+    "ts": "2026-07-21T13:52:56.004",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:52:56.007",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:52:58.16",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.246,
+    "response_len": 156
+  }
+]
+
+=== ID-I01 (integrations) ===
+call_id=qatest-5905f4fef7e6
+response: 안녕하세요! 먼저, 아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만들어주셔야 정상적으로 응대할 수 있습니다. 이 부분 설정에 도움이 필요하시면 말씀해주세요.
+
+구글 캘린더 연동을 끊으시려면 '설정 > 일반' 메뉴에서 "연동 해제" 버튼을 눌러주시면 됩니다. 연동을 해제하시면 이후 예약은 더 이상 캘린더에 자동으로 반영되지 않습니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:53:00.213",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:53:00.261",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.044
+  },
+  {
+    "ts": "2026-07-21T13:53:00.294",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:53:00.296",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": false
+  },
+  {
+    "ts": "2026-07-21T13:53:03.521",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 3.306,
+    "response_len": 201
+  }
+]
+
+########## Case 1: 카탈로그 밖 도메인 (booking, 알려진 한계) ##########
+
+=== ID-B01 (booking, Tool 없음) ===
+call_id=qatest-f59fd710b4cd
+response: 안녕하세요! 현재 착신 규칙이 하나도 없어 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 혹시 착신 규칙 설정을 도와드릴까요?
+
+예약 슬롯 추가에 대해서는 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:53:05.591",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:53:05.643",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 1,
+    "elapsed_sec": 0.048
+  },
+  {
+    "ts": "2026-07-21T13:53:05.675",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:53:05.678",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": false
+  },
+  {
+    "ts": "2026-07-21T13:53:12.924",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 7.328,
+    "response_len": 158
+  }
+]
+
+########## Case 2: 탐색성(매뉴얼 기반 IntelliDecision) ##########
+
+=== ID-Q01 (Story 1.10 예문 A) ===
+call_id=qatest-193d1b32ea75
+response: 네, AI가 모르는 질문을 받았을 때 관리자님께 직접 연결(호전환)하도록 설정할 수 있습니다. 이 기능을 사용하시려면 '설정 > 착신 제어' 화면에서 호전환 대상 내선을 미리 등록해두셔야 합니다. 설정이 필요하시면 말씀해주세요.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:53:14.972",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:53:15.017",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.042
+  },
+  {
+    "ts": "2026-07-21T13:53:15.047",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:53:15.049",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:53:17.24",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.265,
+    "response_len": 127
+  }
+]
+
+=== ID-Q02 (채팅 자동응답 궁금) ===
+call_id=qatest-9b524ebe6cd7
+response: 안녕하세요! 문의하신 것처럼 문자로 온 문의에도 AI가 자동으로 답장하는 기능이 있습니다. 설정 > 채팅 화면에서 "SIP MESSAGE 수신 시 AI 자동응답 사용"을 켜두시면 됩니다.
+
+아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만드셔야 정상적으로 응대할 수 있어요. 혹시 이 설정에 대해 더 도움을 드릴까요?
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:53:19.306",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:53:19.371",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 1,
+    "elapsed_sec": 0.063
+  },
+  {
+    "ts": "2026-07-21T13:53:19.396",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:53:19.396",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": true
+  },
+  {
+    "ts": "2026-07-21T13:53:21.708",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.4,
+    "response_len": 191
+  }
+]
+
+=== ID-Q03 (예약 슬롯 인원 궁금) ===
+call_id=qatest-53268948c937
+response: 네, 가능합니다. 슬롯을 만드실 때 '예약 가능 인원'을 지정하시면 해당 인원수만큼 같은 시간대에 여러 예약을 받으실 수 있습니다.
+
+혹시 아직 착신 규칙을 설정하지 않으셨는데, 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 이 부분 설정에 도움이 필요하시면 말씀해주세요.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:53:23.765",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:53:23.808",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 1,
+    "elapsed_sec": 0.041
+  },
+  {
+    "ts": "2026-07-21T13:53:23.846",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:53:23.846",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": false
+  },
+  {
+    "ts": "2026-07-21T13:53:26.471",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.704,
+    "response_len": 171
+  }
+]
+
+=== ID-Q04 (캘린더 연동 이점 궁금) ===
+call_id=qatest-cd19d66e42da
+response: Google 계정을 연동하시면 이후 예약이 자동으로 Google 캘린더에 반영됩니다. 설정 > 일반에서 "Google 계정 연동" 버튼으로 로그인하시면 됩니다.
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:53:28.533",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:53:28.604",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 2,
+    "elapsed_sec": 0.067
+  },
+  {
+    "ts": "2026-07-21T13:53:28.628",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:53:28.629",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": false
+  },
+  {
+    "ts": "2026-07-21T13:53:30.514",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 1.977,
+    "response_len": 89
+  }
+]
+
+=== ID-Q05 (대조군 — 순수 정보 질의) ===
+call_id=qatest-7d7d8050841e
+response: 운영 대시보드에서 본인 상태를 "부재중"으로 전환하시면, AI 개입 요청이 자동으로 "확인 후 별도로 안내드리겠습니다"라는 응답으로 처리되고 해당 내역은 이력에 기록됩니다.
+
+아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 혹시 설정을 도와드릴까요?
+intent=self_service business_state=self_service_handled confidence=0.9
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+[
+  {
+    "ts": "2026-07-21T13:53:32.572",
+    "category": "self_service",
+    "event": "self_service_session_detected",
+    "caller_number_normalized": "9003",
+    "owner_normalized": "9003",
+    "is_self_service": true
+  },
+  {
+    "ts": "2026-07-21T13:53:32.616",
+    "category": "self_service",
+    "event": "self_service_rag_search",
+    "rag_hit_count": 1,
+    "elapsed_sec": 0.041
+  },
+  {
+    "ts": "2026-07-21T13:53:32.643",
+    "category": "self_service",
+    "event": "self_service_onboarding_checklist",
+    "incomplete_count": 1
+  },
+  {
+    "ts": "2026-07-21T13:53:32.645",
+    "category": "self_service",
+    "event": "self_service_screen_graph_hit",
+    "has_screen_guidance": false
+  },
+  {
+    "ts": "2026-07-21T13:53:34.908",
+    "category": "self_service",
+    "event": "self_service_agent_response",
+    "elapsed_sec": 2.333,
+    "response_len": 175
+  }
+]
+
+########## 완료 ##########
+결과를 docs/reports/2026-07/ 에 실행 결과 리포트로 정리하고,
+docs/stories/1.10.intelli-decision-intent-tier.story.md 의 QA Results 섹션을 갱신하세요.

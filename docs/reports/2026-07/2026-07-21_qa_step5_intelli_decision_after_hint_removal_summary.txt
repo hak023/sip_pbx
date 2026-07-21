@@ -1,0 +1,57 @@
+=== ID-P01 1턴 (완전한 정보) ===
+response: 페르소나 설명을 '친절한 카페 매니저입니다'로 설정할까요?
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-P01 2턴 (긍정) ===
+response: 안녕하세요! 서비스 이용을 도와드리는 AI입니다. 무엇을 도와드릴까요?
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_screen_graph_hit, self_service_agent_response
+=== ID-P02 (불완전 — 새 값 없음) ===
+response: 페르소나 설명을 어떻게 바꿔드릴까요? 새로운 설명을 알려주시면 반영해 드릴게요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-E01 1턴 (Story 1.10 예문 B, 완전) ===
+response: AI가 에스컬레이션하지 않도록 설정할까요? 이 경우 고객이 먼저 '상담원 연결해 주세요'라고 명시적으로 요청하면 그때만 별도 처리됩니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-E01 2턴 (긍정, 실행 기대) ===
+response: 네, AI 에스컬레이션 모드를 '에스컬레이션 안 함'으로 변경했습니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_screen_graph_hit, self_service_tool_start, self_service_auto_config_applied, self_service_tool_done, self_service_agent_response
+=== ID-E02 (불완전 — 방식 불명) ===
+response: AI 에스컬레이션 방식을 어떻게 변경하시겠어요? '상담원에게 연결', '아무것도 안 함', 'HITL(사람의 개입)' 중에서 선택하실 수 있습니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-C01 1턴 (완전) ===
+response: 채팅 자동응답을 끄시겠어요?
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-C01 2턴 (긍정) ===
+response: 네, 채팅 자동응답 기능을 껐습니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_screen_graph_hit, self_service_tool_start, self_service_auto_config_applied, self_service_tool_done, self_service_agent_response
+=== ID-C02 (불완전 — on/off 불명) ===
+response: 채팅 자동응답 설정 중에 어떤 부분을 어떻게 바꾸고 싶으신가요? 예를 들어, AI 답변 사용 여부나 답변 접두사 등을 말씀해 주시면 됩니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-CC01 (call-control) ===
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-CT01 (contacts) ===
+response: 죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-G01 (general) ===
+response: 안녕하세요! 어떤 도움을 드릴까요?
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-I01 (integrations) ===
+response: 안녕하세요! 먼저, 아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만들어주셔야 정상적으로 응대할 수 있습니다. 이 부분 설정에 도움이 필요하시면 말씀해주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-B01 (booking, Tool 없음) ===
+response: 안녕하세요! 현재 착신 규칙이 하나도 없어 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 혹시 착신 규칙 설정을 도와드릴까요?
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-Q01 (Story 1.10 예문 A) ===
+response: 네, AI가 모르는 질문을 받았을 때 관리자님께 직접 연결(호전환)하도록 설정할 수 있습니다. 이 기능을 사용하시려면 '설정 > 착신 제어' 화면에서 호전환 대상 내선을 미리 등록해두셔야 합니다. 설정이 필요하시면 말씀해주세요.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-Q02 (채팅 자동응답 궁금) ===
+response: 안녕하세요! 문의하신 것처럼 문자로 온 문의에도 AI가 자동으로 답장하는 기능이 있습니다. 설정 > 채팅 화면에서 "SIP MESSAGE 수신 시 AI 자동응답 사용"을 켜두시면 됩니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-Q03 (예약 슬롯 인원 궁금) ===
+response: 네, 가능합니다. 슬롯을 만드실 때 '예약 가능 인원'을 지정하시면 해당 인원수만큼 같은 시간대에 여러 예약을 받으실 수 있습니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-Q04 (캘린더 연동 이점 궁금) ===
+response: Google 계정을 연동하시면 이후 예약이 자동으로 Google 캘린더에 반영됩니다. 설정 > 일반에서 "Google 계정 연동" 버튼으로 로그인하시면 됩니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response
+=== ID-Q05 (대조군 — 순수 정보 질의) ===
+response: 운영 대시보드에서 본인 상태를 "부재중"으로 전환하시면, AI 개입 요청이 자동으로 "확인 후 별도로 안내드리겠습니다"라는 응답으로 처리되고 해당 내역은 이력에 기록됩니다.
+tool_trace_events: self_service_session_detected, self_service_rag_search, self_service_onboarding_checklist, self_service_screen_graph_hit, self_service_agent_response

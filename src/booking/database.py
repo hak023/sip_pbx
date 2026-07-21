@@ -292,6 +292,35 @@ CREATE TABLE IF NOT EXISTS ringback_music_items (
     created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_ringback_items_owner ON ringback_music_items(owner, created_at DESC);
+
+-- 셀프서비스 자동설정 변경 이력 (Story 1.8 FR8 — 감사 로그)
+CREATE TABLE IF NOT EXISTS self_service_config_changes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner       TEXT    NOT NULL,
+    domain      TEXT    NOT NULL,
+    field       TEXT    NOT NULL,
+    old_value   TEXT    NOT NULL DEFAULT '',
+    new_value   TEXT    NOT NULL DEFAULT '',
+    call_id     TEXT    NOT NULL DEFAULT '',
+    changed_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_self_service_config_changes_owner ON self_service_config_changes(owner, changed_at DESC);
+
+-- 셀프서비스 설정 카탈로그/Screen Graph 동적 구성 (Epic 2 Story 2.1)
+-- config_kind: 'catalog' | 'screen_graph'. 같은 kind 내에서 version_no가 증가하며,
+-- is_active=1인 레코드가 정확히 1건이어야 한다(활성 버전 = 롤백 대상).
+CREATE TABLE IF NOT EXISTS self_service_catalog_config (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    config_kind  TEXT    NOT NULL,
+    version_no   INTEGER NOT NULL,
+    config_json  TEXT    NOT NULL DEFAULT '{}',
+    is_active    INTEGER NOT NULL DEFAULT 0,
+    uploaded_by  TEXT    NOT NULL DEFAULT '',
+    note         TEXT    NOT NULL DEFAULT '',
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(config_kind, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_self_service_catalog_config_active ON self_service_catalog_config(config_kind, is_active);
 """
 
 
@@ -308,6 +337,12 @@ _MIGRATIONS = [
     # 연락처 사용자 폴더 (기존 DB: 테이블은 _DDL로 생성, 컬럼만 추가)
     "ALTER TABLE caller_contacts ADD COLUMN folder_id TEXT DEFAULT NULL",
     "CREATE INDEX IF NOT EXISTS idx_caller_contacts_folder ON caller_contacts(owner, folder_id)",
+    # 셀프서비스 카탈로그/Screen Graph 설정 — "누가/언제 현재 활성 버전을 활성화했는지"
+    # 감사 추적용(Epic 2 Story 2.5 AC4). created_at은 버전이 "생성(업로드)"된 시각이고,
+    # activated_at/activated_by는 그 버전이 마지막으로 "활성화(적용/롤백)"된 시각·주체다 —
+    # 별도 감사 로그 테이블 없이 버전 이력 테이블 자체가 감사 로그를 겸한다.
+    "ALTER TABLE self_service_catalog_config ADD COLUMN activated_at TEXT DEFAULT NULL",
+    "ALTER TABLE self_service_catalog_config ADD COLUMN activated_by TEXT NOT NULL DEFAULT ''",
 ]
 
 

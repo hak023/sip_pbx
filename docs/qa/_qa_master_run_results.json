@@ -1,0 +1,352 @@
+[
+  {
+    "id": "A1",
+    "input": {
+      "Current": null
+    },
+    "response": "안녕하세요! 만나 뵙게 되어 반갑습니다.\n\n현재 착신 규칙이 하나도 설정되어 있지 않아요. 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 혹시 설정을 도와드릴까요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-a7d2a766c836",
+    "note": ""
+  },
+  {
+    "id": "A2",
+    "input": {
+      "Current": null
+    },
+    "response": "안녕하세요, 무엇을 도와드릴까요?",
+    "is_self_service": false,
+    "tool_events": "self_service_session_detected",
+    "call_id": "qatest-cffc87344cf1",
+    "note": ""
+  },
+  {
+    "id": "B1",
+    "input": {
+      "Current": null
+    },
+    "response": "안녕하세요! 문의하신 셀프서비스 AI 도우미는 관리자님께서 본인 번호로 전화나 문자를 보내실 때 고객 응대 AI 대신 서비스 사용법을 안내해 드리는 AI입니다. 지금 저와 대화하고 계신 기능이 바로 이것입니다.\n\n아직 착신 규칙이 하나도 없어서 전화를 어떻게 받을지 규칙을 최소 1개 만드셔야 정상적으로 응대할 수 있습니다. 규칙 설정을 도와드릴까요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-57775979ec9a",
+    "note": ""
+  },
+  {
+    "id": "B2",
+    "input": {
+      "Current": null
+    },
+    "response": "죄송합니다. 해당 내용은 제가 알지 못하는 내용입니다. 다른 도움이 필요하시면 말씀해 주세요.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-ab95aa699034",
+    "note": ""
+  },
+  {
+    "id": "C1",
+    "input": {
+      "Current": null
+    },
+    "response": "현재 페르소나 설명은 \"BMAD QA 자동 테스트 전용 가상 테넌트입니다.\"로 설정되어 있습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-f54f00f847a8",
+    "note": ""
+  },
+  {
+    "id": "C2",
+    "input": {
+      "Current": null
+    },
+    "response": "네, 채팅 자동응답 설정 화면에 대한 정보를 알려드릴게요.\n\n현재 'SIP MESSAGE 수신 시 AI 자동응답 사용'은 꺼져 있습니다. '자동응답 표시 접두'는 비어 있어서 기본값인 '[AI 자동응답]'이 사용될 거예요.\n\n이 설정은 /settings/chat-relay 화면에서 'SIP MESSAGE 수신 시 AI 자동응답 사용' 토글로 켜고 끌 수 있고, '자동응답 표시 접두' 텍스트 입력란에 원하는 문구를 넣을 수 있습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-c2778500764c",
+    "note": ""
+  },
+  {
+    "id": "D1",
+    "input": {
+      "Current": null
+    },
+    "response": "안녕하세요! 만나 뵙게 되어 반갑습니다.\n\n혹시 서비스 초기 설정을 아직 완료하지 않으셨다면, 제가 몇 가지를 도와드릴 수 있습니다. 현재 다음 항목들이 아직 설정되지 않았습니다.\n\n*   **서비스 소개(페르소나)**: 조직 이름과 설명을 알려주시면 등록을 도와드릴 수 있습니다.\n*   **AI 에스컬레이션 처리 방식**: AI가 모르는 질문을 받았을 때 어떻게 처리할지(운영자 알림, 상담원 연결, 미사용)를 정해야 합니다.\n*   **착신 규칙**: 전화를 어떻게 받을지 최소 1개 이상의 규칙을 만들어야 AI가 정상적으로 응대할 수 있습니다.\n\n이 설정들을 원하시면 언제든지 말씀해주세요!",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-64e247aa48b6",
+    "note": ""
+  },
+  {
+    "id": "D2",
+    "input": {
+      "Current": null
+    },
+    "response": "네, 어떤 질문이든 편하게 말씀해주세요. 제가 도와드릴 수 있는 부분이라면 최선을 다해 답변해 드리겠습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-02121e934f71",
+    "note": ""
+  },
+  {
+    "id": "E1",
+    "input": {
+      "Current": null
+    },
+    "response": "이번 주에는 총 0번의 전화가 걸려왔습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-56b659b0d556",
+    "note": ""
+  },
+  {
+    "id": "E2",
+    "input": {
+      "Current": null
+    },
+    "response": "죄송합니다. 이용 통계는 '이번 주' 또는 '이번 달'만 조회할 수 있습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-c53ac7cd646f",
+    "note": ""
+  },
+  {
+    "id": "F1-turn1",
+    "input": {
+      "Current": null
+    },
+    "response": "채팅(SIP 문자) 자동응답을 켜도록 설정할까요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-71ac000e42a7",
+    "note": ""
+  },
+  {
+    "id": "F1-turn2",
+    "input": {
+      "Current": null
+    },
+    "response": "안녕하세요! 서비스 이용을 도와드리는 AI입니다. 무엇을 도와드릴까요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-6ed21591803d",
+    "note": ""
+  },
+  {
+    "id": "F2",
+    "input": "GET /api/self-service/config-changes?owner=9001",
+    "response": "{\"id\":1,\"owner\":\"9001\",\"domain\":\"chat-relay\",\"field\":\"message_ai_reply_enabled\",\"old_value\":\"0\",\"new_value\":\"False\",\"call_id\":\"qatest-5d19892c109e\",\"changed_at\":\"2026-07-15 18:09:21\"}",
+    "is_self_service": null,
+    "tool_events": "",
+    "call_id": "",
+    "note": "Story 1.9 변경 이력 API 검증"
+  },
+  {
+    "id": "F3",
+    "input": {
+      "Current": null
+    },
+    "response": "착신 규칙을 추가하시려면 먼저 어떤 규칙으로 추가할지 알려주셔야 해요. 예를 들어, 특정 시간대에 AI가 응대하게 하거나, 특정 번호로 착신 전환하게 하는 등의 규칙을 만들 수 있습니다.\n\n혹시 착신 규칙이 하나도 없어서 안내를 드려야 할 것 같아요. 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 어떤 규칙을 만들고 싶으신가요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-6840bfba3958",
+    "note": ""
+  },
+  {
+    "id": "F4",
+    "input": {
+      "Current": null
+    },
+    "response": "죄송합니다. 요청하신 착신 규칙 변경은 현재 시스템에서 직접 처리해 드릴 수 없습니다. 혹시 다른 도움이 필요하시면 말씀해 주세요.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-489183cfb6e1",
+    "note": ""
+  },
+  {
+    "id": "H1",
+    "input": {
+      "Current": null
+    },
+    "response": "네, AI가 모르는 질문을 받았을 때 관리자님께 전화(호전환)하도록 설정할 수 있습니다. '상담원 직접 연결'이라는 방식인데요, 이 기능을 사용하시려면 '설정 > 착신 제어' 화면에서 호전환 대상 내선 번호를 미리 등록해두셔야 합니다. 설정이 필요하시면 말씀해주세요.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-2feb0f0d4baa",
+    "note": ""
+  },
+  {
+    "id": "H2-turn1",
+    "input": {
+      "Current": null
+    },
+    "response": "AI가 에스컬레이션하지 않도록 설정할까요? 이 경우 고객이 먼저 '상담원 연결해 주세요'라고 명시적으로 요청하면 그때만 별도 처리됩니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-9d140b715db7",
+    "note": ""
+  },
+  {
+    "id": "H2-turn2",
+    "input": {
+      "Current": null
+    },
+    "response": "네, AI가 에스컬레이션하지 않도록 설정되었습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_auto_config_applied,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-47af3ef1c394",
+    "note": ""
+  },
+  {
+    "id": "H3",
+    "input": {
+      "Current": null
+    },
+    "response": "페르소나 설명을 어떤 내용으로 변경하시겠어요? 말씀해주시면 제가 바꿔드릴 수 있습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-51ad1e26a61c",
+    "note": ""
+  },
+  {
+    "id": "H4",
+    "input": {
+      "Current": null
+    },
+    "response": "구글 캘린더 연동을 해제하시려면 설정 > 일반에서 \"연동 해제\" 버튼을 누르시면 됩니다. 연동을 해제하면 이후 예약은 더 이상 캘린더에 자동 반영되지 않습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-3d0b43075d53",
+    "note": ""
+  },
+  {
+    "id": "H5",
+    "input": {
+      "Current": null
+    },
+    "response": "운영 대시보드에서 본인 상태를 '부재중'으로 전환하시면, AI 개입 요청은 자동으로 \"확인 후 별도로 안내드리겠습니다\"라는 응답으로 처리되고 요청 내역은 이력에 기록됩니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-1af31aeb98d2",
+    "note": ""
+  },
+  {
+    "id": "J1",
+    "input": {
+      "Current": null
+    },
+    "response": "예약 관련 통화 내역 2건을 찾았습니다.\n\n- 010-2222-2222님과의 7월 20일 통화: 예약 취소 요청 문의였습니다.\n- 010-1111-1111님과의 7월 18일 통화: 예약 문의 관련 통화였습니다.\n\n더 궁금한 점 있으신가요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-4dd9c3ee5a73",
+    "note": ""
+  },
+  {
+    "id": "J2",
+    "input": {
+      "Current": null
+    },
+    "response": "이번 달에 가장 많이 전화한 번호는 010-1111-1111으로 2번 전화했습니다. 그 외에 010-3333-3333, 010-2222-2222 번호에서 각각 1번씩 전화가 왔습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-f953e8b00420",
+    "note": ""
+  },
+  {
+    "id": "J3",
+    "input": {
+      "Current": null
+    },
+    "response": "네, 오늘 1건의 부재중 전화가 있습니다. 010-3333-3333에서 걸려온 전화이며, 오전 6시 37분에 시작되었습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-b9f86bff833a",
+    "note": ""
+  },
+  {
+    "id": "J4",
+    "input": {
+      "Current": null
+    },
+    "response": "죄송합니다. 통계는 이번 주 또는 이번 달 기준으로만 조회가 가능합니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-0f2bfebfcdb2",
+    "note": ""
+  },
+  {
+    "id": "K1",
+    "input": {
+      "Current": null
+    },
+    "response": "안녕하세요! 만나서 반갑습니다.\n\n현재 착신 규칙이 하나도 설정되어 있지 않아요. 전화를 어떻게 받을지 규칙을 최소 1개 만들어야 정상적으로 응대할 수 있습니다. 혹시 착신 규칙 설정을 도와드릴까요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_onboarding_checklist,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-db660ce6ab7f",
+    "note": ""
+  },
+  {
+    "id": "K2",
+    "input": {
+      "Current": null
+    },
+    "response": "현재 채팅 자동응답 기능은 꺼져 있습니다. 문자로 들어온 질문에 AI가 자동으로 답장하게 하려면 \"SIP MESSAGE 수신 시 AI 자동응답 사용\"을 켜짐으로 변경해야 합니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-2c7ce65c5bdf",
+    "note": ""
+  },
+  {
+    "id": "K3",
+    "input": {
+      "Current": null
+    },
+    "response": "채팅 자동응답 기능을 끄시겠어요?",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_agent_response",
+    "call_id": "qatest-15c843de84d7",
+    "note": ""
+  },
+  {
+    "id": "K4",
+    "input": {
+      "Current": null
+    },
+    "response": "네, 채팅 자동응답 기능을 껐습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_auto_config_applied,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-7a0c9b7642ac",
+    "note": ""
+  },
+  {
+    "id": "K5",
+    "input": {
+      "Current": null
+    },
+    "response": "이번 달에는 총 4번의 통화가 있었고, 그 중 3번은 AI가 응대했습니다. 상담원 연결(HITL)은 없었으며, AI의 평균 응대 신뢰도는 0%였습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-1a4e0fe4f87e",
+    "note": ""
+  },
+  {
+    "id": "K6",
+    "input": {
+      "Current": null
+    },
+    "response": "'예약' 키워드로 검색된 통화는 총 2건입니다.\n\n- 010-2222-2222님과의 통화 (7월 20일): 예약 취소 요청 문의였습니다.\n- 010-1111-1111님과의 통화 (7월 18일): 예약 문의 관련 통화였습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-11e79906f670",
+    "note": ""
+  },
+  {
+    "id": "K7",
+    "input": {
+      "Current": null
+    },
+    "response": "네, 오늘 수신하지 못한 전화가 1건 있습니다. 010-3333-3333번으로 걸려온 전화이며, 오늘 오전 6시 37분에 있었습니다.",
+    "is_self_service": true,
+    "tool_events": "self_service_session_detected,self_service_rag_search,self_service_intent_tier_hint,self_service_screen_graph_hit,self_service_tool_start,self_service_tool_done,self_service_agent_response",
+    "call_id": "qatest-04bd73dc0b4e",
+    "note": ""
+  }
+]

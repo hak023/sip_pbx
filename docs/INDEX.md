@@ -8,26 +8,28 @@
 
 ## 핵심 문서
 
-| 문서                                     | 설명                                                            |
-| ---------------------------------------- | --------------------------------------------------------------- |
-| [README.md](README.md)                   | `docs` 폴더 안내, 주요 문서 표, 읽는 순서                       |
-| [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md) | 시스템 전체 개요, 기능, 유저 스토리, 다이어그램 링크 (소개자료) |
-| [QUICK_START.md](QUICK_START.md)         | 설치 및 실행 가이드                                             |
+| 문서                                                                                                                                                             | 설명                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| [README.md](README.md)                                                                                                                                           | `docs` 폴더 안내, 주요 문서 표, 읽는 순서                                                                                    |
+| [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md)                                                                                                                         | 시스템 전체 개요, 기능, 유저 스토리, 다이어그램 링크 (소개자료)                                                              |
+| [QUICK_START.md](QUICK_START.md)                                                                                                                                 | 설치 및 실행 가이드                                                                                                          |
+| [../SKILL.md](../SKILL.md) 및 [../../.github/instructions/sip-pbx-bmad-harness.instructions.md](../../.github/instructions/sip-pbx-bmad-harness.instructions.md) | **문서·BMAD 개발·테스트 하네스** — AI가 모를 때 문서 찾는 규칙, 요청→PRD→architecture→story 진행 순서, 테스트+QA 리포트 연동 |
 
 ### Canonical 아키텍처 (`docs/architecture/`)
 
 `design/`의 동명·유사 주제와 겹칠 수 있다. **구현 스택·컴포넌트 경계**는 아래를 우선한다.
 
-| 문서                                                                                                                | 설명                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| [technical-architecture.md](architecture/technical-architecture.md)                                                 | **현재 리포** 기준 기술 아키텍처(구현·스택)                                           |
-| [production-deployment-architecture.md](architecture/production-deployment-architecture.md)                         | **상용 통합** 목표(교환기/WTIMS/API/용량/비용/외부 연동 개발)                         |
-| [ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md)                                             | AI Voicebot 백엔드                                                                    |
-| [frontend-architecture.md](architecture/frontend-architecture.md)                                                   | Next.js 운영 콘솔                                                                     |
-| [voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md)                                     | Voice AI 대화 엔진                                                                    |
-| [realtime-call-dashboard-design.md](architecture/realtime-call-dashboard-design.md)                                 | 실시간 통화 대시보드 설계(문서)                                                       |
-| [realtime-call-dashboard-implementation-summary.md](architecture/realtime-call-dashboard-implementation-summary.md) | 위 항목 구현 요약                                                                     |
-| [self-service-ai-assistant-architecture.md](architecture/self-service-ai-assistant-architecture.md)                 | **Brownfield Architecture(초안)** — 셀프서비스 AI 도우미 컴포넌트·통합 지점·소스 트리 |
+| 문서                                                                                                                | 설명                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [technical-architecture.md](architecture/technical-architecture.md)                                                 | **현재 리포** 기준 기술 아키텍처(구현·스택)                                             |
+| [coding-standards.md](architecture/coding-standards.md)                                                             | BMAD Dev 에이전트 상시 로드 문서 — 로깅/DB스키마/LLM Tool-calling 등 검증된 코드 컨벤션 |
+| [production-deployment-architecture.md](architecture/production-deployment-architecture.md)                         | **상용 통합** 목표(교환기/WTIMS/API/용량/비용/외부 연동 개발)                           |
+| [ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md)                                             | AI Voicebot 백엔드                                                                      |
+| [frontend-architecture.md](architecture/frontend-architecture.md)                                                   | Next.js 운영 콘솔                                                                       |
+| [voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md)                                     | Voice AI 대화 엔진                                                                      |
+| [realtime-call-dashboard-design.md](architecture/realtime-call-dashboard-design.md)                                 | 실시간 통화 대시보드 설계(문서)                                                         |
+| [realtime-call-dashboard-implementation-summary.md](architecture/realtime-call-dashboard-implementation-summary.md) | 위 항목 구현 요약                                                                       |
+| [self-service-ai-assistant-architecture.md](architecture/self-service-ai-assistant-architecture.md)                 | **Brownfield Architecture(초안)** — 셀프서비스 AI 도우미 컴포넌트·통합 지점·소스 트리   |
 
 **기타**: [architecture/](architecture/) 내 나머지 `.md`는 INDEX에 모두 열거하지 않는다. 폴더 목록·검색으로 보완한다.
 
@@ -35,13 +37,14 @@
 
 ## 제품·범위 (`docs/product/`)
 
-| 문서                                                                             | 설명                                                                                             |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [prd.md](product/prd.md)                                                         | **마스터 PRD** (SIP Core + AI + 사업 요약 + MM); 구현 스냅샷                                     |
-| [prd-detailed-phase1-4.md](product/prd-detailed-phase1-4.md)                     | Phase 1–4 **부록** — 상세 FR·User Story                                                          |
-| [project-plan.md](product/project-plan.md)                                       | 시장·재무·GTM **원문 보관**(기획 시점; 요약은 `prd.md`)                                          |
-| [self-service-ai-assistant-brief.md](product/self-service-ai-assistant-brief.md) | **Project Brief(초안)** — 셀프서비스 AI 도우미(본인 번호 통화·문자 시 사용법·설정 안내·자동설정) |
-| [self-service-ai-assistant-prd.md](product/self-service-ai-assistant-prd.md)     | **Brownfield PRD(초안)** — 셀프서비스 AI 도우미 Epic 1·Story 1.1~1.9, FR/NFR/CR                  |
+| 문서                                                                             | 설명                                                                                                                                         |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [prd.md](product/prd.md)                                                         | **마스터 PRD** (SIP Core + AI + 사업 요약 + MM); 구현 스냅샷                                                                                 |
+| [prd-detailed-phase1-4.md](product/prd-detailed-phase1-4.md)                     | Phase 1–4 **부록** — 상세 FR·User Story                                                                                                      |
+| [project-plan.md](product/project-plan.md)                                       | 시장·재무·GTM **원문 보관**(기획 시점; 요약은 `prd.md`)                                                                                      |
+| [self-service-ai-assistant-brief.md](product/self-service-ai-assistant-brief.md) | **Project Brief(초안)** — 셀프서비스 AI 도우미(본인 번호 통화·문자 시 사용법·설정 안내·자동설정)                                             |
+| [self-service-ai-assistant-prd.md](product/self-service-ai-assistant-prd.md)     | **Brownfield PRD(초안)** — 셀프서비스 AI 도우미 Epic 1(Story 1.1~1.13) + Epic 2(설정 카탈로그/Screen Graph 동적화, Story 2.1~2.8), FR/NFR/CR |
+| [self-service-manual-content.md](product/self-service-manual-content.md)         | **셀프서비스 AI RAG 지식 소스** — 관리자용 서비스 이용 매뉴얼(Q&A 형식, Story 1.3 색인 대상)                                                 |
 
 ---
 
@@ -49,17 +52,38 @@
 
 BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파일은 Dev 에이전트가 아키텍처 문서를 다시 읽지 않아도 되도록 Dev Notes에 충분한 컨텍스트를 포함한다.
 
-| Story | 문서 | 상태 |
-|---|---|---|
-| 1.1 | [1.1.self-call-detection.story.md](stories/1.1.self-call-detection.story.md) | Draft |
-| 1.2 | [1.2.self-service-conversation-lane.story.md](stories/1.2.self-service-conversation-lane.story.md) | Draft |
-| 1.3 | [1.3.self-service-manual-rag.story.md](stories/1.3.self-service-manual-rag.story.md) | Draft |
-| 1.4 | [1.4.settings-catalog-readonly.story.md](stories/1.4.settings-catalog-readonly.story.md) | Draft |
-| 1.5 | [1.5.onboarding-checklist.story.md](stories/1.5.onboarding-checklist.story.md) | Draft |
-| 1.6 | [1.6.settings-query-tool.story.md](stories/1.6.settings-query-tool.story.md) | Draft |
-| 1.7 | [1.7.usage-stats-tool.story.md](stories/1.7.usage-stats-tool.story.md) | Draft |
-| 1.8 | [1.8.auto-config-write-tool.story.md](stories/1.8.auto-config-write-tool.story.md) | Draft |
-| 1.9 | [1.9.config-change-history-page.story.md](stories/1.9.config-change-history-page.story.md) | Draft |
+| Story | 문서                                                                                                                   | 상태                                                                                                               |
+| ----- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 1.1   | [1.1.self-call-detection.story.md](stories/1.1.self-call-detection.story.md)                                           | Review                                                                                                             |
+| 1.2   | [1.2.self-service-conversation-lane.story.md](stories/1.2.self-service-conversation-lane.story.md)                     | Review                                                                                                             |
+| 1.3   | [1.3.self-service-manual-rag.story.md](stories/1.3.self-service-manual-rag.story.md)                                   | Review                                                                                                             |
+| 1.4   | [1.4.settings-catalog-readonly.story.md](stories/1.4.settings-catalog-readonly.story.md)                               | Review                                                                                                             |
+| 1.5   | [1.5.onboarding-checklist.story.md](stories/1.5.onboarding-checklist.story.md)                                         | Review                                                                                                             |
+| 1.6   | [1.6.settings-query-tool.story.md](stories/1.6.settings-query-tool.story.md)                                           | Review                                                                                                             |
+| 1.7   | [1.7.usage-stats-tool.story.md](stories/1.7.usage-stats-tool.story.md)                                                 | Review                                                                                                             |
+| 1.8   | [1.8.auto-config-write-tool.story.md](stories/1.8.auto-config-write-tool.story.md)                                     | Review                                                                                                             |
+| 1.9   | [1.9.config-change-history-page.story.md](stories/1.9.config-change-history-page.story.md)                             | Review                                                                                                             |
+| 1.10  | [1.10.intelli-decision-intent-tier.story.md](stories/1.10.intelli-decision-intent-tier.story.md)                       | Done                                                                                                               |
+| 1.11  | [1.11.screen-graph-guided-assistance.story.md](stories/1.11.screen-graph-guided-assistance.story.md)                   | Done                                                                                                               |
+| 1.12  | [1.12.screen-graph-frontend-viewer.story.md](stories/1.12.screen-graph-frontend-viewer.story.md)                       | Done                                                                                                               |
+| 1.13  | [1.13.call-history-nlq.story.md](stories/1.13.call-history-nlq.story.md)                                               | Done                                                                                                               |
+| 1.14  | [1.14.empty-candidate-string-field-mitigation.story.md](stories/1.14.empty-candidate-string-field-mitigation.story.md) | Done(근본 원인 수정 + 실서버 검증 완료, [리포트](reports/2026-07/2026-07-21_story_1.14_and_2.8_implementation.md)) |
+
+### Epic 2 — 설정 카탈로그/Screen Graph 동적화 및 IntelliDecision 신뢰성 개선 (2026-07-20 신설, 구현 진행 중)
+
+| Story | 문서                                                                                             | 상태 |
+| ----- | ------------------------------------------------------------------------------------------------ | ---- |
+| 2.1   | [2.1.catalog-config-storage.story.md](stories/2.1.catalog-config-storage.story.md)               | Done |
+| 2.2   | [2.2.catalog-loader-dynamic.story.md](stories/2.2.catalog-loader-dynamic.story.md)               | Done |
+| 2.3   | [2.3.screen-graph-dynamic.story.md](stories/2.3.screen-graph-dynamic.story.md)                   | Done |
+| 2.4   | [2.4.frontend-catalog-export.story.md](stories/2.4.frontend-catalog-export.story.md)             | Done |
+| 2.5   | [2.5.frontend-catalog-import.story.md](stories/2.5.frontend-catalog-import.story.md)             | Done |
+| 2.6   | [2.6.intelli-decision-hint-removal.story.md](stories/2.6.intelli-decision-hint-removal.story.md) | Done |
+| 2.7   | [2.7.epic2-integration-qa.story.md](stories/2.7.epic2-integration-qa.story.md)                   | Done |
+| 2.8   | [2.8.manual-domain-mapping-dynamic.story.md](stories/2.8.manual-domain-mapping-dynamic.story.md) | Done |
+
+구현 리포트: [2026-07-21_self_service_epic2_story_2.1_to_2.5_implementation.md](reports/2026-07/2026-07-21_self_service_epic2_story_2.1_to_2.5_implementation.md), [2026-07-21_self_service_epic2_story2.5_iv2_and_story2.6_hint_removal.md](reports/2026-07/2026-07-21_self_service_epic2_story2.5_iv2_and_story2.6_hint_removal.md), [2026-07-21_self_service_epic2_completion_report.md](reports/2026-07/2026-07-21_self_service_epic2_completion_report.md), [2026-07-21_story_1.14_and_2.8_implementation.md](reports/2026-07/2026-07-21_story_1.14_and_2.8_implementation.md)(Story 2.8 구현 포함)
+
 
 ---
 
@@ -75,13 +99,18 @@ BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파
 
 ## QA (`docs/qa/`)
 
-| 문서                                                  | 설명         |
-| ----------------------------------------------------- | ------------ |
-| [README.md](qa/README.md)                             | QA 폴더 안내 |
-| [test-strategy.md](qa/test-strategy.md)               | 테스트 전략  |
-| [test-execution-guide.md](qa/test-execution-guide.md) | 실행 가이드  |
-| [test-results.md](qa/test-results.md)                 | 결과 기록    |
-| [test-detailed-report.md](qa/test-detailed-report.md) | 상세 리포트  |
+| 문서                                                                                                              | 설명                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [README.md](qa/README.md)                                                                                         | QA 폴더 안내                                                                                                                                                                                                    |
+| [test-strategy.md](qa/test-strategy.md)                                                                           | 테스트 전략                                                                                                                                                                                                     |
+| [test-execution-guide.md](qa/test-execution-guide.md)                                                             | 실행 가이드                                                                                                                                                                                                     |
+| [test-results.md](qa/test-results.md)                                                                             | 결과 기록                                                                                                                                                                                                       |
+| [test-detailed-report.md](qa/test-detailed-report.md)                                                             | 상세 리포트                                                                                                                                                                                                     |
+| [self-service-ai-assistant-master-qa.md](qa/self-service-ai-assistant-master-qa.md)                               | **셀프서비스 AI 도우미 통합 QA 케이스 문서(Master, 2026-07-20)** — Story 1.1~1.13 전체를 기능 분기(Branch A~K)별로 정리, 다중 Tool 연계 시나리오 포함, 실행 결과·발견된 결함 기록. **신규 QA는 이 문서를 사용** |
+| [self-service-ai-assistant-bmad-qa-test-plan.md](qa/self-service-ai-assistant-bmad-qa-test-plan.md)               | (이력 보존, master-qa.md로 통합됨) 셀프서비스 AI 도우미 BMAD QA 자동 테스트 항목서                                                                                                                              |
+| [self-service-ai-assistant-intelli-decision-qa-plan.md](qa/self-service-ai-assistant-intelli-decision-qa-plan.md) | (이력 보존, master-qa.md Branch H로 통합됨) Story 1.10 IntelliDecision 전체 카탈로그 매트릭스                                                                                                                   |
+| [self-service-ai-assistant-screen-graph-qa-plan.md](qa/self-service-ai-assistant-screen-graph-qa-plan.md)         | (이력 보존, master-qa.md Branch I로 통합됨) Story 1.11/1.12 Screen Graph QA                                                                                                                                     |
+| [self-service-ai-assistant-call-history-nlq-qa-plan.md](qa/self-service-ai-assistant-call-history-nlq-qa-plan.md) | (이력 보존, master-qa.md Branch J로 통합됨) Story 1.13 통화 이력 자연어 질의 QA(실서버 검증 완료)                                                                                                               |
 
 ---
 
@@ -151,16 +180,18 @@ BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파
 
 ### 지식베이스 / RAG
 
-| 문서                                                                                                  | 설명              |
-| ----------------------------------------------------------------------------------------------------- | ----------------- |
-| [CHROMADB_CATEGORY_DESIGN.md](design/CHROMADB_CATEGORY_DESIGN.md)                                     | ChromaDB 카테고리 |
-| [KNOWLEDGE_MANAGEMENT_DESIGN.md](design/KNOWLEDGE_MANAGEMENT_DESIGN.md)                               | 지식 관리         |
-| [KNOWLEDGE_CLASSIFICATION_AND_INCOMING_DATA.md](design/KNOWLEDGE_CLASSIFICATION_AND_INCOMING_DATA.md) | 분류·수신 데이터  |
-| [KNOWLEDGE_DOC_TYPE_DESIGN.md](design/KNOWLEDGE_DOC_TYPE_DESIGN.md)                                   | 문서 유형         |
-| [KNOWLEDGE_STAGE3_AND_LOGGING.md](design/KNOWLEDGE_STAGE3_AND_LOGGING.md)                             | 추출 3단계·로깅   |
-| [knowledge-extraction-upgrade.md](design/knowledge-extraction-upgrade.md)                             | 추출 업그레이드   |
-| [RAG_DB_LOGGING.md](design/RAG_DB_LOGGING.md)                                                         | RAG DB 로깅       |
-| [UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md](design/UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md)               | 미응답·후속       |
+| 문서                                                                                                      | 설명                                                               |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [CHROMADB_CATEGORY_DESIGN.md](design/CHROMADB_CATEGORY_DESIGN.md)                                         | ChromaDB 카테고리                                                  |
+| [KNOWLEDGE_MANAGEMENT_DESIGN.md](design/KNOWLEDGE_MANAGEMENT_DESIGN.md)                                   | 지식 관리                                                          |
+| [KNOWLEDGE_CLASSIFICATION_AND_INCOMING_DATA.md](design/KNOWLEDGE_CLASSIFICATION_AND_INCOMING_DATA.md)     | 분류·수신 데이터                                                   |
+| [KNOWLEDGE_DOC_TYPE_DESIGN.md](design/KNOWLEDGE_DOC_TYPE_DESIGN.md)                                       | 문서 유형                                                          |
+| [KNOWLEDGE_STAGE3_AND_LOGGING.md](design/KNOWLEDGE_STAGE3_AND_LOGGING.md)                                 | 추출 3단계·로깅                                                    |
+| [knowledge-extraction-upgrade.md](design/knowledge-extraction-upgrade.md)                                 | 추출 업그레이드                                                    |
+| [RAG_DB_LOGGING.md](design/RAG_DB_LOGGING.md)                                                             | RAG DB 로깅                                                        |
+| [UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md](design/UNKNOWN_ANSWER_AND_FOLLOW_UP_DESIGN.md)                   | 미응답·후속                                                        |
+| [SELF_SERVICE_HELP_DOCS_DESIGN.md](design/SELF_SERVICE_HELP_DOCS_DESIGN.md)                               | 셀프서비스 도움말 Q&A ChromaDB 색인·API 설계                       |
+| [SELF_SERVICE_SCREEN_GUIDED_GRAPHRAG_RESEARCH.md](design/SELF_SERVICE_SCREEN_GUIDED_GRAPHRAG_RESEARCH.md) | 화면 안내형 응대 리서치 — GraphRAG Brownfield 검토(구현 전 리서치) |
 
 ### 호 전환 / 운영자
 

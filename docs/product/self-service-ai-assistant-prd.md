@@ -1,7 +1,7 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement PRD
 
 **작성일**: 2026-07-14
-**버전**: 0.2 (Draft — 1차 리뷰 반영: 자동설정 범위를 "설정 카탈로그" 기반 전체 프론트엔드 API 도메인 커버로 확장, 온보딩 체크리스트 Story 추가)
+**버전**: 0.5 (2026-07-20 갱신 — Epic 2 신설: 설정 카탈로그/Screen Graph 동적화(FR16-22, NFR6-8, CR5-6) + IntelliDecision 키워드 힌트 제거(FR23) + 매뉴얼-도메인 매핑 동적화(FR24), Story 2.1~2.8 추가)
 **상태**: 초안 — Epic/Story 확정 전
 **관련 문서**:
 - [self-service-ai-assistant-brief.md](self-service-ai-assistant-brief.md) — 본 PRD의 상위 Project Brief
@@ -68,6 +68,8 @@ SmartPBX AI는 SIP B2BUA + 실시간 음성 AI(LangGraph 오케스트레이션, 
 | 초안 생성   | 2026-07-14 | 0.1     | Project Brief 기반 브라운필드 PRD 최초 작성                                                                                                              | Copilot (BMAD PM 역할) |
 | 범위 확장   | 2026-07-14 | 0.2     | 자동설정을 "설정 카탈로그" 기반 전체 도메인 커버로 확장, 온보딩 체크리스트 Story 추가(Story 1.4), FR/NFR 재정의                                          | Copilot (BMAD PM 역할) |
 | 시퀀싱 정정 | 2026-07-14 | 0.3     | SM 리뷰에서 온보딩 Story가 미생성 카탈로그에 의존하는 순서 오류 발견 → 설정 카탈로그 구축을 Story 1.4로 앞당김, 이후 Story를 1.5~1.9로 재배치(9개 Story) | Copilot (BMAD SM 역할) |
+| 범위 추가   | 2026-07-20 | 0.4     | 통화 이력 자연어 질의(Call History NLQ) 기능을 Post-MVP에서 MVP로 승격 — FR15/NFR5 신설, Story 1.13 추가(총 13개 Story)                                  | Copilot (BMAD PM 역할) |
+| Epic 2 신설 | 2026-07-20 | 0.5     | 설정 카탈로그/Screen Graph 하드코딩 의존도 개선 + IntelliDecision 키워드 힌트 제거를 위한 Epic 2 신설(FR16-24, NFR6-8, CR5-6, Story 2.1~2.8)             | Copilot (BMAD PM 역할) |
 
 ---
 
@@ -86,6 +88,21 @@ SmartPBX AI는 SIP B2BUA + 실시간 음성 AI(LangGraph 오케스트레이션, 
 - **FR9**: 프론트엔드에 "AI 자동설정 변경 이력"을 조회할 수 있는 신규 읽기 전용 페이지가 추가되어야 한다.
 - **FR10**: 자동설정 Tool이 호출하는 로직은 프론트엔드 설정 화면이 호출하는 것과 **동일한 서비스 레이어(내부 함수/API)**를 재사용해야 한다(로직 이중 구현 금지).
 - **FR11**: 설정 카탈로그는 신규 설정 페이지/필드 추가 시 **카탈로그 등록만으로 자동설정 Tool이 이를 인식**하도록 확장 가능한 구조여야 한다(도메인별 하드코딩된 개별 Tool 추가 불필요).
+- **FR12 (IntelliDecision)**: 시스템은 설정 변경 관련 발화를 **"탐색성(궁금해서 물어봄)"** 과 **"실행성(명확히 변경을 요청)"** 두 유형으로 구분하여 응대해야 한다.
+  - 탐색성 발화(예: "~해줄 수 있어?", "그런 기능 있어?")에는 매뉴얼 참고 정보를 바탕으로 기능·사전 준비사항을 설명하고 "필요하면 말씀해 주세요"처럼 다음 행동을 제안만 하며, 이 단계에서 자동설정 Tool을 호출하지 않는다.
+  - 실행성 발화(예: "~설정해줘", "~꺼줘")에는 변경 대상(도메인/필드/값)이 이미 분명하므로 "[항목]을 [값]으로 설정할까요?" 형태로 즉시 확인 발화를 하되, 매뉴얼에 해당 변경의 부작용이 있으면 함께 안내한다.
+  - 두 유형의 최종 판단은 키워드 매칭이 아닌 LLM 판단을 우선하며(기존 의도 분류 원칙과 동일), 발화 패턴 기반 힌트는 참고용 신호로만 프롬프트에 제공한다.
+- **FR13 (화면 안내형 응대 — Screen Graph)**: 시스템은 탐색성 발화(기능 설명·설정 방법 질문)에 답할 때, 매뉴얼 텍스트 설명에 더해 **해당 설정을 실제로 변경할 수 있는 프론트엔드 화면(라우트·화면 내 UI 요소)** 을 함께 안내해야 한다(예: "설정 > AI 에스컬레이션 화면에서 라디오 버튼 3개 중 하나를 선택하시면 됩니다").
+  - 이를 위해 **설정 카탈로그 도메인 ↔ 프론트엔드 화면(라우트) ↔ 화면 내 UI 요소**를 연결하는 경량 지식 그래프(Screen Graph)를 신규로 구축해야 한다.
+  - 화면 정보가 없는 도메인(프론트엔드 전용 폼이 없는 경우)은 화면 안내를 생략하고 기존 텍스트 설명만 제공해야 한다(존재하지 않는 화면을 안내하지 않음).
+  - Screen Graph는 매뉴얼 Q&A의 기존 `related_domain` 태그를 그대로 재사용해 연결하며, 별도 그래프 데이터베이스 없이 `settings_catalog.py`와 동일한 정적 레지스트리 패턴으로 구현한다(Full GraphRAG 프레임워크 도입은 본 코드베이스 규모에 부적합 — [SELF_SERVICE_SCREEN_GUIDED_GRAPHRAG_RESEARCH.md](../design/SELF_SERVICE_SCREEN_GUIDED_GRAPHRAG_RESEARCH.md) 리서치 결론 참고).
+- **FR14 (Screen Graph 프론트엔드 열람)**: 프론트엔드에 Screen Graph(도메인별 화면 라우트·UI 요소 연결 정보)를 **읽기 전용으로 열람**할 수 있는 화면이 추가되어야 한다(기존 `settings/ai-assistant/docs` 도움말 페이지의 신규 탭으로 통합). 이를 통해 관리자가 AI 도우미가 어떤 화면을 안내할 수 있는지 직접 확인할 수 있다.
+- **FR15 (통화 이력 자연어 질의, Call History NLQ — 2026-07-20 범위 추가)**: 시스템은 테넌트 관리자가 자기 번호(owner)의 통화 이력을 자연어로 질의하면 다음 3가지 유형에 응답하는 Tool을 제공해야 한다.
+  1. **키워드 검색**: "~라고 얘기한 통화 찾아줘"처럼 특정 키워드가 포함된 통화(`call_records.call_summary` 기준)를 검색해 발신번호·통화시각·요약을 안내한다.
+  2. **기간별 최다 발신 번호 집계**: "한 달 내에 제일 많이 전화한 번호 찾아줘"처럼 기간(오늘/이번 주/이번 달) 내 발신 번호별 통화 건수를 집계해 상위 번호를 안내한다.
+  3. **오늘자 미응답(수신 못한) 번호 조회**: "오늘 수신받지 못한 번호를 알려줘"처럼 오늘 걸려왔지만 응답(AI/사람 모두)되지 않은 통화의 발신번호를 조회해 안내한다.
+
+  이 Tool은 새로운 벡터 임베딩 인덱스를 구축하지 않고, 기존 `call-history` API가 사용하는 `call_records`(SQLite) 데이터를 owner로 필터링한 뒤 구조화 검색·집계하는 방식으로 구현한다(설계 결정 근거는 NFR5 참고).
 
 ### Non Functional
 
@@ -93,6 +110,7 @@ SmartPBX AI는 SIP B2BUA + 실시간 음성 AI(LangGraph 오케스트레이션, 
 - **NFR2**: 신규 ChromaDB doc_type(`self_service_manual` 등)은 기존 `owner` 필터 기반 테넌트 격리 원칙을 그대로 따라야 한다.
 - **NFR3**: 통계 조회 Tool은 캐시 없이 매 요청 최신값을 반영하거나, 명확한 TTL(예: 1분) 내 캐시를 사용해야 한다.
 - **NFR4**: 자동설정 Tool은 **설정 카탈로그에 등록된 항목을 기본 허용**하고, **명시적 제외 목록(destructive/비가역 항목)**에 있는 항목만 변경을 거부해야 한다(허용 목록 방식이 아닌 제외 목록 방식 — 카탈로그 등록이 곧 자동설정 활성화 조건).
+- **NFR5 (Call History NLQ 구현 방식)**: FR15는 "개념적으로는 RAG(자연어 질의 → 지식 소스 검색 → 응답 생성)"이지만, 통화 이력은 이미 구조화된 SQLite(`call_records`)에 요약 텍스트(`call_summary`)까지 포함해 저장되어 있으므로, Story 1.11(Screen Graph)이 Full GraphRAG 대신 경량 정적 레지스트리를 택한 것과 동일한 원칙으로 **신규 벡터 임베딩 파이프라인을 구축하지 않는다**. 키워드 검색은 `call_summary` 텍스트 매칭으로, 집계·미응답 조회는 SQL 필터/카운트로 처리하고 LLM은 결과를 자연어로 요약하는 역할만 수행한다.
 
 ### Compatibility Requirements
 
@@ -155,7 +173,7 @@ External Dependencies: LLM API(Gemini 계열), STT/TTS(Google Cloud 등)
 
 ### Epic Approach
 
-**Epic Structure Decision**: 단일 Epic(Epic 1)으로 구성한다. 이유: 이 기능은 하나의 사용자 여정(테넌트 관리자의 셀프서비스)을 완성하기 위한 연속된 단계들이며, 서로 강하게 의존적이다(감지 → 라우팅 → 정보 안내 → **설정 카탈로그 구축** → 온보딩 안내 → 설정 조회 → 통계 조회 → 자동설정(쓰기) → 가시성). 브라운필드 권장사항대로 여러 개의 작은 Epic으로 쪼개기보다 **하나의 Epic 내 9개 순차 Story**로 리스크를 점진적으로 낮추며 진행한다.
+**Epic Structure Decision**: 단일 Epic(Epic 1)으로 구성한다. 이유: 이 기능은 하나의 사용자 여정(테넌트 관리자의 셀프서비스)을 완성하기 위한 연속된 단계들이며, 서로 강하게 의존적이다(감지 → 라우팅 → 정보 안내 → **설정 카탈로그 구축** → 온보딩 안내 → 설정 조회 → 통계 조회 → 자동설정(쓰기) → 가시성 → **탐색성/실행성 발화 구분(IntelliDecision)** → **화면 안내형 응대(Screen Graph)** → **Screen Graph 프론트엔드 열람** → **통화 이력 자연어 질의(Call History NLQ)**). 브라운필드 권장사항대로 여러 개의 작은 Epic으로 쪼개기보다 **하나의 Epic 내 13개 순차 Story**로 리스크를 점진적으로 낮추며 진행한다.
 
 > **시퀀싱 정정(SM 리뷰 반영, 2026-07-14)**: 최초 버전은 "온보딩 체크리스트"(옛 1.4)가 "설정 카탈로그 구축"(옛 1.7)의 조회 함수에 의존하면서도 먼저 배치되어 있었다 — 나중 Story에 의존하는 순서 오류. **설정 카탈로그의 읽기 전용 등록(도메인·조회 함수·스키마)을 Story 1.4로 앞당기고, 온보딩/조회/통계를 그 위에 쌓은 뒤, 카탈로그에 쓰기(자동설정 실행)를 더하는 Story를 1.8로 분리**했다. "각 Story는 이전 Story에만 의존해야 한다"는 브라운필드 원칙을 따른 결과다.
 
@@ -318,6 +336,331 @@ so that 대화로 변경한 내용을 신뢰하고 검증할 수 있다.
 
 **Integration Verification**
 IV1: 신규 페이지 추가가 기존 `settings/*` 라우트의 네비게이션·레이아웃에 영향을 주지 않는다.
+
+---
+
+### Story 1.10 IntelliDecision (탐색성/실행성 발화 구분 응대)
+
+As a 테넌트 관리자,
+I want 내가 기능을 잘 몰라서 물어보는 것인지, 이미 명확히 바꿔달라고 요청하는 것인지에 따라 AI가 다르게 응대하기를,
+so that 잘 모를 땐 충분한 설명과 함께 다음 행동을 제안받고, 확실히 원할 땐 불필요한 왕복 없이 빠르게 확인 후 실행되기를 바란다.
+
+**Acceptance Criteria**
+1: 탐색성 발화(예: "AI가 모르는 질문 받으면 나한테 전화하게 해줄 수 있어?")에는 매뉴얼 참고 정보 기반 설명 + 사전 준비사항 + "필요하면 말씀해 주세요"류 제안으로 응답하고, 이 턴에서 `update_self_service_setting` Tool을 호출하지 않는다.
+2: 실행성 발화(예: "AI가 에스컬레이션 안 하도록 설정해줘")에는 "[항목]을 [값]으로 설정할까요?" 형태로 즉시 확인 발화를 하며, 매뉴얼에 부작용 정보가 있으면 함께 안내한다. 사용자가 긍정하면 그때 Tool을 호출한다.
+3: 두 유형 판단은 LLM이 최종 결정하며, 발화 패턴 기반 힌트(예: 종결 어미)는 시스템 프롬프트에 참고 신호로만 제공되고 강제 게이트로 사용되지 않는다.
+4: 판단 근거를 사후 확인할 수 있도록 힌트 값과 실제 Tool 호출 여부가 `call_data_record`에 로깅된다(§로깅 원칙).
+
+**Integration Verification**
+IV1: 기존 Story 1.8 확인 발화 흐름(2턴: 확인→긍정→실행)이 회귀 없이 그대로 동작한다.
+IV2: 힌트 로직이 예외를 던지거나 값을 못 구해도 전체 응답 흐름이 중단되지 않는다(힌트는 best-effort 참고용).
+
+---
+
+### Story 1.11 Screen Graph 구축 및 화면 안내형 응대
+
+As a 테넌트 관리자,
+I want 설정 기능이나 방법을 물을 때 AI가 실제 프론트엔드 화면을 설명하면서 안내해주기를,
+so that 설정화면을 직접 열어보지 않아도 어디를 어떻게 클릭해야 하는지 대화만으로 파악할 수 있다.
+
+**Acceptance Criteria**
+1: 설정 카탈로그 도메인(persona/ai-escalation/call-control/chat-relay/contacts/general/integrations)을 프론트엔드 라우트·화면 내 UI 요소와 연결하는 **경량 지식 그래프(Screen Graph)**가 신규 구축된다(별도 그래프 DB 없이 `settings_catalog.py`와 동일한 정적 레지스트리 패턴).
+2: 프론트엔드 전용 화면이 없는 도메인(예: persona)은 화면 정보 없이 등록되어(존재하지 않는 화면을 안내하지 않음).
+3: `self_service_agent_node`가 RAG 검색 결과의 `related_domain`으로 Screen Graph를 조회해 화면 안내 정보를 시스템 프롬프트에 주입한다(GraphRAG의 Local Search 패턴 재현 — 매뉴얼 RAG → 도메인 → 화면 1-hop 확장).
+4: 화면 정보가 있는 경우 탐색성(IntelliDecision 유형 A) 응답에 화면 안내가 포함되고, 없는 경우 기존처럼 매뉴얼 텍스트 설명만 제공된다.
+
+**Integration Verification**
+IV1: Screen Graph 조회 실패/예외가 전체 응답 흐름을 중단시키지 않는다(best-effort, IntelliDecision 힌트와 동일한 안전 원칙).
+IV2: 실행성(Story 1.8/1.10 유형 B) 응답 흐름은 화면 안내 주입과 무관하게 회귀 없이 동작한다.
+
+---
+
+### Story 1.12 Screen Graph 프론트엔드 열람
+
+As a 테넌트 관리자,
+I want AI 도우미가 어떤 화면을 안내할 수 있는지 프론트엔드에서 직접 확인하기를,
+so that AI가 설명하는 내용이 실제 화면과 일치하는지 신뢰할 수 있다.
+
+**Acceptance Criteria**
+1: `sip-pbx/frontend/app/settings/ai-assistant/docs`(Story 1.9에서 만든 도움말 페이지)에 **신규 탭 "화면 안내"**가 추가되어 Screen Graph 데이터(도메인별 라우트·설명·UI 요소)를 읽기 전용으로 표시한다.
+2: 화면 정보가 있는 도메인은 실제 라우트 링크(클릭 시 해당 설정 화면으로 이동)를 함께 제공한다.
+3: 기존 설정 페이지 컴포넌트/레이아웃 컨벤션을 따른다(CR3).
+
+**Integration Verification**
+IV1: 신규 탭 추가가 기존 "이용 매뉴얼 Q&A"/"AI 변경 가능 설정" 탭의 동작에 영향을 주지 않는다.
+
+---
+
+### Story 1.13 통화 이력 자연어 질의(Call History NLQ)
+
+As a 테넌트 관리자,
+I want 내 번호로 걸려오거나 내가 건 통화 이력을 자연어로 물어보기를,
+so that 통화 이력 화면을 직접 뒤지지 않아도 원하는 통화를 바로 찾거나 통계를 알 수 있다.
+
+**Acceptance Criteria**
+1: `search_call_history_by_keyword(owner, keyword)` Tool이 owner 소유 통화 중 `call_summary`에 키워드가 포함된 통화를 찾아 발신번호·통화시각·요약을 반환한다(FR15-1).
+2: `get_top_caller(owner, period)` Tool이 기간("today"|"week"|"month") 내 발신번호별 통화 건수를 집계해 상위 번호(들)를 반환한다(FR15-2). 미지원 기간은 명확한 폴백 메시지를 반환한다.
+3: `get_missed_calls_today(owner)` Tool이 오늘 걸려온 통화 중 응답(AI/사람 모두)되지 않은 것으로 판정된 통화의 발신번호·시각 목록을 반환한다(FR15-3). "미응답" 판정 기준은 Task 0 조사로 확정한다(현재 코드 조사 결과: `has_recording=False AND is_ai_handled=False`가 유력 후보 — 실제 통화 데이터로 재검증 필요).
+4: 3개 Tool 모두 새로운 벡터 임베딩 파이프라인 없이 기존 `call_record_db.get_call_records_page(owner=...)`만 재사용한다(NFR5, Story 1.7과 동일 원칙).
+5: `self_service_agent_node`의 Tool 목록에 3개가 추가되고, 시스템 프롬프트에 사용 안내가 포함된다.
+
+**Integration Verification**
+IV1: 기존 `get_self_service_stats`(Story 1.7) 응답 스키마·동작에 영향을 주지 않는다(신규 Tool 3개는 별도 함수로 추가).
+IV2: `call_record_db.get_call_records_page`에 새 파라미터를 추가하지 않고 기존 시그니처(owner/since/direction/limit/offset)만으로 구현 가능함을 확인한다(추가 DB 스키마 변경 없음).
+IV3: 3개 Tool 모두 owner 스코프를 벗어난 통화(다른 테넌트)를 반환하지 않는다(기존 owner 강제 오버라이드 패턴 재사용, PO/QA 리뷰에서 발견된 owner 강제 치환 원칙과 동일).
+
+---
+
+## Epic 2: 설정 카탈로그/Screen Graph 동적화 및 IntelliDecision 신뢰성 개선
+
+**작성 배경(2026-07-20)**: Epic 1 운영 중 발견된 3가지 구조적 한계를 해소하기 위한 신규 Epic.
+① `settings_catalog.py`/`screen_graph.py`가 순수 Python 하드코딩 레지스트리라 신규 설정 필드·화면이
+생길 때마다 백엔드 코드 배포가 필요하다. ② IntelliDecision(Story 1.10)의 탐색성/실행성 힌트가
+정규식 키워드 매칭(`intent_tier.py`)에 의존해, STT 오인식·구어체 표현에 취약해 잘못된 참고
+신호를 LLM에 줄 위험이 있다. ③ 위 카탈로그·Screen Graph·매뉴얼-도메인 매핑이 실제로 "동적
+구성"이라 부를 수 있는 저장소(DB/지식베이스)에 있지 않고 Python 모듈 상수로만 존재해, 실제
+무중단 재구성이 가능한지 검증되지 않았다.
+
+### Goals
+
+- 설정 카탈로그·Screen Graph의 **메타데이터**(스키마, writable_fields, 허용값, 화면 정보, 안내
+  문구)를 코드가 아닌 DB에서 로드하고, 프론트엔드에서 다운로드(내보내기)·업로드(가져오기)할 수
+  있게 한다.
+- IntelliDecision이 정규식 키워드 힌트 없이도 LLM 판단만으로 동일하거나 더 나은 정확도를 유지함을
+  검증하고, 키워드 힌트 의존을 제거한다.
+- 카탈로그/Screen Graph 변경이 **서버 재시작 없이** 즉시 반영됨을 실증한다(진짜 "동적"인지 기능
+  체크).
+
+### Non-Goals(명시적 범위 제외)
+
+- **완전 노코드 신규 도메인 생성은 범위 밖이다.** `get_fn`/`update_fn`이 호출하는 실제 서비스
+  로직(예: `persona_service.save_persona`)은 여전히 Python 코드로 존재해야 한다. 동적화 대상은
+  "이미 코드로 등록된 함수를 참조하는 메타데이터"(필드명, 라벨, 허용값, 화면 안내 문구, writable
+  여부)이지, 임의의 새 비즈니스 로직을 데이터만으로 생성하는 것이 아니다(보안·환각 방지 원칙).
+- IntelliDecision을 위한 별도의 전용 분류 LLM 호출 추가는 기본적으로 채택하지 않는다(NFR1 지연
+  예산 보호) — 기존 메인 LLM 호출 한 번 안에서 few-shot 지시로 판단하는 현재 구조를 유지하되,
+  정규식 힌트만 제거한다(§FR23 근거 참고).
+
+### Functional
+
+- **FR16 (카탈로그 메타데이터 DB화)**: 시스템은 설정 카탈로그 도메인별 스키마(필수/옵션 필드),
+  `writable_fields`, `field_allowed_values`, `destructive` 여부, 사람이 읽는 라벨/설명을 Python
+  코드 상수가 아닌 **DB 테이블**에서 로드해야 한다. `get_fn`/`update_fn` 자체는 코드에 남되,
+  코드에는 "함수 이름 → 실제 콜러블" 매핑만 두고(안전한 화이트리스트 방식), 그 외 서술적
+  메타데이터는 전부 DB로 이전한다.
+- **FR17 (Screen Graph 메타데이터 DB화)**: Screen Graph(`route`, `title`, `description`,
+  `nav_hint`, UI 필드 목록)도 FR16과 동일한 원칙으로 DB에서 로드해야 한다.
+- **FR18 (프론트엔드 다운로드)**: `설정 > AI 도우미` 화면(또는 하위 신규 화면)에서 현재 적용
+  중인 카탈로그·Screen Graph 설정을 JSON/YAML로 다운로드(내보내기)할 수 있어야 한다.
+- **FR19 (프론트엔드 업로드)**: 동일 화면에서 편집한 설정 파일을 업로드해 반영할 수 있어야
+  하며, 적용 전 반드시 스키마 검증(필수 키 존재, 타입, 참조하는 함수명이 코드의 화이트리스트에
+  실제로 등록되어 있는지)을 통과해야 한다. 검증 실패 시 기존 설정은 변경되지 않는다(원자적 적용).
+- **FR20 (핫 리로드)**: 업로드가 성공하면 **서버 재시작 없이** 즉시 반영되어야 한다(in-memory
+  캐시 무효화).
+- **FR21 (버전 이력·롤백)**: 업로드마다 버전이 기록되며, 관리자는 이전 버전으로 되돌릴 수
+  있어야 한다.
+- **FR22 (신규 도메인 제약 문서화)**: 완전히 새로운 조회/변경 로직이 필요한 도메인은 메타데이터
+  업로드만으로 지원되지 않는다는 제약을, 업로드 화면과 개발 문서 양쪽에 명확히 안내해야 한다
+  (§Non-Goals 참고 — 오해로 인한 "왜 반영이 안 되냐"는 혼란 방지).
+- **FR23 (IntelliDecision 키워드 힌트 제거)**: 탐색성/실행성 판별에 정규식 키워드 힌트
+  (`intent_tier.py::classify_intent_tier_hint`)를 더 이상 사용하지 않는다. 시스템 프롬프트의
+  few-shot 지시만으로 LLM이 최종 판단하도록 하고, 프롬프트에 삽입되던 "[발화 유형 참고 신호]"
+  섹션을 제거한다.
+- **FR24 (매뉴얼-도메인 매핑 동적화, 우선순위 낮음)**: `manual_indexer.py::_SECTION_TO_DOMAIN`의
+  하드코딩된 섹션 제목 키워드 매칭 리스트를, 매뉴얼 문서 자체에 명시적 메타데이터(예: 섹션
+  제목 옆 `{domain: call-control}` 태그)로 선언하는 방식으로 전환한다(선택 사항 — Story 2.8).
+
+### Non Functional
+
+- **NFR6**: 카탈로그/Screen Graph 설정은 in-memory 캐시로 서빙하며, 매 Tool 호출마다 DB를
+  조회하지 않아야 한다(NFR1 응답 지연 유지).
+- **NFR7**: 업로드 API는 검증 실패 시 명확한 오류 메시지를 반환하고 기존 활성 설정을 그대로
+  유지해야 한다(부분 적용 금지).
+- **NFR8**: 카탈로그/Screen Graph 업로드 권한은 관리자 역할로 제한되어야 한다(임의 사용자가
+  자동설정 대상 필드 범위를 확장하는 것을 방지 — 보안 원칙).
+
+### Compatibility Requirements
+
+- **CR5**: 기존 `get_fn(owner)`/`update_fn(owner, field, value)` 시그니처는 변경하지 않는다 —
+  이번 Epic은 "무엇을 어떤 라벨로 노출할지"의 메타데이터만 동적화하며, 함수 자체의 호출 규약은
+  Epic 1과 동일하게 유지한다.
+- **CR6**: `config/self_service_exclusions.yaml`(제외 목록)과의 관계를 Story 2.1에서 확정한다 —
+  동일한 동적 구성 저장소로 통합할지, 별도 파일로 유지할지는 구현 착수 시점에 결정한다(현재는
+  파일 기반으로 이미 "설정 배포 없이 편집 가능"하다는 점에서 동적화 원칙에 부분적으로 부합하므로,
+  통합 여부는 리스크 대비 이득을 따져 판단).
+
+---
+
+## Epic 2 Story 목록
+
+### Story 2.1 카탈로그/Screen Graph 설정 저장소 설계 및 구현
+
+As a 개발자,
+I want 설정 카탈로그·Screen Graph의 메타데이터를 저장할 DB 스키마와 안전한 함수 참조 방식을,
+so that 이후 Story들이 이 저장소를 기반으로 동적 로딩·업로드 기능을 구현할 수 있다.
+
+**Acceptance Criteria**
+1: 신규 SQLite 테이블(`self_service_catalog_config`, `self_service_screen_graph_config` 또는
+   통합 테이블 1개)이 `src/booking/database.py`의 `_DDL` 관례에 따라 추가된다(기존
+   `self_service_config_changes`와 동일 파일 공유, 신규 DB 엔진 도입 없음).
+2: 각 레코드는 버전 번호·활성 여부(`is_active`)·업로드 시각·업로드 주체를 포함해, 버전 이력
+   조회와 롤백(이전 버전 재활성화)이 가능한 구조여야 한다.
+3: `get_fn`/`update_fn`은 여전히 Python 코드에 정의하되, **함수명 문자열 → 콜러블** 화이트리스트
+   레지스트리(예: `_FUNCTION_REGISTRY: Dict[str, Callable]`)로 별도 분리한다. DB 설정은 이
+   화이트리스트에 있는 이름만 참조할 수 있으며, 등록되지 않은 이름을 참조하면 검증 실패로
+   거부된다(임의 코드 실행 방지 — 보안 핵심 설계).
+4: 기존 `_CATALOG`/`_SCREEN_REGISTRY`의 현재 값을 1회성 마이그레이션 스크립트로 신규 테이블에
+   시드(seed)한다 — 이관 직후에는 기존과 동일한 동작을 보장해야 한다(IV1).
+
+**Integration Verification**
+IV1: 마이그레이션 직후 기존 `test_self_service_settings_tool.py`/`test_self_service_screen_graph.py`
+전체가 회귀 없이 통과한다(값이 이관되었을 뿐 동작은 동일해야 함).
+IV2: 화이트리스트에 없는 함수명을 참조하는 설정을 강제로 넣으면 로딩이 거부되고 명확한 오류가
+남는다(보안 검증 케이스).
+
+---
+
+### Story 2.2 카탈로그 로더 동적화 (settings_catalog.py 리팩터링)
+
+As a 개발자,
+I want `settings_catalog.py`가 하드코딩 딕셔너리 대신 Story 2.1의 DB 저장소를 조회하도록,
+so that 카탈로그 메타데이터를 코드 배포 없이 바꿀 수 있다.
+
+**Acceptance Criteria**
+1: `list_domains()`/`get_domain_schema()`/`get_domain_value()`/`domain_writable_fields()`/
+   `get_field_allowed_values()`의 **외부 시그니처는 변경 없이** 내부 구현만 DB 조회 기반으로
+   전환된다(CR5, 호출부인 `tools.py`/`onboarding.py` 등 수정 불필요).
+2: in-memory 캐시를 두어 매 호출마다 DB를 조회하지 않는다(NFR6). 캐시는 Story 2.1의 활성 버전이
+   바뀌면 무효화된다(신규 `invalidate_catalog_cache()` 함수).
+3: DB 조회 실패 시(테이블 없음 등) 안전하게 폴백하거나 명확한 오류를 반환하고, 최소한 서버
+   기동 자체는 실패하지 않아야 한다.
+
+**Integration Verification**
+IV1: Epic 1 전체 self_service 테스트 스위트가 리팩터링 후에도 회귀 없이 통과한다(가장 중요한
+검증 — 순수 내부 구현 교체이므로 외부 동작은 1바이트도 달라지면 안 됨).
+
+---
+
+### Story 2.3 Screen Graph 동적화
+
+As a 개발자,
+I want `screen_graph.py`도 Story 2.2와 동일한 패턴으로 DB 기반으로 전환하기를,
+so that 화면 안내 정보도 코드 배포 없이 갱신할 수 있다.
+
+**Acceptance Criteria**
+1: `get_screen_for_domain()`/`list_all_screens()`/`describe_screen_for_conversation()` 시그니처는
+   변경 없이 내부 구현만 DB 조회로 전환된다.
+2: 캐시·무효화 메커니즘은 Story 2.2와 동일 원칙을 재사용한다(중복 구현 지양, 공통 헬퍼 고려).
+
+**Integration Verification**
+IV1: `self_service_screen_graph_hit` 이벤트·화면 안내 문구가 리팩터링 전후 동일하게 생성됨을
+회귀 테스트로 확인한다.
+
+---
+
+### Story 2.4 프론트엔드 설정 다운로드(내보내기)
+
+As a 관리자,
+I want AI 도우미 설정(카탈로그·Screen Graph)을 파일로 다운로드하기를,
+so that 현재 구성을 검토하거나 백업·버전 관리할 수 있다.
+
+**Acceptance Criteria**
+1: `설정 > AI 도우미` 화면(또는 도움말 화면 내 신규 탭)에 "설정 다운로드" 버튼이 추가되어,
+   현재 활성 버전의 카탈로그+Screen Graph 설정을 JSON(또는 YAML) 파일로 다운로드할 수 있다.
+2: 다운로드 파일에는 함수 화이트리스트 이름(문자열)만 포함되고, 실제 Python 콜러블 참조나
+   민감 정보는 포함되지 않는다(보안 — 파일이 유출되어도 코드 실행 경로가 노출되지 않아야 함).
+3: 신규 REST 엔드포인트(`GET /api/settings/ai-assistant/catalog-config/export`)를 추가한다(본
+   Epic에서 신규 엔드포인트가 필요한 지점 — 기존 `/catalog`, `/screen-graph` 조회 API와 병행
+   유지, export는 원본 그대로의 편집 가능한 형식을 반환한다는 점에서 다름).
+
+**Integration Verification**
+IV1: 기존 `/api/settings/ai-assistant/catalog`, `/screen-graph` 조회 API 동작에 영향 없음.
+
+---
+
+### Story 2.5 프론트엔드 설정 업로드(검증·적용·롤백)
+
+As a 관리자,
+I want 편집한 설정 파일을 업로드해 반영하고, 문제가 있으면 이전 버전으로 되돌리기를,
+so that 코드 배포 없이 안전하게 설정을 조정할 수 있다.
+
+**Acceptance Criteria**
+1: 업로드 UI에서 파일 선택 → 서버 검증(FR19) → 미리보기(diff: 무엇이 바뀌는지) → 확정 적용의
+   흐름을 제공한다.
+2: 검증 실패(필수 키 누락, 미등록 함수명 참조, 타입 오류 등) 시 구체적 오류 메시지를 보여주고
+   기존 설정은 변경되지 않는다(NFR7).
+3: 적용 성공 시 즉시 반영되며(FR20), 화면에서 "현재 적용 버전"과 "이전 버전 목록"을 볼 수 있고
+   과거 버전으로 롤백하는 버튼을 제공한다(FR21).
+4: 업로드·롤백 이벤트는 감사 로그(누가/언제/어떤 버전)로 남는다.
+
+**Integration Verification**
+IV1: 검증 실패 케이스(의도적으로 잘못된 함수명 참조)를 업로드해도 실제 카탈로그 동작이 전혀
+바뀌지 않음을 확인한다(원자성 검증, 보안 핵심 시나리오).
+IV2: 업로드 직후 재시작 없이 대화 테스트(`/api/self-service/test/converse`)로 변경된 라벨/화면
+안내가 즉시 반영됨을 확인한다(FR20 실증 — "진짜 동적"인지 기능 체크, 사용자 요청 §3 대응).
+
+---
+
+### Story 2.6 IntelliDecision 키워드 힌트 제거
+
+As a 개발자,
+I want 탐색성/실행성 판별에서 정규식 키워드 힌트를 제거하고 LLM 판단만 남기기를,
+so that STT 오인식·구어체 표현에도 안정적으로 동작하고 잘못된 힌트가 LLM을 오도할 위험을
+없앨 수 있다.
+
+**Acceptance Criteria**
+1: `self_service_agent.py`의 시스템 프롬프트에서 `[발화 유형 참고 신호]` 섹션과
+   `classify_intent_tier_hint()` 호출이 제거된다.
+2: `self_service_intent_tier_hint` 로깅 이벤트도 제거하거나(또는 사후 분석용으로 남기고 싶다면
+   힌트 자체가 아니라 "LLM 최종 판단"만 로깅하도록 대체) — 최종 결정은 Story 착수 시 확정.
+3: [self-service-ai-assistant-intelli-decision-qa-plan.md](../qa/self-service-ai-assistant-intelli-decision-qa-plan.md)의
+   전체 카탈로그 매트릭스(Case 1/2, 11건)를 힌트 제거 후 재실행해 회귀 없음을 확인한다(제거로
+   인한 정확도 저하가 없어야 승인 가능).
+4: `intent_tier.py` 모듈 자체는 삭제하거나(사용처가 완전히 없어지면) `deprecated` 표시로 남긴다
+   (팀 결정 — 삭제 시 `docs/stories/1.10.*.story.md`에 이력 기록 필요).
+
+**Integration Verification**
+IV1: 힌트 제거 전후로 Case 1(실행성) 6건·Case 2(탐색성) 5건의 응답 패턴(확인 발화 vs 설명+제안)이
+동일하게 유지됨을 회귀 테스트로 증명한다 — 만약 정확도가 떨어지면 이 Story는 보류하고 대안
+(경량 LLM 분류 등)을 재검토해야 한다(§Non-Goals 참고).
+
+---
+
+### Story 2.7 통합 QA 및 무중단 반영 검증
+
+As a QA 담당자,
+I want Epic 2로 도입된 동적 구성이 실제로 서버 재시작 없이 반영되고 기존 기능을 깨지 않는지,
+so that 안전하게 프로덕션에 반영할 수 있다.
+
+**Acceptance Criteria**
+1: [self-service-ai-assistant-master-qa.md](../qa/self-service-ai-assistant-master-qa.md)에 신규
+   Branch L(동적 설정)을 추가한다 — 케이스: (a) 카탈로그 라벨 업로드 변경 → 재시작 없이 대화
+   응답에 반영, (b) Screen Graph nav_hint 업로드 변경 → 재시작 없이 반영, (c) 잘못된 함수명
+   참조 업로드 → 거부·기존 설정 유지, (d) 롤백 → 이전 라벨로 복원.
+2: Epic 1 전체 회귀(단위 테스트 + 대표 대화 시나리오)가 Epic 2 반영 후에도 PASS.
+3: IntelliDecision 힌트 제거(Story 2.6) 이후 전체 카탈로그 매트릭스 재실행 결과가 기존과 동등
+   이상임을 확인한다.
+
+**Integration Verification**
+IV1: 모든 케이스가 원시 로그(`call_data_record`)로 교차검증된다(기존 QA 원칙 재사용).
+
+---
+
+### Story 2.8 매뉴얼-도메인 매핑 동적화 (선택, 낮은 우선순위)
+
+As a 개발자,
+I want `manual_indexer.py`의 하드코딩된 섹션 키워드 매칭 리스트를 매뉴얼 문서 자체의 명시적
+태그로 대체하기를,
+so that 매뉴얼 작성자가 코드를 몰라도 정확한 도메인 연결을 보장할 수 있다.
+
+**Acceptance Criteria**
+1: `self-service-manual-content.md`의 각 섹션 제목에 명시적 도메인 태그(예:
+   `## 3. AI 에스컬레이션 설정 {domain: ai-escalation}`)를 추가하는 컨벤션을 정의한다.
+2: `manual_indexer.py`가 이 태그를 우선 사용하고, 태그가 없으면 기존 키워드 매칭으로 폴백한다
+   (점진적 마이그레이션 허용, 매뉴얼 전체를 한 번에 바꾸지 않아도 됨).
+
+**Integration Verification**
+IV1: 태그 도입 후 기존 매뉴얼 색인·RAG 검색 결과(Story 1.3 QA 케이스)가 회귀 없이 동일하다.
 
 ---
 
