@@ -128,6 +128,7 @@ BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파
 | 문서                                              | 설명                  |
 | ------------------------------------------------- | --------------------- |
 | [PROJECT_BRIEF.md](presentation/PROJECT_BRIEF.md) | 프로젝트 브리프(요약) |
+| [self-service-ai-assistant-introduction.md](presentation/self-service-ai-assistant-introduction.md) | 셀프서비스 AI 도우미 신규 기능 소개자료 (아키텍처, RAG, IntelliDecision, 사용법) |
 
 `images/`·Mermaid 생성 스크립트 등은 동 폴더에서 관리한다.
 
