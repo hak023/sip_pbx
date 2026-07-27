@@ -530,16 +530,26 @@ async def draft_unhandled_reply(call_id: str, item_id: str) -> Dict[str, Any]:
         return {"draft": ""}
 
     try:
-        import google.generativeai as genai  # type: ignore
-
+        from src.ai_voicebot.factory import get_llm_client
         from src.common.gemini_api_key import resolve_gemini_api_key
 
-        api_key = resolve_gemini_api_key()
-        if not api_key:
-            return {"draft": ""}
+        # [2026-07-27] 이전에는 "gemini-2.0-flash-lite"를 하드코딩했으나 이 계정에서 이미
+        # 404로 폐지되어 있어 항상 실패하고 있었다(Story 6.3에서 발견). 다른 LLM 호출 경로
+        # (LLMClient)와 동일한 모델을 쓰도록 전역 싱글턴을 재사용한다.
+        llm_client = get_llm_client()
+        client = getattr(llm_client, "_client", None) if llm_client is not None else None
+        model_name = (
+            getattr(llm_client, "model_name", None) if llm_client is not None else None
+        ) or "gemini-2.5-flash"
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash-lite")
+        if client is None:
+            api_key = resolve_gemini_api_key()
+            if not api_key:
+                return {"draft": ""}
+            from google import genai  # type: ignore
+
+            client = genai.Client(api_key=api_key)
+
         call_summary = insights.get("call_summary", "")
         prompt = (
             f"다음은 AI 전화 상담 중 처리하지 못한 고객 질문입니다.\n"
@@ -548,7 +558,9 @@ async def draft_unhandled_reply(call_id: str, item_id: str) -> Dict[str, Any]:
             f"운영자가 고객에게 보낼 짧고 친절한 답변을 한국어로 작성해 주세요. "
             f"200자 이내로 작성하고, 실제 정보 없이는 추측하지 마세요."
         )
-        resp = await model.generate_content_async(prompt)
+        resp = await client.aio.models.generate_content(
+            model=model_name, contents=prompt
+        )
         draft_text = resp.text.strip() if resp.text else ""
         return {"draft": draft_text}
     except Exception as exc:

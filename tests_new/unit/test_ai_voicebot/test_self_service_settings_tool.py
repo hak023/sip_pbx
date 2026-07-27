@@ -100,7 +100,7 @@ class TestSelfServiceToolsRegistry:
     def test_registers_all_tools(self):
         # Story 1.5(온보딩)/1.6(설정 조회)/1.7(통계 조회)/1.8(자동설정 쓰기)/
         # 1.13(통화 이력 NLQ 3개) — 도구가 늘어날 때마다 갱신
-        assert len(SELF_SERVICE_TOOLS) == 7
+        assert len(SELF_SERVICE_TOOLS) == 9
 
     def test_update_setting_tool_description_lists_real_writable_field_names(self):
         """2026-07-15 QA 자동 테스트에서 발견된 필드명 불일치(LLM이 필드명을 추측해서 호출)
@@ -140,32 +140,22 @@ class TestTryBindSelfServiceTools:
 
 
 class TestTryBuildSelfServiceGeminiFc:
-    """실제 LLMClient(raw genai.GenerativeModel)를 위한 Gemini 네이티브 FC 폴백 생성 검증
+    """실제 LLMClient(google-genai 기반, Story 6.1/6.2)를 위한 Gemini 네이티브 FC 폴백 생성 검증
     (2026-07-15 QA 자동 테스트에서 발견된 bind_tools 미동작 버그의 실제 수정 경로)."""
 
-    def test_builds_model_with_glm_tool_from_llm_client_model_name(self, monkeypatch):
-        built_kwargs = {}
-
-        class _FakeGenModel:
-            def __init__(self, model_name=None, tools=None):
-                built_kwargs["model_name"] = model_name
-                built_kwargs["tools"] = tools
-
-        monkeypatch.setattr(
-            "google.generativeai.GenerativeModel",
-            _FakeGenModel,
-        )
-
-        class _FakeInnerModel:
-            model_name = "models/gemini-2.0-flash"
+    def test_builds_model_with_tool_from_llm_client(self):
+        class _FakeClient:
+            pass
 
         class _FakeLLMClient:
-            model = _FakeInnerModel()
+            _client = _FakeClient()
+            model_name = "gemini-2.5-flash"
 
         result = _try_build_self_service_gemini_fc(_FakeLLMClient(), "call-1")
-        assert isinstance(result, _FakeGenModel)
-        assert built_kwargs["model_name"] == "models/gemini-2.0-flash"
-        assert len(built_kwargs["tools"]) == 1
+        assert result is not None
+        assert result.client is _FakeLLMClient._client
+        assert result.model_name == "gemini-2.5-flash"
+        assert len(result.tool.function_declarations) == len(SELF_SERVICE_TOOLS)
 
     def test_missing_model_attribute_returns_none(self):
         class _FakeLLMClient:

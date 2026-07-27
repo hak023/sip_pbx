@@ -13,16 +13,20 @@ try:
     import structlog
     _logger = structlog.get_logger(__name__)
     _import_logger_available = True
-    _logger.info("🔄 [LLM Module] Importing google.generativeai...")
+    _logger.info("🔄 [LLM Module] Importing google.genai...")
     _genai_import_start = time.time()
 except Exception:
     pass
 
-import google.generativeai as genai
+# Story 6.1(Epic 6, google-genai SDK 마이그레이션): 기존 google-generativeai(deprecated)는
+# ThinkingConfig를 지원하지 않아 thinking 비활성화가 조용히 실패해왔다(2026-07-24 근본 원인
+# 확정). google-genai로 전환해 thinking_config가 실제로 적용되도록 한다.
+# 참고: docs/architecture/gemini-genai-migration-architecture.md §3
+from google import genai
 
 if _import_logger_available and _genai_import_start is not None:
     _genai_import_time = time.time() - _genai_import_start
-    _logger.info(f"✅ [LLM Module] google.generativeai imported", elapsed=f"{_genai_import_time:.3f}s")
+    _logger.info(f"✅ [LLM Module] google.genai imported", elapsed=f"{_genai_import_time:.3f}s")
 
 import asyncio
 import re
@@ -30,6 +34,53 @@ from typing import List, Dict, Optional, Any
 import json
 
 logger = structlog.get_logger(__name__)
+
+
+class _GenAIModelAdapter:
+    """google-generativeai `GenerativeModel`과 동일한 `generate_content(contents,
+    generation_config=, stream=)` 인터페이스를 제공하는 google-genai 어댑터.
+
+    LLMClient 내부의 기존 `self.model.generate_content(...)` 호출부를 변경하지 않기 위한
+    얇은 래퍼(Story 6.1, CR1 — 호출부 무변경 원칙). 실제 호출은 `google.genai.Client`로
+    위임한다.
+    """
+
+    def __init__(self, client: "genai.Client", model_name: str):
+        self._client = client
+        self.model_name = model_name
+
+    def generate_content(self, contents, generation_config=None, stream: bool = False):
+        if stream:
+            return self._client.models.generate_content_stream(
+                model=self.model_name,
+                contents=contents,
+                config=generation_config,
+            )
+        return self._client.models.generate_content(
+            model=self.model_name,
+            contents=contents,
+            config=generation_config,
+        )
+
+
+def _finish_reason_name(response: Any) -> Optional[str]:
+    """google-genai 응답에서 finish_reason을 문자열 이름(STOP/MAX_TOKENS/SAFETY/...)으로 정규화.
+
+    google-genai의 `finish_reason`은 정수가 아니라 `FinishReason` enum이라 기존
+    `int(finish_reason)` 기반 매핑(`fr_map`)이 TypeError를 낸다(2026-07-24 직접 확인,
+    docs/architecture/gemini-genai-migration-architecture.md §3.1). `.name` 속성으로 통일한다.
+    """
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return None
+        fr = getattr(candidates[0], "finish_reason", None)
+        if fr is None:
+            return None
+        name = getattr(fr, "name", None)
+        return str(name) if name else str(fr)
+    except Exception:
+        return None
 
 
 class LLMClient:
@@ -52,27 +103,26 @@ class LLMClient:
         """
         self.config = config
         
-        # Gemini 설정
-        genai.configure(api_key=api_key)
+        # Gemini 설정 (Story 6.1: google-genai Client, self.model은 기존 호출부 호환용 어댑터)
+        self._client = genai.Client(api_key=api_key)
         
         model_name = config.get("model", "gemini-2.5-flash-lite")
-        self.model = genai.GenerativeModel(model_name=model_name)
+        self.model_name = model_name
+        self.model = _GenAIModelAdapter(self._client, model_name)
         
         # Generation 설정 (max_output_tokens: config.yaml 키, max_tokens: 구 설정 호환)
         # thinking은 모든 호출에서 비활성화 — 통화 응대·의도분류 등 어떤 작업도 내부 추론이 불필요하며
-        # thinking 활성 시 TTFT 3~6초 지연이 발생한다.
+        # thinking 활성 시 TTFT 3~6초 지연이 발생한다. google-genai는 ThinkingConfig를 정식 지원하므로
+        # (2026-07-24 스파이크 검증 완료) 더 이상 조용히 실패하지 않는다.
         max_tokens = config.get("max_output_tokens") or config.get("max_tokens", 512)
         _init_kw: Dict[str, Any] = {
             "temperature": config.get("temperature", 0.7),
             "top_p": config.get("top_p", 1.0),
             "top_k": config.get("top_k", 1),
             "max_output_tokens": max_tokens,
+            "thinking_config": genai.types.ThinkingConfig(thinking_budget=0),
         }
-        try:
-            _init_kw["thinking_config"] = genai.types.ThinkingConfig(thinking_budget=0)
-        except (AttributeError, TypeError):
-            pass
-        self.generation_config = genai.types.GenerationConfig(**_init_kw)
+        self.generation_config = genai.types.GenerateContentConfig(**_init_kw)
         
         # 대화 히스토리
         self.conversation_history: List[Dict[str, str]] = []
@@ -93,18 +143,23 @@ class LLMClient:
         모든 LLM 호출에 적용한다. 통화 응대·의도 분류·쿼리 변환·지식 정제 등
         어떤 작업도 내부 추론(reasoning token)이 필요할 만큼 복잡하지 않으며,
         thinking이 활성화되면 짧은 응답도 TTFT 3~6초 지연이 발생한다.
+
+        google-genai SDK는 ThinkingConfig를 정식 지원하므로(2026-07-24 스파이크 검증
+        완료) 더 이상 AttributeError로 조용히 실패하지 않는다 — 실패 시 반드시 로그로
+        드러나야 한다(Story 6.1 AC2, "조용한 실패 금지").
         """
         try:
             return genai.types.ThinkingConfig(thinking_budget=0)
-        except (AttributeError, TypeError):
-            logger.debug(
-                "llm_thinking_config_not_supported",
-                note="google-generativeai SDK가 ThinkingConfig를 지원하지 않음 — 무시",
+        except (AttributeError, TypeError) as e:
+            logger.error(
+                "llm_thinking_config_unexpected_failure",
+                error=str(e),
+                note="google-genai가 ThinkingConfig를 지원하지 않음 — thinking이 켜진 채로 동작 중일 수 있음",
             )
             return None
 
     def _effective_generation_config(self, max_output_tokens: Optional[int] = None) -> Any:
-        """호출별 GenerationConfig. thinking은 항상 비활성(thinking_budget=0)."""
+        """호출별 GenerateContentConfig. thinking은 항상 비활성(thinking_budget=0)."""
         base = self.config.get("max_output_tokens") or self.config.get("max_tokens", 512)
         cap = int(max_output_tokens) if max_output_tokens is not None else int(base)
         kwargs: Dict[str, Any] = {
@@ -116,7 +171,7 @@ class LLMClient:
         tc = self._thinking_off()
         if tc is not None:
             kwargs["thinking_config"] = tc
-        return genai.types.GenerationConfig(**kwargs)
+        return genai.types.GenerateContentConfig(**kwargs)
     
     async def generate_simple(self, prompt: str, max_tokens: Optional[int] = None, timeout_seconds: float = 10.0) -> str:
         """
@@ -181,16 +236,16 @@ class LLMClient:
             if tc is not None:
                 base_kw["thinking_config"] = tc
             try:
-                gen_config = genai.types.GenerationConfig(
+                gen_config = genai.types.GenerateContentConfig(
                     **base_kw,
                     response_mime_type="application/json",
                 )
                 json_mode_applied = True
             except TypeError:
-                gen_config = genai.types.GenerationConfig(**base_kw)
+                gen_config = genai.types.GenerateContentConfig(**base_kw)
                 logger.info(
                     "help_llm_json_mime_unsupported",
-                    note="GenerationConfig에 response_mime_type 미지원 — 저온·짧은 출력만 적용",
+                    note="GenerateContentConfig에 response_mime_type 미지원 — 저온·짧은 출력만 적용",
                 )
 
             response = await asyncio.wait_for(
@@ -203,18 +258,11 @@ class LLMClient:
             )
             self.total_requests += 1
             text = response.text.strip() if response and response.text else ""
-            _fr = None
-            try:
-                cands = getattr(response, "candidates", None) or []
-                if cands:
-                    _fr = getattr(cands[0], "finish_reason", None)
-            except Exception:
-                pass
             logger.info(
                 "help_llm_generate_done",
                 json_mode_applied=json_mode_applied,
                 raw_len=len(text),
-                finish_reason=str(_fr) if _fr is not None else None,
+                finish_reason=_finish_reason_name(response),
                 note="근본: JSON MIME+저온으로 자연어+배열 혼합·토큰 절단을 억제",
             )
             return text, json_mode_applied
@@ -290,15 +338,8 @@ class LLMClient:
             answer = (response.text or "").strip()
 
             # 종료 사유 로깅 (MAX_TOKENS 시 응답 잘림 원인 파악용)
-            finish_reason = None
-            try:
-                if getattr(response, "candidates", None) and len(response.candidates) > 0:
-                    finish_reason = getattr(response.candidates[0], "finish_reason", None)
-            except Exception:
-                pass
-            if finish_reason is not None:
-                fr_map = {1: "STOP", 2: "MAX_TOKENS", 3: "SAFETY", 4: "RECITATION"}
-                fr_desc = fr_map.get(int(finish_reason), str(finish_reason))
+            fr_desc = _finish_reason_name(response)
+            if fr_desc is not None:
                 # STOP(정상)일 때는 info 로그 생략 — note의 'MAX_TOKENS=잘림'으로 오해 방지
                 if fr_desc != "STOP":
                     logger.info("llm_generate_response_finish_reason",
@@ -465,7 +506,7 @@ class LLMClient:
                 None,
                 lambda: self.model.generate_content(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(**fmt_kw),
+                    generation_config=genai.types.GenerateContentConfig(**fmt_kw),
                 ),
             )
             return (response.text or raw_text).strip()
@@ -526,7 +567,7 @@ class LLMClient:
         tc = self._thinking_off()
         if tc is not None:
             hitl_kw["thinking_config"] = tc
-        gen_config = genai.types.GenerationConfig(**hitl_kw)
+        gen_config = genai.types.GenerateContentConfig(**hitl_kw)
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -544,18 +585,7 @@ class LLMClient:
                     note="LLM 빈 응답 → 담당자 원문 사용",
                 )
                 return op
-            finish_reason = None
-            try:
-                if getattr(response, "candidates", None) and len(response.candidates) > 0:
-                    finish_reason = getattr(response.candidates[0], "finish_reason", None)
-            except Exception:
-                pass
-            fr_is_max_tokens = False
-            if finish_reason is not None:
-                try:
-                    fr_is_max_tokens = int(finish_reason) == 2
-                except (TypeError, ValueError):
-                    fr_is_max_tokens = str(finish_reason).endswith("MAX_TOKENS")
+            fr_is_max_tokens = _finish_reason_name(response) == "MAX_TOKENS"
             if fr_is_max_tokens:
                 # 말미 마침표 등 없고 짧으면 상한 도달로 중간 끊김 가능성 큼 → 담당자 원문 TTS
                 looks_cut = (len(out) < 80) or (
@@ -691,7 +721,7 @@ AI:"""
                 None,
                 lambda: self.model.generate_content(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(**barge_kw),
+                    generation_config=genai.types.GenerateContentConfig(**barge_kw),
                 ),
             )
 
@@ -831,23 +861,17 @@ JSON:"""
                 None,
                 lambda: self.model.generate_content(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(**judge_kw),
+                    generation_config=genai.types.GenerateContentConfig(**judge_kw),
                 )
             )
 
             result_text = (response.text or "").strip()
 
             # Gemini 종료 사유 및 실제 토큰 사용량 로깅
-            finish_reason = None
-            finish_reason_desc = None
             output_token_count = None
             prompt_token_count = None
+            finish_reason_desc = _finish_reason_name(response)
             try:
-                if getattr(response, "candidates", None) and len(response.candidates) > 0:
-                    finish_reason = getattr(response.candidates[0], "finish_reason", None)
-                    if finish_reason is not None:
-                        fr_map = {1: "STOP", 2: "MAX_TOKENS", 3: "SAFETY", 4: "RECITATION"}
-                        finish_reason_desc = fr_map.get(int(finish_reason), str(finish_reason))
                 if getattr(response, "usage_metadata", None):
                     um = response.usage_metadata
                     output_token_count = getattr(um, "candidates_token_count", None) or getattr(um, "output_token_count", None)
@@ -864,7 +888,7 @@ JSON:"""
                         output_token_count=output_token_count,
                         prompt_token_count=prompt_token_count,
                         response_length=len(result_text),
-                        finish_reason=finish_reason_desc or str(finish_reason),
+                        finish_reason=finish_reason_desc,
                         response_full=result_text,
                         note="유용성 판단 응답 (response_full 전체, 잘림 없음)")
             if finish_reason_desc == "MAX_TOKENS":

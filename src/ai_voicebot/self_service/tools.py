@@ -12,6 +12,8 @@
   - search_call_history_tool      : 통화 요약(call_summary) 키워드 검색(Story 1.13, FR15-1)
   - get_top_caller_tool           : 기간별(오늘/이번 주/이번 달) 최다 발신 번호 집계(Story 1.13, FR15-2)
   - get_missed_calls_today_tool   : 오늘자 미응답 번호 조회(Story 1.13, FR15-3)
+  - get_last_self_service_change_tool  : 가장 최근 대화 설정 변경 내역 조회(Story 1.16, IntelliDecision 유형 E)
+  - undo_last_self_service_change_tool : 가장 최근 변경을 이전 값으로 되돌리기(Story 1.16, IntelliDecision 유형 E)
 
 SELF_SERVICE_TOOLS: self_service_agent_node가 `bind_tools()`에 그대로 넘기는 도구 목록.
 """
@@ -307,6 +309,87 @@ get_missed_calls_today_tool = _make_tool(_get_missed_calls_today)
 get_missed_calls_today_tool.__doc__ = _get_missed_calls_today.__doc__
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Tool: 실행 취소(Undo) — IntelliDecision 유형 E (Story 1.16)
+# ───────────────────────────────────────────────────────────────────────────
+
+async def _get_last_self_service_change(owner: str) -> str:
+    """
+    내(owner)가 가장 최근에 대화로 변경한 설정 1건을 조회합니다(되돌리기 전 확인용).
+
+    Args:
+        owner: 테넌트 ID (착신 SIP 내선번호)
+
+    Returns:
+        JSON 문자열: {"has_history": true, "domain", "field", "old_value", "new_value",
+        "changed_at"} 또는 이력이 없으면 {"has_history": false}.
+    """
+    try:
+        from src.common.self_service_config_change_db import list_config_changes
+
+        changes = list_config_changes(owner, limit=1)
+        if not changes:
+            return json.dumps({"has_history": False}, ensure_ascii=False)
+        last = changes[0]
+        return json.dumps({
+            "has_history": True,
+            "domain": last.get("domain"),
+            "field": last.get("field"),
+            "old_value": last.get("old_value"),
+            "new_value": last.get("new_value"),
+            "changed_at": last.get("changed_at"),
+        }, ensure_ascii=False)
+    except Exception as e:
+        logger.error("self_service_tool_get_last_change_error", owner=owner, error=str(e))
+        return json.dumps({"error": f"최근 변경 내역 조회 중 오류가 발생했습니다: {e}"}, ensure_ascii=False)
+
+
+get_last_self_service_change_tool = _make_tool(_get_last_self_service_change)
+get_last_self_service_change_tool.__doc__ = _get_last_self_service_change.__doc__
+
+
+async def _undo_last_self_service_change(owner: str, call_id: str = "") -> str:
+    """
+    내(owner)가 가장 최근에 대화로 변경한 설정 1건을 이전 값으로 되돌립니다.
+    **반드시 get_last_self_service_change로 내역을 확인하고 사용자에게 확인 발화를
+    거친 뒤에만** 호출하세요(되돌리기도 설정 변경이므로 유형 B와 동일한 확인 원칙).
+
+    Args:
+        owner: 테넌트 ID (착신 SIP 내선번호)
+        call_id: 통화 ID(감사 로깅용, 자동 주입됨)
+
+    Returns:
+        JSON 문자열: {"ok": true, "domain", "field", "restored_value"} 또는
+        {"ok": false, "error": "되돌릴 변경 내역이 없습니다."} 등.
+    """
+    try:
+        from src.common.self_service_config_change_db import list_config_changes
+
+        changes = list_config_changes(owner, limit=1)
+        if not changes:
+            return json.dumps(
+                {"ok": False, "error": "되돌릴 변경 내역이 없습니다."}, ensure_ascii=False
+            )
+        last = changes[0]
+        domain = last.get("domain")
+        field = last.get("field")
+        old_value = last.get("old_value")
+        coerced = _coerce_value(field, old_value)
+        result = await apply_self_service_setting(domain, owner, field, coerced, call_id)
+        if not result.get("ok"):
+            return json.dumps(result, ensure_ascii=False, default=str)
+        return json.dumps({
+            "ok": True, "domain": domain, "field": field, "restored_value": coerced,
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error("self_service_tool_undo_last_change_error", owner=owner, error=str(e))
+        return json.dumps({"ok": False, "error": f"되돌리기 중 오류가 발생했습니다: {e}"}, ensure_ascii=False)
+
+
+undo_last_self_service_change_tool = _make_tool(_undo_last_self_service_change)
+undo_last_self_service_change_tool.__doc__ = _undo_last_self_service_change.__doc__
+
+
 # self_service_agent_node가 bind_tools()에 그대로 넘기는 도구 목록
 SELF_SERVICE_TOOLS = [
     get_onboarding_checklist_tool,
@@ -316,4 +399,6 @@ SELF_SERVICE_TOOLS = [
     search_call_history_tool,
     get_top_caller_tool,
     get_missed_calls_today_tool,
+    get_last_self_service_change_tool,
+    undo_last_self_service_change_tool,
 ]

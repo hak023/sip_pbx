@@ -429,7 +429,7 @@ class TestUpdateSelfServiceSettingTool:
 
     def test_registered_in_self_service_tools(self):
         # Story 1.5/1.6/1.7/1.8/1.13(통화 이력 NLQ 3개) — 도구가 늘어날 때마다 갱신
-        assert len(SELF_SERVICE_TOOLS) == 7
+        assert len(SELF_SERVICE_TOOLS) == 9
 
     @pytest.mark.asyncio
     async def test_boolean_field_coerced_from_string(self, monkeypatch):

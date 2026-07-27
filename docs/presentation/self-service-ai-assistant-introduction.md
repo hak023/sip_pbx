@@ -13,78 +13,116 @@
 
 ```mermaid
 graph TD
-    subgraph "기존 (완전 무변경)"
-        SIP[SIP Endpoint / Call Manager]
+    subgraph CH["통화·문자 채널 (기존, 무변경)"]
+        SIPV[SIP INVITE 음성]
+        SIPM[SIP MESSAGE 문자]
+    end
+
+    subgraph ENTRY["공통 진입점 (최소 수정 1곳)"]
+        PU["ConversationAgent.process_utterance()"]
+        DET[["self_service/detection.py<br/>is_self_service_session()"]]
+    end
+
+    subgraph GRAPH["LangGraph 대화 오케스트레이션 (신규 노드 1개 추가)"]
         CI[classify_intent_node]
         RU[route_utterance_node]
         BA[booking_agent_node]
+        SSA[["self_service_agent_node (신규)"]]
     end
 
-    subgraph "기존 (최소 수정)"
-        RAGP[rag_processor.py 음성]
-        SMR[sip_message_ai_reply.py 문자]
-        AGENT["agent.py::process_utterance()
-        최상단에 detection 호출 1줄 추가"]
-    end
-
-    subgraph "신규 셀프서비스 컴포넌트"
-        DET[self_service/detection.py]
-        SSA[self_service_agent_node]
+    subgraph SS["신규: src/ai_voicebot/self_service/"]
         CAT[settings_catalog.py]
-        OB[self_service/onboarding.py]
-        TOOLS[self_service/tools.py]
-        SG[self_service/screen_graph.py]
-        CHQ[self_service/call_history_query.py]
+        OB[onboarding.py]
+        SG[screen_graph.py]
+        TOOLS[tools.py]
+        AC[auto_config.py]
+        STATS[stats.py]
+        CHQ[call_history_query.py]
+        RAG[rag.py]
         CCL[catalog_config_loader.py]
+        MI[manual_indexer.py<br/>오프라인 색인 스크립트]
     end
 
-    subgraph "기존 서비스 레이어 (재사용)"
+    subgraph EXIST["기존 서비스·DB (재사용)"]
         PS[persona_service]
         CRS[chat_relay_service]
-        CRDB[call_record_db]
-        CHROMA[(ChromaDB<br>self_service_manual)]
-        DB[(self_service_config_changes<br>self_service_catalog_config)]
+        CC[call_control/db.py]
+        CONTACTS[caller_contact_db.py]
+        GCAL[gcal_service.py]
+        CRDB[(call_record_db)]
+        CHROMA[(ChromaDB<br/>doc_type=self_service_manual)]
+        CFGDB[(self_service_catalog_config)]
+        CHGDB[(self_service_config_changes)]
     end
 
-    RAGP --> AGENT
-    SMR --> AGENT
-    AGENT --> DET
-    DET -->|is_self_service=True| CI
-    DET -->|False, 기존 동작| CI
-    CI -->|self_service intent| SSA
-    CI -->|기존 intent| RU
+    subgraph API["관리 콘솔 API (신규, 그래프 미경유)"]
+        RESTAPI[api/routers/settings_ai_assistant.py]
+    end
+
+    SIPV --> PU
+    SIPM --> PU
+    PU --> DET
+    DET -->|"is_self_service_session 값을 state에 기록"| CI
+    CI -->|"is_self_service_session=True → LLM 분류 스킵"| SSA
+    CI -->|"기존 동작 (LLM 분류)"| RU
     RU --> BA
-    SSA --> TOOLS
+
+    SSA --> CAT
     SSA --> OB
     SSA --> SG
+    SSA --> RAG
+    SSA --> TOOLS
+
     TOOLS --> CAT
+    TOOLS --> AC
+    TOOLS --> STATS
+    TOOLS --> CHQ
+    TOOLS --> OB
+
+    AC --> CAT
+    AC --> CHGDB
+    STATS --> CRDB
+    CHQ --> CRDB
+    RAG --> CHROMA
+    MI -.->|"관리자가 수동 실행"| CHROMA
+
     CAT --> CCL
-    CCL --> DB
-    OB --> CAT
     CAT --> PS
     CAT --> CRS
-    TOOLS --> CRDB
-    TOOLS --> CHQ
-    CHQ --> CRDB
-    SSA --> CHROMA
-    TOOLS --> DB
+    CAT --> CC
+    CAT --> CONTACTS
+    CAT --> GCAL
+    CCL --> CFGDB
+
+    RESTAPI --> CAT
+    RESTAPI --> CCL
+    RESTAPI --> CFGDB
 ```
+
+> 위 다이어그램은 실제 import 관계를 기준으로 그렸다(코드 grep으로 검증, 2026-07-24). 이전 버전에는
+> `stats.py`/`auto_config.py`/`rag.py`/`manual_indexer.py`가 누락되어 있었고, `self_service_agent_node`가
+> ChromaDB에 직접 연결되는 것처럼 그려져 있었으나 실제로는 `self_service/rag.py`(임베더·벡터DB
+> 핸들은 `call_context` ContextVar 경유)를 통해서만 접근한다.
 
 ### 1.2 신규 컴포넌트 목록
 
-| 컴포넌트                                   | 역할                          | 핵심 특징                                                    |
-| ------------------------------------------ | ----------------------------- | ------------------------------------------------------------ |
-| `self_service/detection.py`                | 셀프콜/셀프문자 판별          | 순수 함수, O(1) 문자열 비교                                  |
-| `self_service/settings_catalog.py`         | 7개 설정 도메인 레지스트리    | 조회·변경 함수 + 스키마 등록                                 |
-| `self_service/onboarding.py`               | 온보딩 체크리스트 판정        | 카탈로그 조회 기반, 단일 진실 소스                           |
-| `self_service/tools.py`                    | LangGraph Tool 래퍼           | booking_tools.py와 동일 패턴                                 |
-| `self_service/screen_graph.py`             | 도메인↔화면 경량 지식 그래프  | 정적 레지스트리, 그래프DB 불필요                             |
-| `self_service/call_history_query.py`       | 통화 이력 자연어 질의         | SQL 구조화 검색, 새 임베딩 없음                              |
-| `catalog_config_loader.py`                 | 카탈로그 메타데이터 캐시 로더 | in-memory 캐시, 핫 리로드 지원                               |
-| `langgraph/nodes/self_service_agent.py`    | 셀프서비스 LLM+Tool 루프      | booking_agent_node 병렬 구조, IntelliDecision 판단 로직 포함 |
-| `common/self_service_catalog_config_db.py` | 카탈로그 설정 DB CRUD         | 버전 관리 + 롤백 지원                                        |
-| `common/self_service_config_change_db.py`  | 설정 변경 이력 DB CRUD        | 실행 취소(Undo) 조회·복원의 기반                             |
-| `api/routers/settings_ai_assistant.py`     | 설정 내보내기/가져오기 API    | 검증 → 원자적 적용                                           |
+| 컴포넌트                                   | 역할                              | 핵심 특징                                                    |
+| ------------------------------------------ | --------------------------------- | ------------------------------------------------------------ |
+| `self_service/detection.py`                | 셀프콜/셀프문자 판별              | 순수 함수, O(1) 문자열 비교                                  |
+| `self_service/settings_catalog.py`         | 7개 설정 도메인 레지스트리        | 조회·변경 함수 + 스키마 등록, DB 우선/정적 폴백 하이브리드   |
+| `self_service/onboarding.py`               | 온보딩 체크리스트 판정            | 카탈로그 조회 기반, 단일 진실 소스                           |
+| `self_service/tools.py`                    | LangGraph Tool 래퍼 5종           | booking_tools.py와 동일 패턴(Gemini 네이티브 FC로 연동)      |
+| `self_service/auto_config.py`              | 설정 값 실제 적용(쓰기)           | 카탈로그 update_fn 호출 + 변경 이력 기록                     |
+| `self_service/stats.py`                    | 통화·AI 응대 통계 집계            | `call_record_db` 재조회, 신규 집계 테이블 없음               |
+| `self_service/call_history_query.py`       | 통화 이력 자연어 질의             | `call_record_db` 구조화 검색, 새 임베딩 없음                 |
+| `self_service/rag.py`                      | 셀프서비스 매뉴얼 RAG 엔진 래퍼   | `call_context`의 embedder/vector_db 재사용, 신규 인프라 없음 |
+| `self_service/screen_graph.py`             | 도메인↔화면 경량 지식 그래프      | 정적/DB 하이브리드 레지스트리, 그래프DB 불필요               |
+| `self_service/manual_indexer.py`           | 매뉴얼 문서 → ChromaDB 색인       | 오프라인 스크립트(관리자가 수동 실행, 대화 흐름과 무관)      |
+| `self_service/catalog_config_loader.py`    | 카탈로그 메타데이터 캐시 로더     | in-memory 캐시, 버전 비교 기반 자동 무효화(핫 리로드)        |
+| `langgraph/nodes/self_service_agent.py`    | 셀프서비스 LLM+Tool 루프          | booking_agent_node 병렬 구조, IntelliDecision 판단 로직 포함 |
+| `common/self_service_catalog_config_db.py` | 카탈로그 설정 DB CRUD             | 버전 관리 + 롤백 지원                                        |
+| `common/self_service_config_change_db.py`  | 설정 변경 이력 DB CRUD            | 실행 취소(Undo) 조회·복원의 기반                             |
+| `api/routers/settings_ai_assistant.py`     | 카탈로그 내보내기/가져오기/활성화 | 검증 → diff 미리보기 → 원자적 적용(그래프와 별개 REST 경로)  |
 
 ### 1.3 기술 스택
 
@@ -100,19 +138,25 @@ graph TD
 
 ### 1.4 셀프콜 감지 메커니즘
 
-SIP 레이어를 전혀 수정하지 않고, 음성·문자 두 채널이 공통으로 거치는 `ConversationAgent.process_utterance()` 최상단에서 1회 호출로 감지한다.
+SIP 레이어를 전혀 수정하지 않고, 음성·문자 두 채널이 공통으로 거치는 `ConversationAgent.process_utterance()` 최상단에서 **딱 한 번, 전화번호 문자열 비교만으로** 판별한다.
 
-```python
-# src/ai_voicebot/self_service/detection.py
-def is_self_service_session(caller_number: str, owner: str) -> bool:
-    a = normalize_owner_username(caller_number)
-    b = normalize_owner_username(owner)
-    return bool(a) and bool(b) and a == b
+```mermaid
+flowchart LR
+    A["발신번호<br/>caller_number"] --> N1["번호 정규화<br/>normalize_owner_username()"]
+    B["착신번호(테넌트 소유주)<br/>owner"] --> N2["번호 정규화<br/>normalize_owner_username()"]
+    N1 --> EQ{"두 번호가<br/>동일한가?"}
+    N2 --> EQ
+    EQ -->|"예"| SELF["is_self_service_session = True<br/>→ self_service_agent_node로 직행<br/>(LLM 의도분류 스킵)"]
+    EQ -->|"아니오"| NORMAL["is_self_service_session = False<br/>→ 기존 고객 응대 경로 그대로"]
 ```
 
-- **감지 지연**: < 1ms (문자열 비교 1회 수준)
-- **SIP 레이어 변경**: 없음 (회귀 위험 구조적 최소화)
-- **채널**: 음성(SIP INVITE) + 문자(SIP MESSAGE) 모두 동일 경로
+| 항목                | 내용                                                                       |
+| ------------------- | -------------------------------------------------------------------------- |
+| **판별 로직**       | 발신번호와 착신번호(테넌트 소유주 번호)를 정규화 후 문자열 일치 비교       |
+| **판별 위치**       | `ConversationAgent.process_utterance()` 최상단 1곳 (신규 함수 호출만 추가) |
+| **감지 지연**       | 1ms 미만 (문자열 비교 1회 수준)                                            |
+| **SIP 레이어 변경** | 없음 (회귀 위험 구조적으로 최소화)                                         |
+| **적용 채널**       | 음성(SIP INVITE) + 문자(SIP MESSAGE) 모두 동일 경로 재사용                 |
 
 ---
 

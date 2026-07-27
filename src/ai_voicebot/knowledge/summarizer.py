@@ -56,14 +56,14 @@ class ConversationSummarizer:
 
 JSON:"""
 
-            import google.generativeai as genai
+            from google.genai import types as genai_types
 
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self.llm.model.generate_content(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(
+                    generation_config=genai_types.GenerateContentConfig(
                         temperature=0.3,
                         max_output_tokens=500,
                     ),

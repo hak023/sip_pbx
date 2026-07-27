@@ -69,14 +69,14 @@ QA 쌍이 없으면 빈 배열 []을 반환하세요.
 
 JSON:"""
 
-            import google.generativeai as genai
+            from google.genai import types as genai_types
 
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self.llm.model.generate_content(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(
+                    generation_config=genai_types.GenerateContentConfig(
                         temperature=0.2,
                         max_output_tokens=800,
                     ),

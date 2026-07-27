@@ -20,6 +20,10 @@ logger = structlog.get_logger(__name__)
 
 _CTX_KEY = "_ai_latency_turn"
 
+# Story 3.2 (voice-latency-turn-taking-prd.md FR2): 발화 종료→첫 오디오 총 지연 하드 리밋.
+# 초과 시 response_latency_sla_exceeded 이벤트로 원인 구간(suspected_stage)을 자동 태깅한다.
+SLA_THRESHOLD_MS = 5000.0
+
 
 def _turn(sync_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if sync_ctx is None:
@@ -224,6 +228,92 @@ def mark_first_audio_and_compare(sync_ctx: Optional[Dict[str, Any]], *, call_id:
     if cid:
         log_call_data(cid, "timing", "ai_response_latency_compare", **payload)
 
+    # Story 3.2 (FR2): 5초 SLA 초과 시 원인 구간 자동 태깅.
+    sla_payload = check_and_tag_sla_exceeded(
+        t, total_ms=ms_stt_to_first_audio_actual, call_id=cid
+    )
+    if sla_payload is not None:
+        logger.warning(
+            "response_latency_sla_exceeded",
+            call=True,
+            category="timing",
+            progress="timing",
+            **sla_payload,
+        )
+        if cid:
+            log_call_data(cid, "timing", "response_latency_sla_exceeded", **sla_payload)
+
 
 def _ms(t0: float, t1: float) -> float:
     return round((t1 - t0) * 1000.0, 1)
+
+
+def compute_sla_stage_breakdown_ms(t: Dict[str, Any]) -> Dict[str, float]:
+    """
+    턴 타이밍 딕셔너리(`t`, `_turn()`이 관리하는 내부 dict)에서 구간별 소요시간(ms)을 계산.
+
+    구간 정의(순서대로): STT 최종 확정(stt_final) → LLM 호출 시작(llm_start) →
+    LLM 첫 문장 준비(llm_first_sentence) → LLM 전체 완료(llm_complete) →
+    TTS로 텍스트 전달(tts_text_push) → 첫 RTP 오디오 송신(first_audio).
+
+    존재하지 않는 타임스탬프(예: 캐시 히트로 LLM 자체를 안 탄 경우)는 건너뛴다 —
+    부분 정보라도 반환한다(voice-latency-turn-taking-prd.md FR2 AC3, "unknown이어도
+    구간별 값은 함께 남긴다").
+    """
+    stt_final = t.get("stt_final_mono")
+    llm_start = t.get("llm_start_mono")
+    llm_first = t.get("llm_first_sentence_mono")
+    llm_complete = t.get("llm_complete_mono")
+    tts_push = t.get("tts_text_push_mono")
+    first_audio = t.get("first_audio_mono")
+
+    breakdown: Dict[str, float] = {}
+    if stt_final is not None and llm_start is not None:
+        breakdown["cache_or_rag_pre_llm"] = _ms(stt_final, llm_start)
+    if llm_start is not None and llm_first is not None:
+        breakdown["llm_first_sentence_generation"] = _ms(llm_start, llm_first)
+    if llm_first is not None and llm_complete is not None:
+        breakdown["llm_remaining_generation"] = _ms(llm_first, llm_complete)
+    if llm_complete is not None and tts_push is not None:
+        breakdown["post_llm_processing"] = _ms(llm_complete, tts_push)
+    elif llm_first is not None and tts_push is not None and llm_complete is None:
+        # chunked 스트리밍 등으로 llm_complete 마크가 없는 경우 첫 문장 기준으로 대체.
+        breakdown["post_llm_processing"] = _ms(llm_first, tts_push)
+    if tts_push is not None and first_audio is not None:
+        breakdown["tts_synthesis_and_rtp"] = _ms(tts_push, first_audio)
+    return breakdown
+
+
+def suspected_sla_stage(breakdown: Dict[str, float]) -> str:
+    """구간별 소요시간(ms) 중 가장 큰 구간의 이름을 반환. 값이 없으면 'unknown'."""
+    if not breakdown:
+        return "unknown"
+    return max(breakdown, key=breakdown.get)
+
+
+def check_and_tag_sla_exceeded(
+    t: Dict[str, Any],
+    *,
+    total_ms: float,
+    call_id: str = "",
+    threshold_ms: float = SLA_THRESHOLD_MS,
+) -> Optional[Dict[str, Any]]:
+    """
+    총 지연(`total_ms`)이 임계값을 초과하면 원인 구간을 태깅한 payload를 반환하고,
+    초과하지 않으면 `None`을 반환한다(정상 케이스는 이벤트를 만들지 않음 — FR2 AC4).
+
+    로깅은 호출부(`mark_first_audio_and_compare`)에서 수행한다 — 이 함수는 순수 계산만
+    담당해 단위 테스트가 로거 없이도 가능하게 한다(voice-latency-turn-taking Story 3.2 Task 1).
+    """
+    if total_ms <= threshold_ms:
+        return None
+    breakdown = compute_sla_stage_breakdown_ms(t)
+    return {
+        "call_id": call_id or t.get("call_id") or "",
+        "turn_id": t.get("turn_id"),
+        "total_ms": round(total_ms, 1),
+        "threshold_ms": threshold_ms,
+        "suspected_stage": suspected_sla_stage(breakdown),
+        "stage_breakdown_ms": breakdown,
+        "user_text_preview": t.get("user_text_preview") or "",
+    }

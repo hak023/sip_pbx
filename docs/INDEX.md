@@ -19,17 +19,19 @@
 
 `design/`의 동명·유사 주제와 겹칠 수 있다. **구현 스택·컴포넌트 경계**는 아래를 우선한다.
 
-| 문서                                                                                                                | 설명                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| [technical-architecture.md](architecture/technical-architecture.md)                                                 | **현재 리포** 기준 기술 아키텍처(구현·스택)                                             |
-| [coding-standards.md](architecture/coding-standards.md)                                                             | BMAD Dev 에이전트 상시 로드 문서 — 로깅/DB스키마/LLM Tool-calling 등 검증된 코드 컨벤션 |
-| [production-deployment-architecture.md](architecture/production-deployment-architecture.md)                         | **상용 통합** 목표(교환기/WTIMS/API/용량/비용/외부 연동 개발)                           |
-| [ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md)                                             | AI Voicebot 백엔드                                                                      |
-| [frontend-architecture.md](architecture/frontend-architecture.md)                                                   | Next.js 운영 콘솔                                                                       |
-| [voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md)                                     | Voice AI 대화 엔진                                                                      |
-| [realtime-call-dashboard-design.md](architecture/realtime-call-dashboard-design.md)                                 | 실시간 통화 대시보드 설계(문서)                                                         |
-| [realtime-call-dashboard-implementation-summary.md](architecture/realtime-call-dashboard-implementation-summary.md) | 위 항목 구현 요약                                                                       |
-| [self-service-ai-assistant-architecture.md](architecture/self-service-ai-assistant-architecture.md)                 | **Brownfield Architecture(초안)** — 셀프서비스 AI 도우미 컴포넌트·통합 지점·소스 트리   |
+| 문서                                                                                                                | 설명                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| [technical-architecture.md](architecture/technical-architecture.md)                                                 | **현재 리포** 기준 기술 아키텍처(구현·스택)                                                             |
+| [coding-standards.md](architecture/coding-standards.md)                                                             | BMAD Dev 에이전트 상시 로드 문서 — 로깅/DB스키마/LLM Tool-calling 등 검증된 코드 컨벤션                 |
+| [production-deployment-architecture.md](architecture/production-deployment-architecture.md)                         | **상용 통합** 목표(교환기/WTIMS/API/용량/비용/외부 연동 개발)                                           |
+| [ai-voicebot-architecture.md](architecture/ai-voicebot-architecture.md)                                             | AI Voicebot 백엔드                                                                                      |
+| [frontend-architecture.md](architecture/frontend-architecture.md)                                                   | Next.js 운영 콘솔                                                                                       |
+| [voice-ai-conversation-engine.md](architecture/voice-ai-conversation-engine.md)                                     | Voice AI 대화 엔진                                                                                      |
+| [realtime-call-dashboard-design.md](architecture/realtime-call-dashboard-design.md)                                 | 실시간 통화 대시보드 설계(문서)                                                                         |
+| [realtime-call-dashboard-implementation-summary.md](architecture/realtime-call-dashboard-implementation-summary.md) | 위 항목 구현 요약                                                                                       |
+| [self-service-ai-assistant-architecture.md](architecture/self-service-ai-assistant-architecture.md)                 | **Brownfield Architecture(초안)** — 셀프서비스 AI 도우미 컴포넌트·통합 지점·소스 트리                   |
+| [voice-latency-turn-taking-architecture.md](architecture/voice-latency-turn-taking-architecture.md)                 | **Brownfield Architecture(초안)** — 응답 지연 계측·TTFT 전환·턴테이킹 재정비(Epic 3~5)                  |
+| [gemini-genai-migration-architecture.md](architecture/gemini-genai-migration-architecture.md)                       | **Brownfield Architecture(초안)** — google-genai SDK 마이그레이션 치환 매핑·Tool-calling 재구현(Epic 6) |
 
 **기타**: [architecture/](architecture/) 내 나머지 `.md`는 INDEX에 모두 열거하지 않는다. 폴더 목록·검색으로 보완한다.
 
@@ -45,6 +47,10 @@
 | [self-service-ai-assistant-brief.md](product/self-service-ai-assistant-brief.md) | **Project Brief(초안)** — 셀프서비스 AI 도우미(본인 번호 통화·문자 시 사용법·설정 안내·자동설정)                                             |
 | [self-service-ai-assistant-prd.md](product/self-service-ai-assistant-prd.md)     | **Brownfield PRD(초안)** — 셀프서비스 AI 도우미 Epic 1(Story 1.1~1.13) + Epic 2(설정 카탈로그/Screen Graph 동적화, Story 2.1~2.8), FR/NFR/CR |
 | [self-service-manual-content.md](product/self-service-manual-content.md)         | **셀프서비스 AI RAG 지식 소스** — 관리자용 서비스 이용 매뉴얼(Q&A 형식, Story 1.3 색인 대상)                                                 |
+| [voice-latency-turn-taking-brief.md](product/voice-latency-turn-taking-brief.md) | **Project Brief(초안)** — 음성 AI 응답 지연 개선(5초 SLA)·TTFT 도입·스마트 턴테이킹 재정비                                                   |
+| [voice-latency-turn-taking-prd.md](product/voice-latency-turn-taking-prd.md)     | **Brownfield PRD(초안)** — Epic 3(지연 계측·SLA 가드레일)/Epic 4(TTFT 전환)/Epic 5(턴테이킹 재정비), FR/NFR/CR                               |
+| [gemini-genai-migration-brief.md](product/gemini-genai-migration-brief.md)       | **Project Brief(초안)** — `google-generativeai`→`google-genai` SDK 마이그레이션(thinking 비활성화 근본 원인 해결)                            |
+| [gemini-genai-migration-prd.md](product/gemini-genai-migration-prd.md)           | **Brownfield PRD(초안)** — Epic A(LLMClient 전환)/B(Tool-calling 재구현)/C(주변 모듈)/D(통합 검증), FR/NFR/CR                                |
 
 ---
 
@@ -52,22 +58,29 @@
 
 BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파일은 Dev 에이전트가 아키텍처 문서를 다시 읽지 않아도 되도록 Dev Notes에 충분한 컨텍스트를 포함한다.
 
-| Story | 문서                                                                                                                   | 상태                                                                                                               |
-| ----- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| 1.1   | [1.1.self-call-detection.story.md](stories/1.1.self-call-detection.story.md)                                           | Review                                                                                                             |
-| 1.2   | [1.2.self-service-conversation-lane.story.md](stories/1.2.self-service-conversation-lane.story.md)                     | Review                                                                                                             |
-| 1.3   | [1.3.self-service-manual-rag.story.md](stories/1.3.self-service-manual-rag.story.md)                                   | Review                                                                                                             |
-| 1.4   | [1.4.settings-catalog-readonly.story.md](stories/1.4.settings-catalog-readonly.story.md)                               | Review                                                                                                             |
-| 1.5   | [1.5.onboarding-checklist.story.md](stories/1.5.onboarding-checklist.story.md)                                         | Review                                                                                                             |
-| 1.6   | [1.6.settings-query-tool.story.md](stories/1.6.settings-query-tool.story.md)                                           | Review                                                                                                             |
-| 1.7   | [1.7.usage-stats-tool.story.md](stories/1.7.usage-stats-tool.story.md)                                                 | Review                                                                                                             |
-| 1.8   | [1.8.auto-config-write-tool.story.md](stories/1.8.auto-config-write-tool.story.md)                                     | Review                                                                                                             |
-| 1.9   | [1.9.config-change-history-page.story.md](stories/1.9.config-change-history-page.story.md)                             | Review                                                                                                             |
-| 1.10  | [1.10.intelli-decision-intent-tier.story.md](stories/1.10.intelli-decision-intent-tier.story.md)                       | Done                                                                                                               |
-| 1.11  | [1.11.screen-graph-guided-assistance.story.md](stories/1.11.screen-graph-guided-assistance.story.md)                   | Done                                                                                                               |
-| 1.12  | [1.12.screen-graph-frontend-viewer.story.md](stories/1.12.screen-graph-frontend-viewer.story.md)                       | Done                                                                                                               |
-| 1.13  | [1.13.call-history-nlq.story.md](stories/1.13.call-history-nlq.story.md)                                               | Done                                                                                                               |
-| 1.14  | [1.14.empty-candidate-string-field-mitigation.story.md](stories/1.14.empty-candidate-string-field-mitigation.story.md) | Done(근본 원인 수정 + 실서버 검증 완료, [리포트](reports/2026-07/2026-07-21_story_1.14_and_2.8_implementation.md)) |
+| Story | 문서                                                                                                                               | 상태                                                                                                                                       |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1.1   | [1.1.self-call-detection.story.md](stories/1.1.self-call-detection.story.md)                                                       | Review                                                                                                                                     |
+| 1.2   | [1.2.self-service-conversation-lane.story.md](stories/1.2.self-service-conversation-lane.story.md)                                 | Review                                                                                                                                     |
+| 1.3   | [1.3.self-service-manual-rag.story.md](stories/1.3.self-service-manual-rag.story.md)                                               | Review                                                                                                                                     |
+| 1.4   | [1.4.settings-catalog-readonly.story.md](stories/1.4.settings-catalog-readonly.story.md)                                           | Review                                                                                                                                     |
+| 1.5   | [1.5.onboarding-checklist.story.md](stories/1.5.onboarding-checklist.story.md)                                                     | Review                                                                                                                                     |
+| 1.6   | [1.6.settings-query-tool.story.md](stories/1.6.settings-query-tool.story.md)                                                       | Review                                                                                                                                     |
+| 1.7   | [1.7.usage-stats-tool.story.md](stories/1.7.usage-stats-tool.story.md)                                                             | Review                                                                                                                                     |
+| 1.8   | [1.8.auto-config-write-tool.story.md](stories/1.8.auto-config-write-tool.story.md)                                                 | Review                                                                                                                                     |
+| 1.9   | [1.9.config-change-history-page.story.md](stories/1.9.config-change-history-page.story.md)                                         | Review                                                                                                                                     |
+| 1.10  | [1.10.intelli-decision-intent-tier.story.md](stories/1.10.intelli-decision-intent-tier.story.md)                                   | Done                                                                                                                                       |
+| 1.11  | [1.11.screen-graph-guided-assistance.story.md](stories/1.11.screen-graph-guided-assistance.story.md)                               | Done                                                                                                                                       |
+| 1.12  | [1.12.screen-graph-frontend-viewer.story.md](stories/1.12.screen-graph-frontend-viewer.story.md)                                   | Done                                                                                                                                       |
+| 1.13  | [1.13.call-history-nlq.story.md](stories/1.13.call-history-nlq.story.md)                                                           | Done                                                                                                                                       |
+| 1.14  | [1.14.empty-candidate-string-field-mitigation.story.md](stories/1.14.empty-candidate-string-field-mitigation.story.md)             | Done(근본 원인 수정 + 실서버 검증 완료, [리포트](reports/2026-07/2026-07-21_story_1.14_and_2.8_implementation.md))                         |
+| 1.15  | [1.15.intellidecision-help-type-capability-overview.story.md](stories/1.15.intellidecision-help-type-capability-overview.story.md) | Done(코드/문서 반영, 실서버 IV1/매뉴얼 재색인은 다음 세션, [리포트](reports/2026-07/2026-07-23_intellidecision_help_type_c.md))            |
+| 1.16  | [1.16.intellidecision-types-d-to-i.story.md](stories/1.16.intellidecision-types-d-to-i.story.md)                                   | Done(코드/문서 반영, 실서버 IV3는 다음 세션, [리포트](reports/2026-07/2026-07-23_intellidecision_types_d_to_i.md))                         |
+| 1.17  | [1.17.capability-registry-rag-plan.story.md](stories/1.17.capability-registry-rag-plan.story.md)                                   | Done(축소된 권장안으로 구현 완료, 실서버 A/B 비교는 다음 세션, [리포트](reports/2026-07/2026-07-23_capability_registry_implementation.md)) |
+
+리서치(미확정 Post-MVP 후보, 제안 1·2 모두 반영 완료): [2026-07-23_intellidecision_enhancement_research.md](reports/2026-07/2026-07-23_intellidecision_enhancement_research.md) — IntelliDecision 신규 유형(D~I, Story 1.16) 및 능력 레지스트리 기반 RAG 개선(Story 1.17)
+
+결정 지원 리포트: [2026-07-23_capability_registry_decision_options.md](reports/2026-07/2026-07-23_capability_registry_decision_options.md) — Story 1.17의 5개 결정 사항별 옵션 비교 + 축소된 권장 설계(신규 5번째 탭 대신 기존 catalog/screen-graph API 재사용)
 
 ### Epic 2 — 설정 카탈로그/Screen Graph 동적화 및 IntelliDecision 신뢰성 개선 (2026-07-20 신설, 구현 진행 중)
 
@@ -83,6 +96,45 @@ BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파
 | 2.8   | [2.8.manual-domain-mapping-dynamic.story.md](stories/2.8.manual-domain-mapping-dynamic.story.md) | Done |
 
 구현 리포트: [2026-07-21_self_service_epic2_story_2.1_to_2.5_implementation.md](reports/2026-07/2026-07-21_self_service_epic2_story_2.1_to_2.5_implementation.md), [2026-07-21_self_service_epic2_story2.5_iv2_and_story2.6_hint_removal.md](reports/2026-07/2026-07-21_self_service_epic2_story2.5_iv2_and_story2.6_hint_removal.md), [2026-07-21_self_service_epic2_completion_report.md](reports/2026-07/2026-07-21_self_service_epic2_completion_report.md), [2026-07-21_story_1.14_and_2.8_implementation.md](reports/2026-07/2026-07-21_story_1.14_and_2.8_implementation.md)(Story 2.8 구현 포함)
+
+### Epic 3~5 — 음성 AI 응답 지연 개선 및 스마트 턴테이킹 (2026-07-24 신설, 진행 중)
+
+PRD: [voice-latency-turn-taking-prd.md](product/voice-latency-turn-taking-prd.md) / Architecture: [voice-latency-turn-taking-architecture.md](architecture/voice-latency-turn-taking-architecture.md)
+
+| Story | 문서                                                                                                     | 상태                                                                                                                      |
+| ----- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 3.1   | [3.1.latency-instrumentation.story.md](stories/3.1.latency-instrumentation.story.md)                     | Done(기구현 확인+간극 보완, [리포트](reports/2026-07/2026-07-24_voice_latency_epic3_story_3.1_3.2_3.4_implementation.md)) |
+| 3.2   | [3.2.latency-sla-cause-tagging.story.md](stories/3.2.latency-sla-cause-tagging.story.md)                 | Done(코드+단위테스트, 실서버 cross-check는 다음 세션)                                                                     |
+| 3.3   | [3.3.latency-sla-response-policy.story.md](stories/3.3.latency-sla-response-policy.story.md)             | Draft(운영 데이터 수집 후 착수)                                                                                           |
+| 3.4   | [3.4.streaming-tts-processor-audit.story.md](stories/3.4.streaming-tts-processor-audit.story.md)         | Done(죽은 코드로 확정, 대안 C 미채택)                                                                                     |
+| 4.1   | [4.1.ttft-design-decision.story.md](stories/4.1.ttft-design-decision.story.md)                           | Done(대안 B 결정, QA 하네스 실측으로 안전 서브셋을 {chitchat, out_of_scope}로 재조정 — greeting은 이미 즉시응답)          |
+| 5.1   | [5.1.turn-taking-threshold-audit.story.md](stories/5.1.turn-taking-threshold-audit.story.md)             | Done(Smart Turn/barge-in 죽은 코드로 확정, Epic 5 범위 재조정 필요)                                                       |
+| 5.2   | [5.2.smart-turn-bargein-revival-design.story.md](stories/5.2.smart-turn-bargein-revival-design.story.md) | Done(사용자 결정: 부활 — 상세설계·권고 완료, 구현은 Story 5.4로 이관)                                                     |
+
+QA 하네스: [ai_pipeline_test.py](../src/api/routers/ai_pipeline_test.py)(`/api/ai-pipeline/test/converse`, `AI_PIPELINE_QA_TEST_MODE` 게이트) — 실서버 통화 없이 STT 직후~TTS 직전 갭을 텍스트로 재현. 실측 결과: [2026-07-24_ai_pipeline_qa_endpoint_and_latency_findings.md](reports/2026-07/2026-07-24_ai_pipeline_qa_endpoint_and_latency_findings.md)(chitchat 응답 9.6~9.75초 재현 확인, greeting은 0.02초)
+
+✅ **(2026-07-27) Epic 6 완료 후 재측정**: [2026-07-27_post_thinking_fix_latency_remeasurement.md](reports/2026-07/2026-07-27_post_thinking_fix_latency_remeasurement.md) — chitchat 응답이 9.6~9.75초 → 1.05~3.02초(평균 약 2초)로 개선. **Epic 4 실구현은 이 결과 재판단 전까지 보류**(사용자 지시).
+
+🔴 **근본 원인 확정(최우선 확인)**: [2026-07-24_root_cause_gemini_thinking_not_actually_disabled.md](reports/2026-07/2026-07-24_root_cause_gemini_thinking_not_actually_disabled.md) — 위 9.6초 지연이 `LLMClient`의 Gemini "thinking" 비활성화 코드(`ThinkingConfig`)가 설치된 `google-generativeai==0.8.6`(deprecated) SDK에 아예 존재하지 않아 실패가 침묵되어 왔던 것이 원인. `LLMClient`를 쓰는 모든 경로(classify_intent 3차 분류, self-service Tool-calling 등)에 영향 가능성. SDK 마이그레이션(`google-genai`) 등 조치 결정 필요.
+
+📋 **다음 세션 시작 시 필독**: [2026-07-24_session_handover_voice_latency_and_gemini_thinking_root_cause.md](reports/2026-07/2026-07-24_session_handover_voice_latency_and_gemini_thinking_root_cause.md) — 이번 세션 전체 요약 + 착수 지점(모델 교체 시도 실패 확인 포함, `llm_client.py` 스파이크 검증부터 시작 권장) + 현재 `config.yaml` 상태.
+
+> Epic 4(Story 4.2~4.3)의 나머지 Story는 PRD에 정의만 되어 있고, thinking 비활성화 이후 재측정 결과(위 2026-07-27 리포트)를 바탕으로 착수 여부를 사용자가 먼저 결정해야 한다. Epic 5는 Story 5.2에서 "부활"로 방향이 확정되었으므로, Story 5.3(FR7 실서버 재현, 저위험)을 먼저 착수하고 Story 5.4(부활 구현)로 이어간다(PRD/Architecture §2.3.1 참고).
+
+### Epic 6 — Gemini SDK 마이그레이션 (`google-generativeai` → `google-genai`) (2026-07-24 신설, **완료**)
+
+PRD: [gemini-genai-migration-prd.md](product/gemini-genai-migration-prd.md) / Architecture: [gemini-genai-migration-architecture.md](architecture/gemini-genai-migration-architecture.md) / Brief: [gemini-genai-migration-brief.md](product/gemini-genai-migration-brief.md)
+
+| Story | 문서                                                                                                                     | 상태                                                                                                                                                                                                                     |
+| ----- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 6.1   | [6.1.llm-client-genai-adapter.story.md](stories/6.1.llm-client-genai-adapter.story.md)                                   | Done([리포트](reports/2026-07/2026-07-24_story_6.1_llm_client_genai_migration.md))                                                                                                                                       |
+| 6.2   | [6.2.booking-gemini-fc-genai-migration.story.md](stories/6.2.booking-gemini-fc-genai-migration.story.md)                 | Done(실 API 2라운드 Tool-calling 검증 완료)                                                                                                                                                                              |
+| 6.3   | [6.3.peripheral-modules-genai-migration.story.md](stories/6.3.peripheral-modules-genai-migration.story.md)               | Done([리포트](reports/2026-07/2026-07-27_story_6.3_peripheral_modules_genai_migration.md), gemini-2.0-flash 404 결함 발견 후 [즉시 수정 완료](reports/2026-07/2026-07-27_ringback_and_call_history_gemini_model_fix.md)) |
+| 6.4   | [6.4.full-integration-verification-and-cleanup.story.md](stories/6.4.full-integration-verification-and-cleanup.story.md) | Done(google-generativeai venv 제거 + 실서버 booking/self_service/링백 cross-check 전부 통과)                                                                                                                             |
+
+스파이크 검증(가설 확정): [2026-07-24_google_genai_thinking_off_spike_validation.md](reports/2026-07/2026-07-24_google_genai_thinking_off_spike_validation.md) — `thinking_budget=0` 실적용 시 TTFT 3.81s→0.77s(약 80%↓) 실측.
+
+Epic 6 전체 완료 — `google-generativeai` 완전 제거(venv uninstall + requirements-ai.txt 정리), 실서버 chitchat/self_service Tool-calling/링백 가사 생성 cross-check 전부 통과.
 
 
 ---
@@ -125,9 +177,9 @@ BMAD SM(`create-next-story`)이 생성한 개발 착수용 상세 Story. 각 파
 
 ## 발표·브리프 (`docs/presentation/`)
 
-| 문서                                              | 설명                  |
-| ------------------------------------------------- | --------------------- |
-| [PROJECT_BRIEF.md](presentation/PROJECT_BRIEF.md) | 프로젝트 브리프(요약) |
+| 문서                                                                                                | 설명                                                                             |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [PROJECT_BRIEF.md](presentation/PROJECT_BRIEF.md)                                                   | 프로젝트 브리프(요약)                                                            |
 | [self-service-ai-assistant-introduction.md](presentation/self-service-ai-assistant-introduction.md) | 셀프서비스 AI 도우미 신규 기능 소개자료 (아키텍처, RAG, IntelliDecision, 사용법) |
 
 `images/`·Mermaid 생성 스크립트 등은 동 폴더에서 관리한다.

@@ -379,58 +379,79 @@ export default function AiAssistantDocsPage() {
 
             {/* ── Q&A 탭 ── */}
             {tab === "qa" && (
-                <div className="flex gap-5">
-                    {/* 섹션 사이드바 */}
-                    <aside className="w-48 flex-shrink-0">
-                        <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-                            {loadingQa && <p className="p-3 text-xs text-gray-400">로딩 중…</p>}
-                            {qaError && <p className="p-3 text-xs text-red-500">{qaError}</p>}
-                            {!loadingQa && sections.length === 0 && !qaError && (
-                                <p className="p-3 text-xs text-gray-400">항목 없음</p>
-                            )}
-                            <nav className="divide-y divide-gray-50">
-                                {sections.map((sec) => (
-                                    <button
-                                        key={sec}
-                                        onClick={() => setSelectedSection(sec)}
-                                        className={
-                                            "w-full text-left px-3 py-2.5 text-xs leading-snug transition-colors " +
-                                            (selectedSection === sec
-                                                ? "bg-indigo-50 text-indigo-700 font-medium"
-                                                : "hover:bg-gray-50 text-gray-600")
-                                        }
-                                    >
-                                        {sec}
-                                    </button>
-                                ))}
-                            </nav>
-                        </div>
-                    </aside>
+                <div className="space-y-5">
+                    {/* AI Tool 기반 능력 안내 (Story 1.17) — 설정 카탈로그 도메인이 아닌
+                        독립 Tool(통계·통화 이력·온보딩·실행 취소)은 카탈로그/화면 안내 탭에
+                        나타나지 않으므로 여기에 별도로 안내한다. 변경 빈도가 낮아 정적 목록으로
+                        관리한다(백엔드 self_service_agent.py::_TOOL_CAPABILITY_EXAMPLES와 동일 내용). */}
+                    <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+                        <p className="text-sm font-medium text-indigo-800">
+                            전화·문자로 이렇게도 도와드릴 수 있어요
+                        </p>
+                        <ul className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-gray-600">
+                            <li>· 이용 통계 조회 — “이번 달 AI 몇 번 응대했어?”</li>
+                            <li>· 통화 이력 자연어 조회 — “오늘 못 받은 전화 있어?”</li>
+                            <li>· 아직 끝나지 않은 초기 설정 안내 — “아직 설정 안 한 거 있어?”</li>
+                            <li>· 방금 바꾼 설정 되돌리기 — “방금 바꾼 거 원래대로 해줘”</li>
+                        </ul>
+                        <p className="mt-2 text-xs text-gray-400">
+                            설정 조회·변경 가능 항목은 “AI 변경 가능 설정” 탭에서 확인하세요.
+                        </p>
+                    </div>
 
-                    {/* Q&A 목록 */}
-                    <main className="flex-1 min-w-0 space-y-3">
-                        {!loadingQa && filteredItems.length === 0 && !qaError && (
-                            <p className="text-sm text-gray-400">항목을 선택하거나 색인을 기다려주세요.</p>
-                        )}
-                        {filteredItems.map((item) => (
-                            <div
-                                key={item.id}
-                                className="rounded-xl border border-gray-100 bg-white shadow-sm p-4"
-                            >
-                                <div className="flex items-start justify-between gap-3">
-                                    <p className="text-sm font-medium text-gray-800">{item.question}</p>
-                                    {item.related_domain && (
-                                        <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
-                                            {DOMAIN_LABEL[item.related_domain] || item.related_domain}
-                                        </span>
-                                    )}
-                                </div>
-                                <p className="mt-2 text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">
-                                    {item.answer}
-                                </p>
+                    <div className="flex gap-5">
+                        {/* 섹션 사이드바 */}
+                        <aside className="w-48 flex-shrink-0">
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+                                {loadingQa && <p className="p-3 text-xs text-gray-400">로딩 중…</p>}
+                                {qaError && <p className="p-3 text-xs text-red-500">{qaError}</p>}
+                                {!loadingQa && sections.length === 0 && !qaError && (
+                                    <p className="p-3 text-xs text-gray-400">항목 없음</p>
+                                )}
+                                <nav className="divide-y divide-gray-50">
+                                    {sections.map((sec) => (
+                                        <button
+                                            key={sec}
+                                            onClick={() => setSelectedSection(sec)}
+                                            className={
+                                                "w-full text-left px-3 py-2.5 text-xs leading-snug transition-colors " +
+                                                (selectedSection === sec
+                                                    ? "bg-indigo-50 text-indigo-700 font-medium"
+                                                    : "hover:bg-gray-50 text-gray-600")
+                                            }
+                                        >
+                                            {sec}
+                                        </button>
+                                    ))}
+                                </nav>
                             </div>
-                        ))}
-                    </main>
+                        </aside>
+
+                        {/* Q&A 목록 */}
+                        <main className="flex-1 min-w-0 space-y-3">
+                            {!loadingQa && filteredItems.length === 0 && !qaError && (
+                                <p className="text-sm text-gray-400">항목을 선택하거나 색인을 기다려주세요.</p>
+                            )}
+                            {filteredItems.map((item) => (
+                                <div
+                                    key={item.id}
+                                    className="rounded-xl border border-gray-100 bg-white shadow-sm p-4"
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <p className="text-sm font-medium text-gray-800">{item.question}</p>
+                                        {item.related_domain && (
+                                            <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
+                                                {DOMAIN_LABEL[item.related_domain] || item.related_domain}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="mt-2 text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">
+                                        {item.answer}
+                                    </p>
+                                </div>
+                            ))}
+                        </main>
+                    </div>
                 </div>
             )}
 

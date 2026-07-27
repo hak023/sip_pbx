@@ -1100,6 +1100,37 @@ _FALLBACK_LYRICS = (
     "[Outro]\n감사합니다"
 )
 
+# `_call_llm`/`_call_llm_style_line`이 get_llm_client() 싱글턴을 못 구할 때만 쓰는 폴백 모델명.
+# [2026-07-27] 예전에는 "gemini-2.0-flash"를 하드코딩했는데 이 계정에서 이미 404로 폐지되어
+# 있어 링백 가사/스타일 생성이 항상 실패하고 있었다(Story 6.3 리포트에서 발견). 다른 모든
+# LLM 호출 경로(LLMClient)와 동일한 모델을 쓰도록 get_llm_client().model_name을 우선
+# 사용하고, 싱글턴이 없는 예외적 상황에서만 이 상수를 쓴다 — 반드시 config.yaml의
+# gemini.model 기본값과 동일하게 유지할 것(불일치 시 이 상수도 함께 갱신).
+_RINGBACK_LLM_MODEL_FALLBACK = "gemini-2.5-flash"
+
+
+def _resolve_ringback_llm_client_and_model() -> tuple[Any, str]:
+    """다른 LLM 호출 경로와 동일한 client/모델을 재사용한다.
+
+    시스템 전역 `LLMClient` 싱글턴(`factory.get_llm_client()`)이 초기화되어 있으면 그
+    `_client`(google.genai.Client)와 `model_name`을 그대로 재사용해, 통화 응대·의도분류 등과
+    **완전히 동일한 모델**을 쓰도록 보장한다. 싱글턴이 없는 예외적 컨텍스트(독립 스크립트 등)
+    에서만 새 클라이언트를 만들되, 모델명은 `_RINGBACK_LLM_MODEL_FALLBACK`(config.yaml
+    gemini.model 기본값과 동일)을 사용한다.
+    """
+    client: Any = None
+    model_name = _RINGBACK_LLM_MODEL_FALLBACK
+    try:
+        from src.ai_voicebot.factory import get_llm_client
+
+        llm_client = get_llm_client()
+        if llm_client is not None:
+            client = getattr(llm_client, "_client", None)
+            model_name = getattr(llm_client, "model_name", None) or model_name
+    except Exception as e:
+        logger.debug("ringback_llm_singleton_unavailable", error=str(e))
+    return client, model_name
+
 
 def _is_fallback_lyrics(text: str) -> bool:
     return (text or "").strip() == _FALLBACK_LYRICS.strip()
@@ -1287,20 +1318,29 @@ async def _fetch_persona_info(owner: str) -> str:
 
 
 async def _call_llm(prompt: str) -> tuple[str, str | None]:
-    """Gemini 로 가사 생성. (가사, 오류시 짧은 메시지) — 실패 시 고정 폴백."""
-    from src.common.gemini_api_key import resolve_gemini_api_key
+    """Gemini 로 가사 생성. (가사, 오류시 짧은 메시지) — 실패 시 고정 폴백.
 
-    api_key = resolve_gemini_api_key() or ""
-    if not api_key:
-        logger.error("ringback_llm_no_api_key", hint="GEMINI_API_KEY 또는 GOOGLE_API_KEY")
-        return _FALLBACK_LYRICS, "no_api_key"
+    [2026-07-27] 다른 LLM 호출 경로(LLMClient)와 동일한 client/모델을 재사용하도록 수정 —
+    예전에는 "gemini-2.0-flash"를 하드코딩했는데 이 계정에서 이미 404로 폐지되어 있어 항상
+    실패하고 있었다(Story 6.3에서 발견). `_resolve_ringback_llm_client_and_model()` 참고.
+    """
+    client, model_name = _resolve_ringback_llm_client_and_model()
+
+    if client is None:
+        from src.common.gemini_api_key import resolve_gemini_api_key
+
+        api_key = resolve_gemini_api_key() or ""
+        if not api_key:
+            logger.error("ringback_llm_no_api_key", hint="GEMINI_API_KEY 또는 GOOGLE_API_KEY")
+            return _FALLBACK_LYRICS, "no_api_key"
+        from google import genai
+
+        client = genai.Client(api_key=api_key)
 
     try:
-        import google.generativeai as genai
-
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        resp = await model.generate_content_async(prompt)
+        resp = await client.aio.models.generate_content(
+            model=model_name, contents=prompt
+        )
         text = _extract_gemini_text(resp)
         if not text:
             pf = getattr(resp, "prompt_feedback", None)
@@ -1316,20 +1356,28 @@ async def _call_llm(prompt: str) -> tuple[str, str | None]:
 
 
 async def _call_llm_style_line(prompt: str) -> tuple[str, str | None]:
-    """Suno용 스타일 한 줄. 실패 시 ("", reason)."""
-    from src.common.gemini_api_key import resolve_gemini_api_key
+    """Suno용 스타일 한 줄. 실패 시 ("", reason).
 
-    api_key = resolve_gemini_api_key() or ""
-    if not api_key:
-        logger.error("ringback_style_llm_no_api_key", hint="GEMINI_API_KEY 또는 GOOGLE_API_KEY")
-        return "", "no_api_key"
+    [2026-07-27] `_call_llm`과 동일하게 시스템 전역 LLMClient와 동일한 모델을 재사용하도록
+    수정(과거 gemini-2.0-flash 하드코딩 404 결함 수정, Story 6.3 참고).
+    """
+    client, model_name = _resolve_ringback_llm_client_and_model()
+
+    if client is None:
+        from src.common.gemini_api_key import resolve_gemini_api_key
+
+        api_key = resolve_gemini_api_key() or ""
+        if not api_key:
+            logger.error("ringback_style_llm_no_api_key", hint="GEMINI_API_KEY 또는 GOOGLE_API_KEY")
+            return "", "no_api_key"
+        from google import genai
+
+        client = genai.Client(api_key=api_key)
 
     try:
-        import google.generativeai as genai
-
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        resp = await model.generate_content_async(prompt)
+        resp = await client.aio.models.generate_content(
+            model=model_name, contents=prompt
+        )
         text = _extract_gemini_text(resp)
         if not text:
             pf = getattr(resp, "prompt_feedback", None)
