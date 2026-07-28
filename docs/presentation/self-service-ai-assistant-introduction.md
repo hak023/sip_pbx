@@ -108,105 +108,65 @@ SmartPBX AI는 원래 **고객(발신자)이 테넌트(착신자)에게 문의**
 
 ## 3. 아키텍처
 
-### 3.1 전체 구성 개요
+### 3.1 전체 구성 개요 — "무슨 일이 일어나는지" 관점
 
 셀프서비스 AI 도우미는 기존 AI SIP PBX 플랫폼 위에 **추가 인프라 없이** 구현된 Brownfield
 Enhancement다. 기존 시스템의 LangGraph 대화 오케스트레이션, ChromaDB RAG, 멀티테넌트
 격리 구조를 그대로 재사용하며, **신규 코드는 최소 변경**으로 통합된다.
 
+> 아래 다이어그램은 **소스 파일 이름이 아니라 "이 단계가 무슨 역할을 하는지"** 기준으로
+> 그렸다. 실제 구현 파일과의 매핑은 각 박스 아래 회색 소스 표기 또는 [3.2 신규 컴포넌트
+> 목록](#32-신규-컴포넌트-목록) 표를 참고한다. 통화가 SIP로 어떻게 연결되는지는 기존
+> 시스템 그대로이므로 생략하고, **관리자가 자기 번호로 연결한 시점부터** 시작한다.
+
 ```mermaid
-graph TD
-    subgraph CH["통화·문자 채널 (기존, 무변경)"]
-        SIPV[SIP INVITE 음성]
-        SIPM[SIP MESSAGE 문자]
+flowchart TD
+    Start(["관리자가 본인 번호로<br/>전화/문자를 연결"]) --> Detect{"이 연결이 '내가 나에게'<br/>거는 셀프서비스 세션인가?<br/><small>발신번호=착신번호 비교</small>"}
+
+    Detect -->|"아니오<br/>(일반 고객 문의)"| NormalFlow["기존 고객 응대 흐름 그대로 진행<br/><small>(의도분류 → 라우팅 → 예약 등)</small>"]
+
+    Detect -->|"예<br/>(관리자 셀프서비스)"| Orchestrator["대화 판단 엔진<br/><b>IntelliDecision</b><br/>'무엇을 원하는지' 한 번의 LLM 호출로 판단<br/><small>self_service_agent_node</small>"]
+
+    subgraph Knowledge["판단에 참고할 지식을 모으는 단계"]
+        direction TB
+        Manual["① 사용법 지식 검색<br/>매뉴얼 Q&A를 뜻으로 검색<br/><small>rag.py + ChromaDB</small>"]
+        ScreenInfo["② 화면 위치 지식 조회<br/>'이 기능은 어느 화면에 있는지'<br/><small>screen_graph.py + knowledge_graph.py</small>"]
+        Registry["③ 설정 항목 사전 조회<br/>'지금 값이 뭔지·바꿀 수 있는지'<br/><small>settings_catalog.py</small>"]
     end
 
-    subgraph ENTRY["공통 진입점 (최소 수정 1곳)"]
-        PU["ConversationAgent.process_utterance()"]
-        DET[["self_service/detection.py<br/>is_self_service_session()"]]
+    Orchestrator --> Manual
+    Orchestrator --> ScreenInfo
+    Orchestrator --> Registry
+    Manual --> Judge
+    ScreenInfo --> Judge
+    Registry --> Judge
+
+    Judge{"IntelliDecision 최종 판단:<br/>무엇을 해야 하는가?"}
+
+    Judge -->|"궁금해서 물어봄<br/>(탐색성 질문)"| Explain["설명 + 화면 위치를 답변으로 조립<br/><small>설정 변경 없음, Tool 미호출</small>"]
+
+    Judge -->|"설정을 바꿔달라는 요청"| AskConfirm["'이렇게 바꿀까요?'라고<br/>먼저 확인 발화"]
+    AskConfirm --> UserSays{"사용자가<br/>긍정으로 답했는가?"}
+    UserSays -->|"예"| Execute["실제 설정 값 변경 실행<br/><small>auto_config.py</small>"]
+    UserSays -->|"아니오/취소"| Cancel["변경 없이 취소 처리"]
+
+    Judge -->|"통계·통화이력을 물어봄"| Lookup["통계/통화이력 조회 후 답변<br/><small>stats.py, call_history_query.py</small>"]
+
+    Judge -->|"방금 바꾼 걸 되돌리고 싶어함"| UndoFlow["직전 변경 값을 확인 후<br/>동의 시 원래 값으로 복원<br/><small>undo Tool 2종</small>"]
+
+    Execute --> History[("변경 이력 저장<br/>(되돌리기·감사 근거)")]
+    UndoFlow --> History
+
+    subgraph AdminWeb["운영자 전용 관리 화면 (대화 흐름과 별개 경로)"]
+        WebEdit["웹에서 설정 항목의 라벨/허용값/<br/>화면 안내 문구를 직접 편집<br/><small>settings_ai_assistant.py API</small>"] -->|"코드 배포 없이<br/>즉시 반영(핫 리로드)"| Registry
     end
-
-    subgraph GRAPH["LangGraph 대화 오케스트레이션 (신규 노드 1개 추가)"]
-        CI[classify_intent_node]
-        RU[route_utterance_node]
-        BA[booking_agent_node]
-        SSA[["self_service_agent_node (신규)<br/>IntelliDecision 판단 포함"]]
-    end
-
-    subgraph SS["신규: src/ai_voicebot/self_service/"]
-        CAT[settings_catalog.py]
-        OB[onboarding.py]
-        SG[screen_graph.py]
-        KG[knowledge_graph.py<br/>2-hop traverse]
-        IDP[intellidecision_policy.py<br/>유형 A~I 레지스트리]
-        TOOLS[tools.py]
-        AC[auto_config.py]
-        STATS[stats.py]
-        CHQ[call_history_query.py]
-        RAG[rag.py]
-        CCL[catalog_config_loader.py]
-        MI[manual_indexer.py<br/>오프라인 색인 스크립트]
-    end
-
-    subgraph EXIST["기존 서비스·DB (재사용)"]
-        PS[persona_service]
-        CRS[chat_relay_service]
-        CC[call_control/db.py]
-        CONTACTS[caller_contact_db.py]
-        GCAL[gcal_service.py]
-        CRDB[(call_record_db)]
-        CHROMA[(ChromaDB<br/>doc_type=self_service_manual)]
-        CFGDB[(self_service_catalog_config)]
-        CHGDB[(self_service_config_changes)]
-    end
-
-    subgraph API["관리 콘솔 API (신규, 그래프 미경유)"]
-        RESTAPI[api/routers/settings_ai_assistant.py]
-    end
-
-    SIPV --> PU
-    SIPM --> PU
-    PU --> DET
-    DET -->|"is_self_service_session 값을 state에 기록"| CI
-    CI -->|"is_self_service_session=True → LLM 분류 스킵"| SSA
-    CI -->|"기존 동작 (LLM 분류)"| RU
-    RU --> BA
-
-    SSA --> IDP
-    SSA --> CAT
-    SSA --> OB
-    SSA --> SG
-    SSA --> KG
-    SSA --> RAG
-    SSA --> TOOLS
-
-    KG --> SG
-    KG --> CAT
-    TOOLS --> CAT
-    TOOLS --> AC
-    TOOLS --> STATS
-    TOOLS --> CHQ
-    TOOLS --> OB
-
-    AC --> CAT
-    AC --> CHGDB
-    STATS --> CRDB
-    CHQ --> CRDB
-    RAG --> CHROMA
-    MI -.->|"관리자가 수동 실행"| CHROMA
-
-    CAT --> CCL
-    CAT --> PS
-    CAT --> CRS
-    CAT --> CC
-    CAT --> CONTACTS
-    CAT --> GCAL
-    CCL --> CFGDB
-
-    RESTAPI --> CAT
-    RESTAPI --> CCL
-    RESTAPI --> CFGDB
 ```
+
+> **화살표 분기 읽는 법**: 굵게 표시된 두 갈래 분기(`Detect`, `Judge`, `UserSays`)가 이
+> 아키텍처의 핵심 의사결정 지점이다. 예를 들어 `Judge`에서 "탐색성 질문"으로 판단되면
+> 설정은 절대 바뀌지 않고 설명만 나가고, "변경 요청"으로 판단돼도 사용자가 `UserSays`에서
+> 긍정하기 전까지는 `Execute`(실제 반영)에 도달하지 않는다 — 이 2단계 확인 구조가 실수로
+> 설정이 바뀌는 사고를 막는 핵심 안전장치다.
 
 ### 3.2 신규 컴포넌트 목록
 
@@ -242,29 +202,29 @@ graph TD
 | 프론트엔드          | Next.js(App Router)   | 신규 페이지 1개 추가                                              |
 | **신규 인프라**     | **없음**              | 기존 스택만으로 구현                                              |
 
-### 3.4 셀프콜 감지 메커니즘
+### 3.4 셀프콜 판별 로직 상세 — "같은 사람인지" 어떻게 확인하는가
 
-SIP 레이어를 전혀 수정하지 않고, 음성·문자 두 채널이 공통으로 거치는
-`ConversationAgent.process_utterance()` 최상단에서 **딱 한 번, 전화번호 문자열 비교만으로**
-판별한다.
+3.1의 `Detect` 분기가 실제로 어떻게 동작하는지에 대한 구현 상세다. 통화·문자 채널을
+SIP 레벨에서 손대지 않고, 두 채널이 공통으로 거치는 대화 진입점 한 곳에서 **딱 한 번,
+전화번호 문자열 비교만으로** 판별한다.
 
 ```mermaid
 flowchart LR
-    A["발신번호<br/>caller_number"] --> N1["번호 정규화<br/>normalize_owner_username()"]
-    B["착신번호(테넌트 소유주)<br/>owner"] --> N2["번호 정규화<br/>normalize_owner_username()"]
-    N1 --> EQ{"두 번호가<br/>동일한가?"}
+    A["전화 건 사람(발신번호)"] --> N1["번호 형식 통일<br/><small>예: 0으로 시작 vs +82 등 표기 차이 제거</small>"]
+    B["전화 받는 테넌트 소유주 번호"] --> N2["번호 형식 통일"]
+    N1 --> EQ{"두 번호가<br/>같은 사람인가?"}
     N2 --> EQ
-    EQ -->|"예"| SELF["is_self_service_session = True<br/>→ self_service_agent_node로 직행<br/>(LLM 의도분류 스킵)"]
-    EQ -->|"아니오"| NORMAL["is_self_service_session = False<br/>→ 기존 고객 응대 경로 그대로"]
+    EQ -->|"같다"| SELF["셀프서비스 세션으로 확정<br/><small>→ 대화 판단 엔진(IntelliDecision)으로 직행,<br/>일반 의도분류 단계는 건너뜀</small>"]
+    EQ -->|"다르다"| NORMAL["일반 고객 세션으로 확정<br/><small>→ 기존 고객 응대 경로 그대로 진행</small>"]
 ```
 
 | 항목                | 내용                                                                      |
 | ------------------- | ------------------------------------------------------------------------- |
 | **판별 로직**       | 발신번호와 착신번호(테넌트 소유주 번호)를 정규화 후 문자열 일치 비교      |
-| **판별 위치**       | `ConversationAgent.process_utterance()` 최상단 1곳(신규 함수 호출만 추가) |
+| **판별 위치**       | 음성·문자 공통 대화 진입점 최상단 1곳(신규 함수 호출만 추가)              |
 | **감지 지연**       | 1ms 미만(문자열 비교 1회 수준)                                            |
-| **SIP 레이어 변경** | 없음(회귀 위험 구조적으로 최소화)                                         |
-| **적용 채널**       | 음성(SIP INVITE) + 문자(SIP MESSAGE) 모두 동일 경로 재사용                |
+| **통화 연결 레이어 변경** | 없음(회귀 위험 구조적으로 최소화)                                         |
+| **적용 채널**       | 음성 통화 + 문자 메시지 모두 동일 판별 로직 재사용                        |
 
 ---
 
@@ -288,34 +248,38 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    UserQuery["사용자 발화 수신<br/>(음성 STT / SIP MESSAGE)"] --> Detect{"셀프콜 감지?<br/>is_self_service=True"}
+    UserQuery(["관리자의 발화 한 마디<br/>(음성 또는 문자)"]) --> Detect{"셀프서비스 세션인가?"}
 
-    Detect -->|Yes| SSA["self_service_agent_node 진입<br/>(LLM 의도분류 노드 스킵)"]
-    Detect -->|No| Normal["기존 고객 응대 경로<br/>(classify_intent → route_utterance)"]
+    Detect -->|"아니오"| Normal["기존 고객 응대 경로로 진행"]
+    Detect -->|"예"| Step1
 
-    subgraph RAGStep["Step 1: 연계정보 RAG 검색 (rag.py)"]
-        SSA --> RAGSearch["get_self_service_rag_engine()<br/>owner=현재 테넌트<br/>doc_type_allowlist=['self_service_manual']<br/>top_k=5, similarity_threshold=0.35"]
-        RAGSearch --> ChromaFetch[("ChromaDB 검색")]
-        ChromaFetch --> MatchQA["매치된 Q&A + related_domain 메타데이터 추출"]
+    subgraph Step1["1단계: 참고할 지식 찾기"]
+        direction TB
+        RAGSearch["질문과 뜻이 비슷한<br/>매뉴얼 Q&A 검색"]
+        RAGSearch --> MatchQA{"매뉴얼에<br/>관련 설정 항목이<br/>같이 태깅돼 있는가?"}
     end
 
-    subgraph SGStep["Step 2: ScreenGraph 2-hop 결합 (screen_graph.py + knowledge_graph.py)"]
-        MatchQA --> DomainCheck{"related_domain 존재?"}
-        DomainCheck -->|Yes| Hop1["1-hop: 도메인 → 화면(route/nav_hint)"]
-        Hop1 --> Hop2["2-hop: 화면 writable 여부 →<br/>IntelliDecision 적용 가능 유형 산출"]
-        Hop2 --> MergeContext["대화 컨텍스트 결합<br/>(Q&A 답변 + 화면 경로 + 결정 힌트)"]
-        DomainCheck -->|No| PlainContext["Q&A 답변만 결합"]
+    MatchQA -->|"있다"| Step2
+    MatchQA -->|"없다"| Step3Plain["매뉴얼 답변만 가지고<br/>다음 단계로"]
+
+    subgraph Step2["2단계: 화면 위치 + 가능한 행동 확인"]
+        direction TB
+        Hop1["그 설정이 어느 화면에<br/>있는지 조회"]
+        Hop1 --> Hop2{"그 화면에서<br/>값을 바꿀 수 있는가?"}
+        Hop2 -->|"가능"| MergeContext["설명 + 화면 위치 + '바꿀 수 있음'<br/>정보를 함께 준비"]
+        Hop2 -->|"불가능(조회 전용)"| MergeContext2["설명 + 화면 위치 + '변경은 화면에서만'<br/>정보를 함께 준비"]
     end
 
-    subgraph LLMStep["Step 3: IntelliDecision 판단 & 응답 생성 (self_service_agent.py)"]
-        MergeContext & PlainContext --> LLMPrompt["단일 LLM 호출 프롬프트 조립<br/>(매뉴얼 RAG + 화면 위치 + 카탈로그 스키마<br/>+ Tools + Few-shot 지시)"]
-        LLMPrompt --> IntelliDec{"IntelliDecision<br/>유형 A~I 판단"}
-        IntelliDec -->|A 탐색성| AnsA["설명 + 화면 위치 안내 (Tool 미호출)"]
-        IntelliDec -->|B 실행성| AnsB["확인 발화 → 긍정 시 Tool 실행"]
-        IntelliDec -->|"C~I(도움요청/정정/Undo/모호성/일괄/범위외/반복)"| AnsOther["유형별 전용 응대 전략"]
-    end
+    Step3Plain --> Judge
+    MergeContext --> Judge
+    MergeContext2 --> Judge
 
-    AnsA & AnsB & AnsOther --> Reply["최종 응답 반환 (TTS/SIP MESSAGE)"]
+    Judge{"이번 발화는<br/>무엇을 원하는 것인가?<br/><small>IntelliDecision 판단</small>"}
+    Judge -->|"궁금해서 물어봄"| AnsA["설명 + 화면 위치로 답변<br/><small>설정은 바뀌지 않음</small>"]
+    Judge -->|"바꿔달라는 요청"| AnsB["'이렇게 바꿀까요?' 확인 후<br/>동의하면 실제로 변경"]
+    Judge -->|"그 외(도움 요청/정정/되돌리기/<br/>모호함/여러 건 한번에/범위 밖/반복)"| AnsOther["상황에 맞는 전용 응대"]
+
+    AnsA & AnsB & AnsOther --> Reply(["최종 응답을 음성/문자로 전달"])
 ```
 
 > 이 Flow는 **여러 LLM 호출로 나뉘어 있지 않다** — RAG 검색과 ScreenGraph 조회는 코드
