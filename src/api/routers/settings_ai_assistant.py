@@ -45,6 +45,16 @@
 
   GET  /api/settings/ai-assistant/catalog-config/versions?config_kind=catalog
        지정 config_kind(catalog|screen_graph)의 버전 이력을 최신순으로 반환한다.
+
+  GET  /api/settings/ai-assistant/intellidecision-policy
+       IntelliDecision 유형(A~I) 정책 레지스트리(Story 1.18,
+       `self_service/intellidecision_policy.py`)를 읽기 전용으로 반환한다. 프론트엔드가
+       AI 도우미의 판단 기준을 표 형태로 열람할 수 있게 한다(리서치 축 C-1, 저비용 시각화).
+
+  GET  /api/settings/ai-assistant/knowledge-base/inventory?owner=<owner>
+       매뉴얼 RAG(ChromaDB, doc_type=self_service_manual)의 owner별 색인 현황(총 청크 수,
+       도메인 분포, 소스 문서 수, 최근 색인 시각)을 읽기 전용으로 반환한다(Story 1.23, FR31-A).
+       색인/검색 로직에는 어떤 영향도 주지 않는 순수 관측 엔드포인트다.
 """
 
 from __future__ import annotations
@@ -136,6 +146,37 @@ class CatalogConfigImportRequest(BaseModel):
     screen_graph: Dict[str, Any]
     uploaded_by: str = ""
     note: str = ""
+
+
+class IntentTypeOut(BaseModel):
+    code: str
+    name: str
+    summary: str
+    trigger_examples: List[str]
+    requires_tool: bool
+    requires_writable_domain: bool
+    related_types: List[str]
+    rag_enabled: bool
+    rag_source_scope: str
+    rag_strategy_hint: str
+
+
+class IntelliDecisionPolicyResponse(BaseModel):
+    types: List[IntentTypeOut]
+
+
+class KnowledgeBaseDomainCount(BaseModel):
+    domain: str
+    count: int
+
+
+class KnowledgeBaseInventoryResponse(BaseModel):
+    owner: str
+    total_chunks: int
+    source_document_count: int
+    domain_distribution: List[KnowledgeBaseDomainCount]
+    last_indexed_at: str
+    doc_type: str
 
 
 class CatalogConfigDiff(BaseModel):
@@ -415,6 +456,68 @@ def get_screen_graph() -> ScreenGraphResponse:
             )
         )
     return ScreenGraphResponse(screens=out)
+
+
+@router.get(
+    "/intellidecision-policy", response_model=IntelliDecisionPolicyResponse,
+    summary="IntelliDecision 정책 레지스트리(유형 A~I)",
+)
+def get_intellidecision_policy() -> IntelliDecisionPolicyResponse:
+    """
+    IntelliDecision 유형(A~I) 정책 레지스트리를 반환한다(Story 1.18,
+    `self_service/intellidecision_policy.py`). 프론트엔드가 AI 도우미의 판단 기준을
+    표 형태로 열람할 수 있게 하는 읽기 전용 시각화 용도이며(리서치 축 C-1), 이 응답을 바꿔도
+    실제 응대 로직(프롬프트)에는 영향이 없다(단방향 조회).
+    """
+    from src.ai_voicebot.self_service import intellidecision_policy
+
+    types = [
+        IntentTypeOut(
+            code=spec.code, name=spec.name, summary=spec.summary,
+            trigger_examples=list(spec.trigger_examples),
+            requires_tool=spec.requires_tool,
+            requires_writable_domain=spec.requires_writable_domain,
+            related_types=list(spec.related_types),
+            rag_enabled=spec.rag_enabled,
+            rag_source_scope=spec.rag_source_scope,
+            rag_strategy_hint=spec.rag_strategy_hint,
+        )
+        for spec in intellidecision_policy.list_intent_types()
+    ]
+    return IntelliDecisionPolicyResponse(types=types)
+
+
+@router.get(
+    "/knowledge-base/inventory", response_model=KnowledgeBaseInventoryResponse,
+    summary="지식베이스(매뉴얼 RAG) 색인 현황",
+)
+async def get_knowledge_base_inventory(
+    owner: str = Query(..., description="테넌트 owner"),
+) -> KnowledgeBaseInventoryResponse:
+    """
+    매뉴얼 RAG(ChromaDB, doc_type=self_service_manual)의 owner별 색인 현황을 반환한다
+    (Story 1.23, FR31-A). 색인/검색 로직을 전혀 건드리지 않는 순수 읽기 전용 집계이며,
+    색인이 없는 신규 테넌트에서도 예외 없이 0건 결과를 반환한다.
+    """
+    from src.ai_voicebot.self_service.knowledge_base_inventory import summarize_inventory
+
+    ks = _knowledge_service()
+    try:
+        raw_all = await ks.get_all_knowledge(limit=2000)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ChromaDB 조회 실패: {e}") from e
+
+    inventory = summarize_inventory(raw_all, owner=owner)
+    return KnowledgeBaseInventoryResponse(
+        owner=inventory["owner"],
+        total_chunks=inventory["total_chunks"],
+        source_document_count=inventory["source_document_count"],
+        domain_distribution=[
+            KnowledgeBaseDomainCount(**d) for d in inventory["domain_distribution"]
+        ],
+        last_indexed_at=inventory["last_indexed_at"],
+        doc_type=inventory["doc_type"],
+    )
 
 
 @router.get(

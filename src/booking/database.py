@@ -321,6 +321,19 @@ CREATE TABLE IF NOT EXISTS self_service_catalog_config (
     UNIQUE(config_kind, version_no)
 );
 CREATE INDEX IF NOT EXISTS idx_self_service_catalog_config_active ON self_service_catalog_config(config_kind, is_active);
+
+-- IntelliDecision 판단 근거 투명성 로그 (Story 1.21, FR30 — 순수 관측 전용, 판단 로직에 관여하지 않음)
+-- 응답 전송 후 비동기 백그라운드로 채워지므로 changed_at 대비 약간(0.7~1초) 늦게 기록될 수 있다.
+CREATE TABLE IF NOT EXISTS self_service_decision_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner               TEXT    NOT NULL,
+    call_id             TEXT    NOT NULL DEFAULT '',
+    matched_type        TEXT    NOT NULL DEFAULT 'unknown',
+    reasoning_summary   TEXT    NOT NULL DEFAULT '',
+    related_domain      TEXT    NOT NULL DEFAULT '',
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_self_service_decision_log_owner ON self_service_decision_log(owner, created_at DESC);
 """
 
 

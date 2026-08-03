@@ -746,11 +746,16 @@ async def classify_intent_node(state: ConversationState) -> dict:
                     prompt_preview=classify_prompt.replace("\n", " ")[:200])
         try:
             # 짧은 JSON만 필요하나 Gemini MAX_TOKENS 잘림·thinking 예산 등으로 불완전 JSON이 나올 수 있어 여유 상한.
+            # update_history=False: 이 호출은 사용자에게 들려주지 않는 내부 분류용 호출이므로
+            # conversation_history에 남기지 않는다(2026-07-29 근본 원인 수정 — 분류 JSON이
+            # 다음 generate_response_streaming 호출의 '이전 대화' 컨텍스트로 섞여 실제 응답
+            # 생성 LLM이 JSON을 그대로 따라 하는 tts_response_meta_json_blocked 현상의 원인이었음).
             result = await llm.generate_response(
                 classify_prompt,
                 context_docs=[],
                 system_prompt="의도 분류 및 쿼리 변환기",
                 max_output_tokens=1024,
+                update_history=False,
             )
         except Exception as llm_err:
             elapsed = time.time() - node_start

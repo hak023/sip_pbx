@@ -21,7 +21,7 @@ ConversationState를 공유하는 StateGraph 워크플로우.
 import asyncio
 import time
 from collections import defaultdict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 import structlog
 
@@ -72,7 +72,10 @@ _LANGGRAPH_NODE_NAMES = frozenset(
 
 
 async def _invoke_graph_with_node_timing(
-    graph: Any, invoke_state: Dict[str, Any], config: Optional[Dict[str, Any]] = None
+    graph: Any,
+    invoke_state: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+    on_node_update: Optional[Callable[[str, Dict[str, Any]], Awaitable[None]]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, float]]:
     """
     단일 그래프 실행으로 최종 state + 노드별 wall 시간을 수집한다.
@@ -81,6 +84,9 @@ async def _invoke_graph_with_node_timing(
     마지막 values 청크=병합된 전체 state.
     미지원 시 values만으로 최종 state만 수집하거나 (None, {}) 로 ainvoke 폴백.
     config: Checkpointer thread_id 등 LangGraph config 딕셔너리
+    on_node_update: (Story 4.2, TTFT 안전 서브셋) 각 노드의 updates 청크가 도착할 때마다
+        (node_name, node_output_dict)를 받는 콜백. None이면 호출되지 않아 기존 동작과
+        완전히 동일하다(기존 모든 호출부가 이 파라미터를 전달하지 않아 회귀 위험 없음).
     """
     ast = getattr(graph, "astream", None)
     if not callable(ast):
@@ -108,6 +114,17 @@ async def _invoke_graph_with_node_timing(
                     share = dt / len(named)
                     for k in named:
                         node_sec[k] += share
+                if on_node_update is not None:
+                    for k in named:
+                        node_output = chunk.get(k)
+                        if isinstance(node_output, dict):
+                            try:
+                                await on_node_update(k, node_output)
+                            except Exception as e:
+                                logger.warning(
+                                    "on_node_update_callback_failed",
+                                    node=k, error=str(e), error_type=type(e).__name__,
+                                )
             elif mode == "values" and isinstance(chunk, dict):
                 last_values = chunk
                 prev_wall = time.perf_counter()
@@ -646,8 +663,42 @@ class ConversationAgent:
 
         try:
             graph_start = time.time()
+
+            # ── Story 4.2 (TTFT 안전 서브셋): 조기 첫 문장 콜백 준비 ──
+            # Story 4.1 결론: needs_follow_up이 사전에 False로 고정되는 유일한 안전 경로는
+            # intent가 chitchat/out_of_scope이고 아웃바운드 세션이 아닌 경우뿐이다. 이 조건이
+            # 아니면 콜백을 호출하지 않는다(방어적 재확인 — 설계 가정이 깨져도 조기 전송 안 함).
+            _on_first_sentence = kwargs.get("on_first_sentence")
+            _first_sentence_fired = False
+
+            async def _maybe_fire_first_sentence(node_name: str, node_output: Dict[str, Any]) -> None:
+                nonlocal _first_sentence_fired
+                if _first_sentence_fired or _on_first_sentence is None:
+                    return
+                if node_name != "generate_response":
+                    return
+                if is_outbound_session:
+                    return
+                intent_out = node_output.get("intent")
+                if intent_out not in ("chitchat", "out_of_scope"):
+                    return
+                if node_output.get("needs_follow_up"):
+                    return
+                node_chunks = node_output.get("response_chunks") or []
+                if not node_chunks or not (node_chunks[0] or "").strip():
+                    return
+                _first_sentence_fired = True
+                try:
+                    await _on_first_sentence(node_chunks[0].strip(), intent_out)
+                except Exception as e:
+                    logger.warning(
+                        "on_first_sentence_callback_failed",
+                        call_id=call_id or "", error=str(e), error_type=type(e).__name__,
+                    )
+
             timed_result, node_durations_sec = await _invoke_graph_with_node_timing(
-                self.graph, invoke_state, config=thread_config
+                self.graph, invoke_state, config=thread_config,
+                on_node_update=_maybe_fire_first_sentence if _on_first_sentence is not None else None,
             )
             if timed_result is not None:
                 result = timed_result

@@ -17,6 +17,7 @@ from src.ai_voicebot.ai_pipeline.rag_engine import Document, RAGSearchResult
 from src.ai_voicebot.self_service import rag as self_service_rag
 from src.ai_voicebot.self_service.manual_indexer import (
     SELF_SERVICE_MANUAL_DOC_TYPE,
+    MarkdownManualAdapter,
     index_self_service_manual,
     parse_manual_qa_pairs,
     parse_manual_qa_with_meta,
@@ -227,6 +228,42 @@ class TestIndexSelfServiceManual:
     def test_empty_owner_returns_error(self):
         result = index_self_service_manual("", vector_db=object(), embedder=object())
         assert result["ok"] is False
+
+
+class TestMarkdownManualAdapter:
+    """Story 1.25(FR31-C) — 소스 어댑터 일반화 후 기존 마크다운 파서의 동작 불변성 검증."""
+
+    def test_load_pairs_matches_module_level_parser(self, tmp_path):
+        manual_file = tmp_path / "manual.md"
+        manual_file.write_text(SAMPLE_MANUAL, encoding="utf-8")
+        adapter = MarkdownManualAdapter()
+
+        assert adapter.load_pairs(manual_file) == parse_manual_qa_pairs(SAMPLE_MANUAL)
+
+    def test_load_pairs_with_meta_matches_module_level_parser(self, tmp_path):
+        manual_file = tmp_path / "manual.md"
+        manual_file.write_text(SAMPLE_MANUAL, encoding="utf-8")
+        adapter = MarkdownManualAdapter()
+
+        assert adapter.load_pairs_with_meta(manual_file) == parse_manual_qa_with_meta(SAMPLE_MANUAL)
+
+    def test_index_self_service_manual_accepts_custom_adapter(self, monkeypatch):
+        store, fake_list, fake_add = self._make_fake_store()
+        self._patch_common(monkeypatch, fake_list, fake_add)
+
+        custom_adapter = MarkdownManualAdapter()
+        result = index_self_service_manual(
+            "1003", vector_db=object(), embedder=object(), adapter=custom_adapter
+        )
+
+        assert result["ok"] is True
+        assert result["indexed"] == 3
+
+    def _make_fake_store(self):
+        return TestIndexSelfServiceManual._make_fake_store()
+
+    def _patch_common(self, monkeypatch, fake_list, fake_add):
+        TestIndexSelfServiceManual._patch_common(self, monkeypatch, fake_list, fake_add)
 
 
 class TestGetSelfServiceRagEngine:

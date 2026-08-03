@@ -56,6 +56,54 @@ interface ScreenGraphResponse {
     screens: ScreenEntryOut[];
 }
 
+interface IntentTypeOut {
+    code: string;
+    name: string;
+    summary: string;
+    trigger_examples: string[];
+    requires_tool: boolean;
+    requires_writable_domain: boolean;
+    related_types: string[];
+    rag_enabled: boolean;
+    rag_source_scope: string;
+    rag_strategy_hint: string;
+}
+
+interface IntelliDecisionPolicyResponse {
+    types: IntentTypeOut[];
+}
+
+// 판단 근거 투명성(Story 1.21/1.22, FR30) — 원본 발화 전문은 포함되지 않고 요약만 내려온다.
+interface DecisionLogItem {
+    id: number;
+    owner: string;
+    call_id: string;
+    matched_type: string;
+    reasoning_summary: string;
+    related_domain: string;
+    created_at: string;
+}
+
+interface DecisionLogResponse {
+    items: DecisionLogItem[];
+    total: number;
+}
+
+// 지식베이스 인벤토리 투명성(Story 1.23, FR31-A)
+interface KnowledgeBaseDomainCount {
+    domain: string;
+    count: number;
+}
+
+interface KnowledgeBaseInventoryResponse {
+    owner: string;
+    total_chunks: number;
+    source_document_count: number;
+    domain_distribution: KnowledgeBaseDomainCount[];
+    last_indexed_at: string;
+    doc_type: string;
+}
+
 interface CatalogConfigExportResponse {
     catalog: Record<string, unknown>;
     catalog_version: number | null;
@@ -98,6 +146,96 @@ interface CatalogConfigVersionsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// IntelliDecision 정책 그래프 시각화(Story 1.18, 축 C-2) — 신규 프론트엔드 의존성 없이
+// 순수 SVG로 유형 A~I 노드를 원형 배치하고 related_types 관계를 선으로 그린다.
+// 노드 규모가 9개뿐이라 force-directed 레이아웃 라이브러리 없이 고정 원형 배치로 충분하다
+// (리서치 축 C-2 "선택 사항" 권고 — 신규 의존성 검토 없이 저비용으로 구현).
+// ---------------------------------------------------------------------------
+function IntentTypeGraph({ intentTypes }: { intentTypes: IntentTypeOut[] }) {
+    const size = 360;
+    const center = size / 2;
+    const radius = 130;
+    const nodeRadius = 20;
+
+    const positions = new Map<string, { x: number; y: number }>();
+    intentTypes.forEach((t, i) => {
+        const angle = (2 * Math.PI * i) / intentTypes.length - Math.PI / 2;
+        positions.set(t.code, {
+            x: center + radius * Math.cos(angle),
+            y: center + radius * Math.sin(angle),
+        });
+    });
+
+    // 중복 없는 간선 목록(A→B와 B→A를 한 번만 그림)
+    const edgeKeys = new Set<string>();
+    const edges: { from: string; to: string }[] = [];
+    intentTypes.forEach((t) => {
+        t.related_types.forEach((rel) => {
+            if (!positions.has(rel)) return;
+            const key = [t.code, rel].sort().join("-");
+            if (edgeKeys.has(key)) return;
+            edgeKeys.add(key);
+            edges.push({ from: t.code, to: rel });
+        });
+    });
+
+    return (
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="mx-auto">
+                {edges.map((e, i) => {
+                    const a = positions.get(e.from)!;
+                    const b = positions.get(e.to)!;
+                    return (
+                        <line
+                            key={i}
+                            x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                            stroke="#c7d2fe" strokeWidth={1.5}
+                        />
+                    );
+                })}
+                {intentTypes.map((t) => {
+                    const p = positions.get(t.code)!;
+                    return (
+                        <g key={t.code}>
+                            <circle
+                                cx={p.x} cy={p.y} r={nodeRadius}
+                                fill={t.requires_writable_domain ? "#fef3c7" : "#e0e7ff"}
+                                stroke={t.requires_writable_domain ? "#d97706" : "#4f46e5"}
+                                strokeWidth={1.5}
+                            />
+                            <text
+                                x={p.x} y={p.y + 4} textAnchor="middle"
+                                fontSize={13} fontWeight={600}
+                                fill={t.requires_writable_domain ? "#92400e" : "#3730a3"}
+                            >
+                                {t.code}
+                            </text>
+                            <text
+                                x={p.x} y={p.y + nodeRadius + 13} textAnchor="middle"
+                                fontSize={9} fill="#6b7280"
+                            >
+                                {t.name}
+                            </text>
+                        </g>
+                    );
+                })}
+            </svg>
+            <p className="mt-2 text-center text-xs text-gray-400">
+                <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-indigo-200 border border-indigo-600" />
+                    안내 전용
+                </span>
+                <span className="mx-3 inline-flex items-center gap-1">
+                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-100 border border-amber-600" />
+                    변경·되돌리기 필요(쓰기 가능 도메인만)
+                </span>
+                — 선은 관련 유형(related_types) 관계입니다.
+            </p>
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 상수
 // ---------------------------------------------------------------------------
 const DOMAIN_LABEL: Record<string, string> = {
@@ -116,7 +254,7 @@ const DOMAIN_LABEL: Record<string, string> = {
     intro: "서비스 소개",
 };
 
-type Tab = "qa" | "catalog" | "screen" | "manage";
+type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "manage";
 
 // ---------------------------------------------------------------------------
 // 컴포넌트
@@ -140,6 +278,23 @@ export default function AiAssistantDocsPage() {
     const [screens, setScreens] = useState<ScreenEntryOut[]>([]);
     const [loadingScreens, setLoadingScreens] = useState(false);
     const [screenError, setScreenError] = useState<string | null>(null);
+
+    // IntelliDecision 정책 레지스트리 상태(Story 1.18, 축 C-1)
+    const [intentTypes, setIntentTypes] = useState<IntentTypeOut[]>([]);
+    const [loadingPolicy, setLoadingPolicy] = useState(false);
+    const [policyError, setPolicyError] = useState<string | null>(null);
+    // 축 C-2: 표/그래프 보기 전환(신규 프론트엔드 의존성 없이 순수 SVG로 구현)
+    const [policyView, setPolicyView] = useState<"list" | "graph">("list");
+
+    // 최근 판단 이력(Story 1.21/1.22, FR30) 상태
+    const [decisionLog, setDecisionLog] = useState<DecisionLogItem[]>([]);
+    const [loadingDecisionLog, setLoadingDecisionLog] = useState(false);
+    const [decisionLogError, setDecisionLogError] = useState<string | null>(null);
+
+    // 지식베이스 인벤토리 투명성(Story 1.23, FR31-A) 상태
+    const [kbInventory, setKbInventory] = useState<KnowledgeBaseInventoryResponse | null>(null);
+    const [loadingKbInventory, setLoadingKbInventory] = useState(false);
+    const [kbInventoryError, setKbInventoryError] = useState<string | null>(null);
 
     // 설정 관리(내보내기) 상태 — Epic 2 Story 2.4
     const [exporting, setExporting] = useState(false);
@@ -204,6 +359,19 @@ export default function AiAssistantDocsPage() {
             setScreenError(res.message);
         }
         setLoadingScreens(false);
+    }, []);
+
+    // IntelliDecision 정책 레지스트리 로드(Story 1.18, 축 C-1)
+    const loadPolicy = useCallback(async () => {
+        setLoadingPolicy(true);
+        setPolicyError(null);
+        const res = await apiJson<IntelliDecisionPolicyResponse>("/api/settings/ai-assistant/intellidecision-policy");
+        if (res.ok) {
+            setIntentTypes(res.data.types || []);
+        } else {
+            setPolicyError(res.message);
+        }
+        setLoadingPolicy(false);
     }, []);
 
     // 버전 이력 로드(카탈로그·화면 안내 각각) — Epic 2 Story 2.5
@@ -300,13 +468,48 @@ export default function AiAssistantDocsPage() {
         [loadVersions]
     );
 
+    // 최근 판단 이력 로드(Story 1.21/1.22, FR30)
+    const loadDecisionLog = useCallback(async () => {
+        if (!owner) return;
+        setLoadingDecisionLog(true);
+        setDecisionLogError(null);
+        const res = await apiJson<DecisionLogResponse>(
+            `/api/self-service/decision-log?owner=${encodeURIComponent(owner)}&limit=20`
+        );
+        if (res.ok) {
+            setDecisionLog(res.data.items || []);
+        } else {
+            setDecisionLogError(res.message);
+        }
+        setLoadingDecisionLog(false);
+    }, [owner]);
+
+    // 지식베이스 인벤토리 로드(Story 1.23, FR31-A) — 순수 관측 API, 응대 로직에 영향 없음
+    const loadKbInventory = useCallback(async () => {
+        if (!owner) return;
+        setLoadingKbInventory(true);
+        setKbInventoryError(null);
+        const res = await apiJson<KnowledgeBaseInventoryResponse>(
+            `/api/settings/ai-assistant/knowledge-base/inventory?owner=${encodeURIComponent(owner)}`
+        );
+        if (res.ok) {
+            setKbInventory(res.data);
+        } else {
+            setKbInventoryError(res.message);
+        }
+        setLoadingKbInventory(false);
+    }, [owner]);
+
     useEffect(() => {
         if (tab === "qa" && owner && items.length === 0) void loadQa();
         if (tab === "catalog" && catalog.length === 0) void loadCatalog();
         if (tab === "screen" && screens.length === 0) void loadScreens();
+        if (tab === "policy" && intentTypes.length === 0) void loadPolicy();
+        if (tab === "policy" && owner && decisionLog.length === 0) void loadDecisionLog();
+        if (tab === "kb" && owner && !kbInventory) void loadKbInventory();
         if (tab === "manage") void loadVersions();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tab, owner, items.length, catalog.length, screens.length, loadQa, loadCatalog, loadScreens]);
+    }, [tab, owner, items.length, catalog.length, screens.length, intentTypes.length, decisionLog.length, kbInventory, loadQa, loadCatalog, loadScreens, loadPolicy, loadDecisionLog, loadKbInventory]);
 
     // 설정 다운로드 — Epic 2 Story 2.4
     // 백엔드는 JSON 본문만 반환하므로, 브라우저에서 Blob으로 감싸 파일 다운로드를 트리거한다.
@@ -355,7 +558,7 @@ export default function AiAssistantDocsPage() {
 
             {/* 탭 */}
             <div className="flex gap-1 border-b border-gray-200 mb-6">
-                {(["qa", "catalog", "screen", "manage"] as Tab[]).map((t) => (
+                {(["qa", "catalog", "screen", "policy", "kb", "manage"] as Tab[]).map((t) => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -372,7 +575,11 @@ export default function AiAssistantDocsPage() {
                                 ? "AI 변경 가능 설정"
                                 : t === "screen"
                                     ? "화면 안내"
-                                    : "설정 관리"}
+                                    : t === "policy"
+                                        ? "AI 의사결정 로직"
+                                        : t === "kb"
+                                            ? "지식베이스 현황"
+                                            : "설정 관리"}
                     </button>
                 ))}
             </div>
@@ -574,6 +781,227 @@ export default function AiAssistantDocsPage() {
                         전용 설정 화면이 없는 도메인(예: 페르소나)은 지식 베이스 등 다른 관리 영역에서
                         다뤄지며 이 목록에는 표시되지 않습니다.
                     </p>
+                </div>
+            )}
+
+            {/* ── AI 의사결정 로직(IntelliDecision 정책 레지스트리) 탭 — Story 1.18, 축 C-1 ── */}
+            {tab === "policy" && (
+                <div>
+                    <p className="mb-4 text-xs text-gray-500">
+                        AI 도우미가 발화를 유형 A~I로 어떻게 구분해 응대하는지 보여주는 판단 기준
+                        레지스트리입니다. &quot;변경·되돌리기 필요&quot;로 표시된 유형은 실제로 쓰기
+                        가능한(설정 변경 API가 있는) 도메인에서만 성립합니다.
+                    </p>
+                    <div className="mb-4 flex gap-1">
+                        <button
+                            onClick={() => setPolicyView("list")}
+                            className={
+                                "rounded-md px-3 py-1 text-xs font-medium " +
+                                (policyView === "list"
+                                    ? "bg-indigo-600 text-white"
+                                    : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+                            }
+                        >
+                            표로 보기
+                        </button>
+                        <button
+                            onClick={() => setPolicyView("graph")}
+                            className={
+                                "rounded-md px-3 py-1 text-xs font-medium " +
+                                (policyView === "graph"
+                                    ? "bg-indigo-600 text-white"
+                                    : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+                            }
+                        >
+                            그래프로 보기
+                        </button>
+                    </div>
+                    {loadingPolicy && <p className="text-sm text-gray-400">로딩 중…</p>}
+                    {policyError && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+                            {policyError}
+                        </div>
+                    )}
+                    {policyView === "graph" && !loadingPolicy && !policyError && intentTypes.length > 0 && (
+                        <IntentTypeGraph intentTypes={intentTypes} />
+                    )}
+                    {policyView === "list" && (
+                        <div className="space-y-3">
+                            {intentTypes.map((t) => (
+                                <div
+                                    key={t.code}
+                                    className="rounded-xl border border-gray-100 bg-white shadow-sm p-4"
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">
+                                            {t.code}
+                                        </span>
+                                        <span className="font-semibold text-gray-800">{t.name}</span>
+                                        {t.requires_tool && (
+                                            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                                                Tool 필요
+                                            </span>
+                                        )}
+                                        {t.requires_writable_domain && (
+                                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                                                변경·되돌리기 필요(쓰기 가능 도메인만)
+                                            </span>
+                                        )}
+                                        {t.rag_enabled ? (
+                                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                                                RAG: {t.rag_strategy_hint}
+                                            </span>
+                                        ) : (
+                                            <span className="rounded bg-gray-50 px-1.5 py-0.5 text-xs text-gray-400">
+                                                RAG 미사용
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="mt-1 text-sm text-gray-600">{t.summary}</p>
+                                    {t.trigger_examples.length > 0 && (
+                                        <p className="mt-2 text-xs text-gray-400">
+                                            예: {t.trigger_examples.map((e) => `"${e}"`).join(", ")}
+                                        </p>
+                                    )}
+                                    {t.related_types.length > 0 && (
+                                        <p className="mt-1 text-xs text-gray-400">
+                                            관련 유형: {t.related_types.join(", ")}
+                                        </p>
+                                    )}
+                                    {t.rag_enabled && (
+                                        <p className="mt-1 text-xs text-gray-400">
+                                            RAG 매칭 범위: {t.rag_source_scope}
+                                        </p>
+                                    )}
+                                </div>
+                            ))}
+                            {!loadingPolicy && intentTypes.length === 0 && !policyError && (
+                                <p className="text-sm text-gray-400">등록된 정책 정보가 없습니다.</p>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ── 최근 판단 이력(Story 1.21/1.22, FR30 — IntelliDecision 판단 근거 투명성) ── */}
+                    <div className="mt-8 border-t border-gray-100 pt-6">
+                        <h3 className="mb-1 text-sm font-semibold text-gray-800">최근 판단 이력</h3>
+                        <p className="mb-4 text-xs text-gray-500">
+                            AI가 최근 대화에서 위 유형 중 어떤 것으로 판단해 응대했는지 보여줍니다.
+                            판단은 응답 전송 이후 비동기로 기록되므로 방금 나눈 대화가 즉시 보이지
+                            않을 수 있습니다. 원본 발화 전문은 표시되지 않고 근거 요약만 제공됩니다.
+                        </p>
+                        {loadingDecisionLog && <p className="text-sm text-gray-400">로딩 중…</p>}
+                        {decisionLogError && (
+                            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+                                {decisionLogError}
+                            </div>
+                        )}
+                        {!loadingDecisionLog && !decisionLogError && decisionLog.length === 0 && (
+                            <p className="text-sm text-gray-400">아직 기록된 판단 이력이 없습니다.</p>
+                        )}
+                        {!loadingDecisionLog && decisionLog.length > 0 && (
+                            <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white shadow-sm">
+                                <table className="w-full text-left text-sm">
+                                    <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                                        <tr>
+                                            <th className="px-4 py-2">시각</th>
+                                            <th className="px-4 py-2">유형</th>
+                                            <th className="px-4 py-2">근거 요약</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {decisionLog.map((item) => {
+                                            const typeSpec = intentTypes.find((t) => t.code === item.matched_type);
+                                            return (
+                                                <tr key={item.id}>
+                                                    <td className="whitespace-nowrap px-4 py-2 text-gray-500">
+                                                        {item.created_at}
+                                                    </td>
+                                                    <td className="whitespace-nowrap px-4 py-2">
+                                                        <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                                                            {item.matched_type !== "unknown"
+                                                                ? `${item.matched_type} · ${typeSpec?.name ?? ""}`
+                                                                : "미확인"}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-gray-700">
+                                                        {item.reasoning_summary || "-"}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* ── 지식베이스 현황 탭 — Story 1.23, FR31-A(순수 관측, 응대 로직 무영향) ── */}
+            {tab === "kb" && (
+                <div>
+                    <p className="mb-4 text-xs text-gray-500">
+                        매뉴얼 RAG(ChromaDB)에 실제로 어떤 도움말 문서가 몇 개 청크로 색인되어 있고
+                        마지막으로 언제 색인됐는지 보여줍니다. 이 화면은 조회 전용이며 AI 응대
+                        로직에는 영향을 주지 않습니다.
+                    </p>
+                    {loadingKbInventory && <p className="text-sm text-gray-400">로딩 중…</p>}
+                    {kbInventoryError && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+                            {kbInventoryError}
+                        </div>
+                    )}
+                    {!loadingKbInventory && !kbInventoryError && kbInventory && (
+                        <div className="space-y-4">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                    <p className="text-xs text-gray-400">총 색인 청크 수</p>
+                                    <p className="mt-1 text-2xl font-semibold text-gray-900">
+                                        {kbInventory.total_chunks}
+                                    </p>
+                                </div>
+                                <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                    <p className="text-xs text-gray-400">소스 문서(섹션) 수</p>
+                                    <p className="mt-1 text-2xl font-semibold text-gray-900">
+                                        {kbInventory.source_document_count}
+                                    </p>
+                                </div>
+                                <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                    <p className="text-xs text-gray-400">최근 색인 시각</p>
+                                    <p className="mt-1 text-sm font-medium text-gray-700">
+                                        {kbInventory.last_indexed_at || "색인 이력 없음"}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+                                <table className="w-full text-left text-sm">
+                                    <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                                        <tr>
+                                            <th className="px-4 py-2">도메인</th>
+                                            <th className="px-4 py-2">청크 수</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {kbInventory.domain_distribution.map((d) => (
+                                            <tr key={d.domain}>
+                                                <td className="px-4 py-2 text-gray-700">
+                                                    {DOMAIN_LABEL[d.domain] || d.domain}
+                                                </td>
+                                                <td className="px-4 py-2 text-gray-500">{d.count}</td>
+                                            </tr>
+                                        ))}
+                                        {kbInventory.domain_distribution.length === 0 && (
+                                            <tr>
+                                                <td className="px-4 py-2 text-gray-400" colSpan={2}>
+                                                    색인된 도움말 문서가 없습니다.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 

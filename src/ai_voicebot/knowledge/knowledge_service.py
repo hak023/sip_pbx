@@ -249,7 +249,11 @@ async def _extract_help_label_via_llm(
         if hasattr(llm, "generate_simple"):
             raw = await llm.generate_simple(label_prompt, max_tokens=64, timeout_seconds=10.0)
         elif hasattr(llm, "generate_response"):
-            raw = await llm.generate_response(label_prompt, context_docs=[])
+            # update_history=False: 라벨 생성은 사용자에게 들려주지 않는 내부 호출 —
+            # conversation_history 오염 방지(2026-07-29, classify_intent와 동일 근본 원인 수정).
+            raw = await llm.generate_response(
+                label_prompt, context_docs=[], update_history=False
+            )
         else:
             raw = ""
 

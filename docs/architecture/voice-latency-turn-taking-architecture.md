@@ -1,8 +1,9 @@
 # 음성 AI 응답 지연 개선 및 스마트 턴테이킹 — Architecture
 
 **작성일**: 2026-07-24
-**버전**: 0.1 (초안)
-**상태**: 초안 — Epic 3·4·5 구현 착수 전
+**버전**: 0.2 (2026-07-29 갱신 — Epic 7 신설: pipecat 기본값 Smart Turn v3.2 암묵 적용 발견 반영,
+§1.4 정정, §2.4 신설)
+**상태**: Epic 3~6 구현 완료(실통화 A/B 검증 일부 대기), Epic 7 착수(조사 단계)
 **관련 문서**:
 - [../product/voice-latency-turn-taking-prd.md](../product/voice-latency-turn-taking-prd.md) — 본 문서의 상위 PRD
 - [voice-ai-conversation-engine.md](voice-ai-conversation-engine.md) — 기존 파이프라인 설계(이론치)
@@ -146,6 +147,19 @@ LLM 사고 중 발화 합산 검증)의 상당 부분이 이번 조사로 이미
 메커니즘), FR6/FR8은 "이미 있는 정교한 로직을 검증"하는 문제가 아니라 "죽은 코드(Smart
 Turn/barge-in LLM 판단)를 살릴지, 현재의 단순 필터(VAD 비율 + 단어 수)로 충분한지 결정"하는
 문제로 바뀌었다. Story 5.2~5.4는 이 재조정된 전제로 다음 세션에서 재작성 필요.
+
+> **🔴 중요 정정(2026-07-29, Epic 7 착수 전 재확인)**: 위 표의 "턴 완료 판단 = Google STT
+> 엔드포인팅만" 서술은 **부정확했다.** `pipeline_builder.py`가 `UserTurnStrategies(start=[...])`를
+> 생성할 때 `stop=`을 지정하지 않아, pipecat의 dataclass 기본값
+> `stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]`가
+> **암묵적으로 적용되고 있음을 실제 파이썬 실행으로 확인**했다(`LocalSmartTurnAnalyzerV3`가
+> ONNX 모델을 실제로 로드하는 로그까지 확인). 즉 Smart Turn v3.2(문법/억양/속도 기반 발화완료
+> 모델)는 **죽은 코드가 아니라 이미 stop 판정에 실제로 관여하고 있다** — Story 5.1이 조사한
+> "죽은 코드"는 우리 자체 커스텀 래퍼(`smart_turn_processor.py`)뿐이었고, pipecat 자체 내장
+> 기본값은 조사 범위에서 누락됐다. `config.yaml`의 `smart_turn.*` 설정은 이 모델을 전혀
+> 제어하지 못한다(코드에서 읽지 않음) — 설정과 실제 동작의 완전한 괴리. 상세 조사·개선은
+> [Epic 7](../product/voice-latency-turn-taking-prd.md#epic-7--지능형-발화-종료턴-완료-판단-고도화-2026-07-29-신설)
+> 참고.
 
 
 ---
@@ -331,6 +345,63 @@ API)로 감싸는 것을 권고**한다(§(2)의 프레임워크 레벨 게이�
 4. **점진적 롤아웃 필수**: self-service Story 2.6 패턴(베이스라인 확보 → 변경 → 재검증 → 저하 시
    롤백)을 그대로 적용하고, `config.yaml`에 feature flag(예: `turn_taking.smart_turn_enabled`)를
    두어 문제 발생 시 즉시 현재(VAD+MinWords) 방식으로 되돌릴 수 있게 한다.
+
+#### (6) 실제 구현 결과 (Story 5.4, 2026-07-29)
+
+위 (3) 권고안대로 구현했다 — `SmartBargeInProcessor`(FrameProcessor)는 되살리지 않고,
+`SmartBargeInStrategy`의 판단 로직(Stage 1 키워드/Stage 2 단어수·맞장구/Stage 3 LLM 판단)만
+추출해 신규 `SmartBargeInUserTurnStartStrategy(BaseUserTurnStartStrategy)`
+(`src/ai_voicebot/pipecat/smart_barge_in_turn_strategy.py`)로 재구현했다.
+
+- **(1) 권고 반영**: `min_words` Stage 2 게이트를 제거하지 않고 유지하되(설정 가능),
+  `MinWordsUserTurnStartStrategy`와 **동시에 등록하지 않고 교체**하는 방식을 택했다 — pipecat의
+  `UserTurnStrategies(start=[...])`가 리스트 내 각 전략을 독립적으로 평가해 OR로 동작함을
+  코드로 직접 확인했기 때문에(§(2) 예상과 달리 "이중 게이트로 자동 필터링"되지 않고 오히려 더
+  민감해짐), 반드시 하나만 등록해야 한다는 점을 실제 구현 중 재확인했다.
+- **(3) 권고 반영**: 통합 지점을 `PipelineTask(user_turn_strategies=...)`로 그대로 사용, 프레임
+  타입은 `BotStartedSpeakingFrame`/`BotStoppedSpeakingFrame`/`TranscriptionFrame`/
+  `InterimTranscriptionFrame`만 사용(모두 현재 설치된 `pipecat-ai`에서 유효함을 임포트 테스트로
+  확인).
+- **옵트인 스위치**: `config.yaml`의 `ai_voicebot.barge_in.smart_judge_enabled`(기본 `false`) —
+  `pipeline_builder.py`가 이 값을 읽어 `false`면 기존 `MinWordsUserTurnStartStrategy`, `true`면
+  신규 전략으로 교체한다. 기본값이 `false`이므로 이번 구현은 **배포되어도 기존 동작에 영향을
+  주지 않는다.**
+- **미해결 리스크(위 1번)**: `judge_barge_in()`(LLM 판단)의 실제 지연 실측은 아직 수행하지
+  않았다 — `smart_judge_enabled=true` 활성화 시점(Task 5)에 함께 측정 필요.
+- 단위 테스트 10건(`test_smart_barge_in_turn_strategy.py`)으로 3단계 필터 각각과 LLM 오류 시
+  fail-safe(=interrupt) 동작을 검증했다. 실통화 A/B 검증은 미착수(Story 5.4 Task 5).
+
+### 2.4 Epic 7 — 지능형 발화 종료(턴 완료) 판단 고도화 (2026-07-29 착수)
+
+> **Story 7.1 착수 전 확정된 사실(설계 전제)**: §1.4 정정 사항 참고 — pipecat 기본값으로
+> `TurnAnalyzerUserTurnStopStrategy(LocalSmartTurnAnalyzerV3())`가 이미 stop 판정에 관여 중임을
+> 실행으로 확인했다. 즉 Epic 7은 "신규 모델 도입"이 아니라 "이미 있는 모델의 관측성 확보 →
+> 필요 시 튜닝/보강"이 출발점이다.
+
+#### (1) 조사 계획 (Story 7.1)
+
+- **관측 로깅 추가 지점**: `SmartBargeInUserTurnStartStrategy`(Story 5.4)와 동일한 패턴으로,
+  `stop` 전략의 판정 결과(발화 완료/미완료, 판정 근거 점수 있으면 함께)를 `call_data_record`에
+  남기는 관측용 래퍼를 검토한다. `TurnAnalyzerUserTurnStopStrategy` 자체를 상속/래핑하거나,
+  pipecat이 노출하는 이벤트 훅(`on_push_frame` 등)을 관찰하는 방식 중 침습이 적은 쪽을 Story 7.1
+  착수 시 코드로 확인 후 선택한다.
+- **리서치 대상**(`docs/VOICE_AI_TURN_TAKING_REFERENCES.md`에 이미 정리된 자료 재사용):
+  - **Smart Turn v3.2**(현재 기본 적용 중) — 파라미터 노출 여부, 한국어 필러("음", "그러니까")
+    인식 정확도 확인.
+  - **Vogent Turn**(멀티모달, 오디오+텍스트 컨텍스트) — Smart Turn보다 무겁지만 대화 맥락을 함께
+    보므로 "쉬었다가 다시 말하는" 케이스에 더 강할 가능성. 도입 비용 대비 효과는 Story 7.1 관측
+    데이터로 판단.
+  - **LLM 기반 보조 판단**(신규 검토 옵션) — STT 중간 결과가 문장으로서 불완전(접속사로 끝남 등)
+    할 때만 짧은 대기를 추가로 주는 경량 휴리스틱, 또는 `judge_barge_in()`과 유사하게 LLM에
+    "이 발화가 끝난 것 같은가"를 짧게 묻는 방식(NFR8의 지연 제약 때문에 상시 호출은 지양,
+    애매한 경우에만 보조적으로 트리거하는 방향 검토).
+
+#### (2) 설계 원칙 (Story 7.2에서 확정)
+
+- Story 5.4와 동일한 안전 패턴 준수: **관측(Story 7.1) → 설계(Story 7.2) → feature flag 구현
+  (Story 7.3) → 실통화 A/B(Story 7.4)** 순서를 반드시 지킨다.
+- `config.yaml`의 `smart_turn.*` 설정과 실제 코드 연동 여부를 이번 기회에 명확히 정리한다(FR15) —
+  연동하거나, 코드에서 전혀 안 쓰는 설정임을 문서에 명시해 향후 동일한 혼란을 방지한다.
 
 
 

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import structlog
 
@@ -158,6 +158,31 @@ def load_manual_qa_with_meta(manual_path: Optional[Path] = None) -> List[Dict[st
     return parse_manual_qa_with_meta(text)
 
 
+class SourceAdapter(Protocol):
+    """색인 소스 어댑터 인터페이스 (Story 1.25, FR31-C).
+
+    소스 종류(마크다운 Q&A, 향후 OpenAPI/Tool docstring 등)마다 다른 파싱 로직을
+    이 인터페이스 뒤에 감춰, `index_self_service_manual()`이 소스 종류를 몰라도 되게 한다.
+    """
+
+    def load_pairs(self, path: Optional[Path] = None) -> List[Tuple[str, str]]: ...
+
+    def load_pairs_with_meta(self, path: Optional[Path] = None) -> List[Dict[str, str]]: ...
+
+
+class MarkdownManualAdapter:
+    """기존 마크다운 Q&A 파서를 그대로 감싼 기본 어댑터(회귀 없음, 동작 100% 동일)."""
+
+    def load_pairs(self, path: Optional[Path] = None) -> List[Tuple[str, str]]:
+        return load_manual_qa_pairs(path)
+
+    def load_pairs_with_meta(self, path: Optional[Path] = None) -> List[Dict[str, str]]:
+        return load_manual_qa_with_meta(path)
+
+
+_DEFAULT_ADAPTER = MarkdownManualAdapter()
+
+
 def index_self_service_manual(
     owner: str,
     vector_db: Any,
@@ -165,12 +190,14 @@ def index_self_service_manual(
     *,
     manual_path: Optional[Path] = None,
     force: bool = False,
+    adapter: Optional[SourceAdapter] = None,
 ) -> dict:
     """지정 owner에 셀프서비스 매뉴얼 Q&A를 색인한다.
 
     Returns:
         {"ok": bool, "indexed": int, "skipped": bool, "existing": int, "errors": [...]}
     """
+    adapter = adapter or _DEFAULT_ADAPTER
     normalized_owner = normalize_owner_username(owner)
     if not normalized_owner:
         return {"ok": False, "error": "owner가 비었거나 정규화 후 비어 있습니다", "indexed": 0}
@@ -189,12 +216,12 @@ def index_self_service_manual(
         )
         return {"ok": True, "indexed": 0, "skipped": True, "existing": existing_count, "errors": []}
 
-    pairs = load_manual_qa_pairs(manual_path)
+    pairs = adapter.load_pairs(manual_path)
     if not pairs:
         return {"ok": False, "error": "매뉴얼에서 Q&A 쌍을 추출하지 못했습니다", "indexed": 0}
 
     # 섹션/도메인 메타데이터도 함께 파싱 (프론트엔드 도움말 API용)
-    items_with_meta = load_manual_qa_with_meta(manual_path)
+    items_with_meta = adapter.load_pairs_with_meta(manual_path)
     meta_by_qa: Dict[Tuple[str, str], Dict[str, str]] = {
         (it["question"], it["answer"]): it for it in items_with_meta
     }

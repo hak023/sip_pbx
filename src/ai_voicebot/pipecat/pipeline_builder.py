@@ -340,9 +340,64 @@ class PipelineBuilder:
             _user_turn_strategies = None
             if _USER_TURN_STRATEGIES_AVAILABLE and MinWordsUserTurnStartStrategy is not None and UserTurnStrategies is not None:
                 try:
-                    _user_turn_strategies = UserTurnStrategies(
-                        start=[MinWordsUserTurnStartStrategy(min_words=3)],
-                    )
+                    # Story 5.4 (2026-07-29): 옵트인 스마트 barge-in 판단 전략.
+                    # config.yaml의 ai_voicebot.barge_in.smart_judge_enabled=true일 때만
+                    # SmartBargeInUserTurnStartStrategy로 교체(기본 False → 기존 MinWords 그대로,
+                    # 회귀 위험 없음). 두 전략을 동시에 넣지 않는다 — user_turn_strategies의
+                    # 다중 start 전략은 OR로 동작해 나란히 두면 오히려 더 민감해지기만 하기 때문.
+                    _smart_judge_enabled = False
+                    try:
+                        from src.config.config_loader import load_config
+                        _cfg = load_config()
+                        _barge_in_cfg = (
+                            getattr(getattr(_cfg, "ai_voicebot", None), "barge_in", None) or {}
+                        )
+                        _smart_judge_enabled = bool(_barge_in_cfg.get("smart_judge_enabled", False))
+                    except Exception as e:
+                        logger.debug("smart_barge_in_config_load_skip", error=str(e))
+
+                    if _smart_judge_enabled:
+                        from src.ai_voicebot.pipecat.smart_barge_in_turn_strategy import (
+                            SmartBargeInUserTurnStartStrategy,
+                        )
+                        _min_words = int((_barge_in_cfg or {}).get("min_words", 3))
+                        _start_strategy = SmartBargeInUserTurnStartStrategy(
+                            min_words=_min_words, llm_client=llm_client,
+                        )
+                        logger.info(
+                            "smart_barge_in_enabled",
+                            call_id=call_id,
+                            min_words=_min_words,
+                            note="Story 5.4 스마트 barge-in 판단 전략 활성화(config 옵트인)",
+                        )
+                    else:
+                        _start_strategy = MinWordsUserTurnStartStrategy(min_words=3)
+
+                    # Story 7.1 Task 4 (2026-07-29): pipecat 기본값으로 암묵 적용되던 Smart Turn
+                    # v3.2 stop 전략(TurnAnalyzerUserTurnStopStrategy+LocalSmartTurnAnalyzerV3)을
+                    # 명시적으로 구성하고, 순수 관측용 이벤트 핸들러만 추가한다. 판단 로직은
+                    # 전혀 건드리지 않는다(핸들러는 `on_user_turn_stopped` 발생 시 로깅만 수행,
+                    # 기존 내부 처리와 별개로 병렬 실행되어 회귀 위험 없음). 이 관측 로그로
+                    # Story 7.2(개선 방안 설계 결정)에 필요한 실제 판정 시각·빈도 데이터를 쌓는다.
+                    _stop_strategies = None
+                    try:
+                        from src.ai_voicebot.pipecat.smart_turn_stop_observer import (
+                            build_observed_smart_turn_stop_strategy,
+                        )
+                        _stop_strategy = build_observed_smart_turn_stop_strategy(call_id=call_id)
+                        if _stop_strategy is not None:
+                            _stop_strategies = [_stop_strategy]
+                    except Exception as e:
+                        logger.debug("smart_turn_stop_observer_init_skip", error=str(e))
+
+                    if _stop_strategies is not None:
+                        _user_turn_strategies = UserTurnStrategies(
+                            start=[_start_strategy], stop=_stop_strategies
+                        )
+                    else:
+                        # 관측 전략 구성 실패 시 pipecat 기본값(stop 미지정)으로 폴백 —
+                        # 기존 동작과 동일하게 유지(회귀 없음).
+                        _user_turn_strategies = UserTurnStrategies(start=[_start_strategy])
                 except Exception as e:
                     logger.debug("user_turn_strategies_init_skip", error=str(e))
             # PipelineParams: allow_interruptions=True로 바지인 활성화 (interruption_strategies는 deprecated, 사용 안 함)

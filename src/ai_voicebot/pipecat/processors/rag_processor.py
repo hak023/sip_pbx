@@ -1587,6 +1587,31 @@ class RAGLLMProcessor(FrameProcessor):
             # 발신자 전화번호 — rag_processor의 _caller_id를 LangGraph _caller_number로 주입
             caller_number_for_agent = getattr(self, "_caller_id", None) or ""
 
+            # ── Story 4.2 Task 5 사전 준비 (2026-07-29): TTFT 조기 첫 문장 "섀도우" 로깅 ──
+            # 실제 TTS 조기 송출은 barge-in/Supersede 취소와의 상호작용이 실제 통화로 검증되기
+            # 전까지 연결하지 않는다(리스크 미확인). 대신 "조기 전송이 가능했을 시점"과 그 이후
+            # 이 턴이 실제로 취소(Supersede)되는지를 로그로 남겨, 다음 실통화 QA에서 안전성을
+            # 판단할 데이터를 미리 축적한다 — TTS 프레임은 전혀 건드리지 않는 순수 로깅.
+            _shadow_first_sentence_fired_at: list = []  # closure 내부 갱신용 (nonlocal 대체)
+
+            async def _shadow_on_first_sentence(text: str, intent_out: str) -> None:
+                _shadow_first_sentence_fired_at.append(time.time())
+                logger.info(
+                    "ttft_shadow_first_sentence_would_fire",
+                    call=True,
+                    call_id=self._call_id or "",
+                    category="timing",
+                    progress="timing",
+                    intent=intent_out,
+                    elapsed_since_turn_start_sec=round(time.time() - agent_start, 3),
+                    sentence_preview=(text or "")[:80],
+                    note=(
+                        "Story 4.2 Task 5 사전 검증용 — 실제 TTS 조기 송출은 아직 미연결(로깅 전용). "
+                        "이 시점 이후 langgraph_agent_turn_cancelled가 발생하면 barge-in 상호작용"
+                        "리스크 시나리오가 실제로 존재했다는 뜻."
+                    ),
+                )
+
             if caller_context:
                 try:
                     result = await self._agent.process_utterance(
@@ -1595,6 +1620,7 @@ class RAGLLMProcessor(FrameProcessor):
                         caller_context=caller_context,
                         caller_number=caller_number_for_agent,
                         user_query_raw=stt_query_raw,
+                        on_first_sentence=_shadow_on_first_sentence,
                         **outbound_extra,
                     )
                 except TypeError:
@@ -1602,6 +1628,7 @@ class RAGLLMProcessor(FrameProcessor):
                         user_text, call_id=self._call_id or "",
                         caller_number=caller_number_for_agent,
                         user_query_raw=stt_query_raw,
+                        on_first_sentence=_shadow_on_first_sentence,
                         **outbound_extra,
                     )
             else:
@@ -1609,6 +1636,7 @@ class RAGLLMProcessor(FrameProcessor):
                     user_text, call_id=self._call_id or "",
                     caller_number=caller_number_for_agent,
                     user_query_raw=stt_query_raw,
+                    on_first_sentence=_shadow_on_first_sentence,
                     **outbound_extra,
                 )
             agent_elapsed = time.time() - agent_start
@@ -1618,6 +1646,13 @@ class RAGLLMProcessor(FrameProcessor):
                 call_id=self._call_id or "",
                 user_text_preview=(user_text or ""),
                 note="후속 STT로 턴 취소됨 → 병합 문장으로 재시도",
+                # Story 4.2 Task 5: 조기 첫 문장이 "발동했을(shadow)" 이후 취소됐다면, 실제 TTS
+                # 조기 송출 연결 시 부분 응답 재생 위험이 실제로 존재했다는 직접 증거가 된다.
+                ttft_shadow_fired_before_cancel=bool(_shadow_first_sentence_fired_at),
+                ttft_shadow_fired_sec_before_cancel=(
+                    round(time.time() - _shadow_first_sentence_fired_at[0], 3)
+                    if _shadow_first_sentence_fired_at else None
+                ),
             )
             raise
         finally:

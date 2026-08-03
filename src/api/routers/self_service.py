@@ -17,6 +17,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Query
 
 from src.common.self_service_config_change_db import list_config_changes
+from src.common.self_service_decision_log_db import list_decision_log
 
 router = APIRouter(prefix="/api/self-service", tags=["self-service"])
 
@@ -28,4 +29,18 @@ def get_config_changes(
 ) -> Dict[str, Any]:
     """owner의 최근 자동설정 변경 이력을 changed_at DESC 순으로 반환한다."""
     items = list_config_changes(owner, limit=limit)
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/decision-log")
+def get_decision_log(
+    owner: str = Query(..., description="테넌트 owner"),
+    limit: int = Query(20, ge=1, le=200, description="최대 조회 건수"),
+) -> Dict[str, Any]:
+    """owner의 최근 IntelliDecision 판단 근거 이력을 created_at DESC 순으로 반환한다(Story 1.21, FR30).
+
+    읽기 전용이며 `src/common/self_service_decision_log_db.py::list_decision_log()`만
+    호출한다(새 조회 로직을 만들지 않음, config-changes와 동일한 관례).
+    """
+    items = list_decision_log(owner, limit=limit)
     return {"items": items, "total": len(items)}

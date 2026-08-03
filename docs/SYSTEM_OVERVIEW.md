@@ -5,7 +5,7 @@
 | 항목               | 내용                                                                                                                            |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
 | **대상 독자**      | 제품·운영·엔지니어링 이해관계자, 시스템 아키텍처 검토에 참여하는 팀                                                             |
-| **최종 수정**      | 2026-07-20 (§4.11 셀프서비스 AI 도우미에 통화 이력 자연어 질의(Call History NLQ, Story 1.13) 반영)                              |
+| **최종 수정**      | 2026-07-30 (§4.11 셀프서비스 AI 도우미에 IntelliDecision 판단 근거 투명성(Story 1.20~1.22) 반영)                                |
 | **이전 문서 백업** | 상세 항목·API 표가 필요하면 [`SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md`](SYSTEM_OVERVIEW_2026-04-27_before_rewrite.md) 참고 |
 
 ### 다이어그램 (PNG) — 문서·교육 자료 등에 삽입
@@ -1955,6 +1955,23 @@ flowchart LR
 > 반복 검증한 결과 성공률이 0%→67%로 개선됨을 확인했다(재시도 강화·명확한 재안내 메시지는
 > 보조 방어망으로 유지).
 > 상세: [Story 1.14](stories/1.14.empty-candidate-string-field-mitigation.story.md)
+
+> **IntelliDecision 판단 근거 투명성(Story 1.20~1.22, 2026-07-29~30 완료)**: AI가 각 발화를
+> 유형 A~I 중 어느 것으로 판단해 응대했는지를 투명하게 노출하는 완리를 추가했다(사용자의
+> "판단 근거 로깅은 투명성 기능이므로 프론트엔드까지 반영해야 한다"는 요구에 따른 것). Story 1.20
+> 스파이크에서 3개 후보(구조화 출력 병행/센티널 태그/별도 분류 호출)를 실제 API로 검증한 결과,
+> 앞 두 개는 각각 API 자체 거부(400 오류)와 0% 신뢰성으로 기각되고, **응답 전송 후 비동기
+> 백그라운드로 별도 분류 호출을 실행**하는 방식이 채택되었다(사용자 응답 경로는 이 호출을
+> 전혀 기다리지 않아 체감 지연이 0에 가려움). 판단 근거(유형 코드+한 줄 요약, 원본 발화 전문은
+> 저장하지 않음)는 `self_service_decision_log` 테이블+`call_data_record` 로그에 이중 기록되고,
+> `GET /api/self-service/decision-log`로 조회 가능하며 `설정 > AI 도우미 > 도움말 > AI 의사결정
+> 로직` 탭의 "최근 판단 이력" 섹션에서 관리자가 직접 확인할 수 있다(실서버에서 owner 격리·빈 상태
+> 처리까지 검증 완료). 판단 로직(기존 프롬프트 산문) 자체는 전혀 수정하지 않은 순수 관측·로깅
+> 추가다.
+> 상세: [Story 1.20](stories/1.20.intellidecision-rationale-capture-spike.story.md),
+> [Story 1.21](stories/1.21.intellidecision-rationale-logging-and-api.story.md),
+> [Story 1.22](stories/1.22.intellidecision-rationale-frontend-viewer.story.md),
+> [구현 리포트](reports/2026-07/2026-07-30_story_1.21_implementation.md)
 
 ---
 

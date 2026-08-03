@@ -123,11 +123,14 @@ async def rewrite_query_node(state: ConversationState) -> dict:
                     prompt_len=len(prompt),
                     prompt_preview=prompt.replace("\n", " "))
         try:
+            # update_history=False: 쿼리 재작성은 사용자에게 들려주지 않는 내부 호출 —
+            # conversation_history 오염 방지(2026-07-29, classify_intent와 동일 근본 원인 수정).
             rewritten = await llm.generate_response(
                 prompt,
                 context_docs=[],
                 system_prompt="쿼리 변환기",
                 max_output_tokens=256,
+                update_history=False,
             )
         except Exception as llm_err:
             elapsed_err = time.time() - _start

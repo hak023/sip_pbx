@@ -284,6 +284,7 @@ class LLMClient:
         call_id: Optional[str] = None,  # DB 로깅용
         timeout_seconds: float = 30.0,  # ✅ API 타임아웃 설정
         max_output_tokens: Optional[int] = None,
+        update_history: bool = True,
     ) -> str:
         """
         사용자 입력에 대한 답변 생성
@@ -295,6 +296,12 @@ class LLMClient:
             call_id: 통화 ID (DB 로깅용, 선택)
             timeout_seconds: Gemini API 타임아웃 (기본 30초)
             max_output_tokens: 이번 호출만 출력 토큰 상한(의도분류·쿼리변환 등은 작게). None이면 설정 기본값.
+            update_history: False면 이번 호출(질문+응답)을 `conversation_history`에 남기지 않는다.
+                의도분류(classify_intent)/쿼리 재작성(rewrite_query) 등 **사용자에게 들려주지 않는
+                내부 LLM 호출**은 반드시 False로 호출해야 한다 — True(기본값)로 두면 내부 분류용
+                JSON 등이 다음 호출의 "이전 대화" 컨텍스트로 섞여 들어가 실제 응답 생성 LLM이
+                이를 그대로 따라 하는(예: 분류 JSON을 응답으로 반환) 문제가 생긴다(2026-07-29
+                발견·수정, `tts_response_meta_json_blocked` 근본 원인).
             
         Returns:
             생성된 답변 텍스트
@@ -357,19 +364,20 @@ class LLMClient:
                                   max_output_tokens=getattr(gen_cfg, "max_output_tokens", self.config.get("max_output_tokens")),
                                   note="응답이 max_output_tokens에서 잘림. config max_output_tokens 상향 권장(예: 1024).")
             
-            # 대화 히스토리 업데이트
-            self.conversation_history.append({
-                "role": "user",
-                "content": user_text
-            })
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": answer
-            })
-            
-            # 히스토리 제한
-            if len(self.conversation_history) > self.max_history_length:
-                self.conversation_history = self.conversation_history[-self.max_history_length:]
+            # 대화 히스토리 업데이트 (내부 전용 호출은 update_history=False로 오염 방지)
+            if update_history:
+                self.conversation_history.append({
+                    "role": "user",
+                    "content": user_text
+                })
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": answer
+                })
+
+                # 히스토리 제한
+                if len(self.conversation_history) > self.max_history_length:
+                    self.conversation_history = self.conversation_history[-self.max_history_length:]
             
             # 통계 업데이트
             self.total_requests += 1
