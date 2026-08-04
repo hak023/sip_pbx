@@ -39,6 +39,8 @@ from src.api.routers import self_service as self_service_router
 from src.api.routers import self_service_test as self_service_test_router
 from src.api.routers import ai_pipeline_test as ai_pipeline_test_router
 from src.api.routers import settings_ai_assistant as settings_ai_assistant_router
+from src.api.routers import knowledge_base_documents as knowledge_base_documents_router
+from src.api.routers import knowledge_base_simulate as knowledge_base_simulate_router
 from src.api.http_error_logging import register_http_error_logging
 from src.booking.database import init_db
 from src.call_control.db import init_db as init_call_control_db
@@ -81,6 +83,8 @@ app.include_router(self_service_router.router)      # /api/self-service (Story 1
 app.include_router(self_service_test_router.router)  # /api/self-service/test (BMAD QA 자동 테스트, 기본 비활성화)
 app.include_router(ai_pipeline_test_router.router)  # /api/ai-pipeline/test (voice-latency QA 자동 테스트, 기본 비활성화)
 app.include_router(settings_ai_assistant_router.router)  # /api/settings/ai-assistant/docs
+app.include_router(knowledge_base_documents_router.router)  # /api/knowledge-base/documents (Story 1.26)
+app.include_router(knowledge_base_simulate_router.router)  # /api/knowledge-base/simulate (Story 1.27)
 
 
 def _serialize_active_sessions(cm: Any) -> List[Dict[str, Any]]:

@@ -40,6 +40,9 @@ class IntentTypeSpec:
     related_types: List[str] = field(default_factory=list)
     # RAG 매칭 사전예측 메타데이터(Story 1.24, FR31-B) — 실제 검색 조건을 바꾸지 않고
     # "이 유형의 발화가 들어오면 RAG가 어떻게 매칭될 예정인지"를 설명하는 순수 메타데이터다.
+    # "graph_local"(Story 1.28, FR32-C)은 Microsoft GraphRAG의 Local Search 개념을 차용한 값 —
+    # 단순 벡터 유사도가 아니라 knowledge_graph.py의 2-hop 순회(도메인→writable→적용 가능 유형)
+    # 결과까지 함께 참고해 매칭한다는 의미(개념만 차용, Full GraphRAG 클러스터링은 미채택).
     rag_enabled: bool = True
     rag_source_scope: str = "self_service_manual(owner)"
     rag_strategy_hint: str = "vector"
@@ -56,7 +59,7 @@ _register(IntentTypeSpec(
     requires_tool=False,
     related_types=["B", "F"],
     rag_enabled=True,
-    rag_strategy_hint="vector",
+    rag_strategy_hint="graph_local",
 ))
 _register(IntentTypeSpec(
     code="B", name="실행성",

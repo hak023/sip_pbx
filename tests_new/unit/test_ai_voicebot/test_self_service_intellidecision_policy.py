@@ -43,7 +43,7 @@ def test_all_types_have_rag_matching_metadata_fields():
     for spec in intellidecision_policy.list_intent_types():
         assert isinstance(spec.rag_enabled, bool)
         assert spec.rag_source_scope
-        assert spec.rag_strategy_hint in {"vector", "hybrid", "none"}
+        assert spec.rag_strategy_hint in {"vector", "hybrid", "none", "graph_local"}
 
 
 def test_type_a_and_c_are_rag_enabled_with_expected_strategy():
@@ -51,7 +51,7 @@ def test_type_a_and_c_are_rag_enabled_with_expected_strategy():
     type_a = intellidecision_policy.get_intent_type("A")
     type_c = intellidecision_policy.get_intent_type("C")
     assert type_a.rag_enabled is True
-    assert type_a.rag_strategy_hint == "vector"
+    assert type_a.rag_strategy_hint == "graph_local"  # Story 1.28(AC4) — GraphRAG Local Search 개념 차용
     assert type_c.rag_enabled is True
     assert type_c.rag_strategy_hint == "hybrid"
 

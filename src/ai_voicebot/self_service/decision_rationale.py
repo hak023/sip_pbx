@@ -72,8 +72,13 @@ async def _capture_and_log(
     ai_response: str,
     owner: str,
     call_id: str,
-) -> None:
-    """실제 캡처 로직. 반드시 이 함수 내에서 모든 예외를 흡수해야 한다(호출부는 fire-and-forget)."""
+) -> tuple[str, str]:
+    """실제 캡처 로직. 반드시 이 함수 내에서 모든 예외를 흡수해야 한다.
+
+    `(matched_type, reasoning_summary)`를 반환한다 — `schedule_rationale_capture()`의
+    fire-and-forget 호출부는 이 반환값을 무시하고, Story 1.27 응답 시뮬레이터는 이 함수를
+    직접 `await`해 반환값을 그대로 API 응답에 싣는다(판정 로직 자체는 무변경, 호출 방식만 분기).
+    """
     matched_type = "unknown"
     reasoning_summary = ""
     try:
@@ -125,6 +130,8 @@ async def _capture_and_log(
             "self_service_intellidecision_rationale_call_data_log_failed",
             call_id=call_id, owner=owner, error=str(exc),
         )
+
+    return matched_type, reasoning_summary
 
 
 def schedule_rationale_capture(

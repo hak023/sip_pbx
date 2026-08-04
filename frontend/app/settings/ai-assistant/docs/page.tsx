@@ -73,6 +73,21 @@ interface IntelliDecisionPolicyResponse {
     types: IntentTypeOut[];
 }
 
+// 응답 시뮬레이터(Story 1.27, FR32-B) — 실제 LLM 응답 기반 사전 검증
+interface SimulateMatchedDocument {
+    doc_id: string;
+    score: number;
+    related_domain: string;
+}
+
+interface SimulateResponse {
+    response: string;
+    matched_documents: SimulateMatchedDocument[];
+    intellidecision_type: string;
+    reasoning_summary: string;
+    elapsed_sec: number;
+}
+
 // 판단 근거 투명성(Story 1.21/1.22, FR30) — 원본 발화 전문은 포함되지 않고 요약만 내려온다.
 interface DecisionLogItem {
     id: number;
@@ -128,6 +143,38 @@ interface CatalogConfigImportResponse {
     screen_graph_version: number | null;
     catalog_diff: CatalogConfigDiff | null;
     screen_graph_diff: CatalogConfigDiff | null;
+}
+
+interface KnowledgeDocumentItem {
+    document_id: string;
+    owner: string;
+    title: string;
+    domain_tags: string[];
+    source_type: string;
+    version_no: number;
+    uploaded_by: string;
+    uploaded_at: string;
+    updated_at: string;
+    chunk_count: number;
+}
+
+interface KnowledgeDocumentListResponse {
+    total: number;
+    items: KnowledgeDocumentItem[];
+}
+
+interface KnowledgeDocumentUploadResponse {
+    ok: boolean;
+    document_id?: string;
+    indexed_chunks: number;
+    errors: string[];
+    error?: string;
+}
+
+interface KnowledgeDocumentDeleteResponse {
+    ok: boolean;
+    deleted_chunks: number;
+    error?: string;
 }
 
 interface CatalogConfigVersionItem {
@@ -254,7 +301,7 @@ const DOMAIN_LABEL: Record<string, string> = {
     intro: "서비스 소개",
 };
 
-type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "manage";
+type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "manage" | "upload" | "simulate";
 
 // ---------------------------------------------------------------------------
 // 컴포넌트
@@ -295,6 +342,24 @@ export default function AiAssistantDocsPage() {
     const [kbInventory, setKbInventory] = useState<KnowledgeBaseInventoryResponse | null>(null);
     const [loadingKbInventory, setLoadingKbInventory] = useState(false);
     const [kbInventoryError, setKbInventoryError] = useState<string | null>(null);
+
+    // 지식 문서 업로드(Story 1.26, FR32-A) 상태
+    const [kbDocuments, setKbDocuments] = useState<KnowledgeDocumentItem[]>([]);
+    const [loadingKbDocuments, setLoadingKbDocuments] = useState(false);
+    const [kbDocumentsError, setKbDocumentsError] = useState<string | null>(null);
+    const [uploadTitle, setUploadTitle] = useState("");
+    const [uploadDomainTags, setUploadDomainTags] = useState("");
+    const [uploadSourceType, setUploadSourceType] = useState<"markdown" | "pdf" | "openapi">("markdown");
+    const [uploadTextBody, setUploadTextBody] = useState("");
+    const [uploadFile, setUploadFile] = useState<File | null>(null);
+    const [uploading, setUploading] = useState(false);
+    const [uploadResult, setUploadResult] = useState<KnowledgeDocumentUploadResponse | null>(null);
+
+    // 응답 시뮬레이터(Story 1.27)
+    const [simulateQuery, setSimulateQuery] = useState("");
+    const [simulating, setSimulating] = useState(false);
+    const [simulateResult, setSimulateResult] = useState<SimulateResponse | null>(null);
+    const [simulateError, setSimulateError] = useState<string | null>(null);
 
     // 설정 관리(내보내기) 상태 — Epic 2 Story 2.4
     const [exporting, setExporting] = useState(false);
@@ -500,6 +565,107 @@ export default function AiAssistantDocsPage() {
         setLoadingKbInventory(false);
     }, [owner]);
 
+    // 지식 문서 목록 로드(Story 1.26, FR32-A)
+    const loadKbDocuments = useCallback(async () => {
+        if (!owner) return;
+        setLoadingKbDocuments(true);
+        setKbDocumentsError(null);
+        const res = await apiJson<KnowledgeDocumentListResponse>(
+            `/api/knowledge-base/documents?owner=${encodeURIComponent(owner)}`
+        );
+        if (res.ok) {
+            setKbDocuments(res.data.items || []);
+        } else {
+            setKbDocumentsError(res.message);
+        }
+        setLoadingKbDocuments(false);
+    }, [owner]);
+
+    // 지식 문서 업로드(Story 1.26)
+    const handleUploadDocument = useCallback(async () => {
+        if (!owner || !uploadTitle) return;
+        if (uploadSourceType === "pdf" && !uploadFile) return;
+        if (uploadSourceType !== "pdf" && !uploadTextBody) return;
+
+        setUploading(true);
+        setUploadResult(null);
+        const form = new FormData();
+        form.append("owner", owner);
+        form.append("title", uploadTitle);
+        form.append("domain_tags", uploadDomainTags);
+        form.append("source_type", uploadSourceType);
+        if (uploadSourceType === "pdf" && uploadFile) {
+            form.append("file", uploadFile);
+        } else {
+            form.append("text_body", uploadTextBody);
+        }
+
+        const res = await apiJson<KnowledgeDocumentUploadResponse>(
+            "/api/knowledge-base/documents",
+            { method: "POST", body: form }
+        );
+        if (res.ok) {
+            setUploadResult(res.data);
+            if (res.data.ok) {
+                setUploadTitle("");
+                setUploadDomainTags("");
+                setUploadTextBody("");
+                setUploadFile(null);
+                void loadKbDocuments();
+            }
+        } else {
+            setUploadResult({ ok: false, indexed_chunks: 0, errors: [], error: res.message });
+        }
+        setUploading(false);
+    }, [owner, uploadTitle, uploadDomainTags, uploadSourceType, uploadTextBody, uploadFile, loadKbDocuments]);
+
+    // 지식 문서 삭제(Story 1.26)
+    const handleDeleteDocument = useCallback(
+        async (documentId: string) => {
+            if (!owner) return;
+            const res = await apiJson<KnowledgeDocumentDeleteResponse>(
+                `/api/knowledge-base/documents/${encodeURIComponent(documentId)}?owner=${encodeURIComponent(owner)}`,
+                { method: "DELETE" }
+            );
+            if (res.ok && res.data.ok) {
+                void loadKbDocuments();
+            }
+        },
+        [owner, loadKbDocuments]
+    );
+
+    // 응답 시뮬레이터 실행(Story 1.27) — 실 서비스 세션 무영향, 실 LLM 호출로 지연 발생(AC4)
+    const handleSimulate = useCallback(
+        async (queryOverride?: string) => {
+            const query = (queryOverride ?? simulateQuery).trim();
+            if (!owner || !query) return;
+            setSimulating(true);
+            setSimulateError(null);
+            setSimulateResult(null);
+            const res = await apiJson<SimulateResponse>("/api/knowledge-base/simulate", {
+                method: "POST",
+                body: { owner, query },
+            });
+            if (res.ok) {
+                setSimulateResult(res.data);
+            } else {
+                setSimulateError(res.message);
+            }
+            setSimulating(false);
+        },
+        [owner, simulateQuery]
+    );
+
+    // IntelliDecision 정책 탭 → 시뮬레이터 바로가기(AC5)
+    const handleSimulateFromPolicy = useCallback(
+        (example: string) => {
+            setSimulateQuery(example);
+            setTab("simulate");
+            void handleSimulate(example);
+        },
+        [handleSimulate]
+    );
+
     useEffect(() => {
         if (tab === "qa" && owner && items.length === 0) void loadQa();
         if (tab === "catalog" && catalog.length === 0) void loadCatalog();
@@ -507,9 +673,10 @@ export default function AiAssistantDocsPage() {
         if (tab === "policy" && intentTypes.length === 0) void loadPolicy();
         if (tab === "policy" && owner && decisionLog.length === 0) void loadDecisionLog();
         if (tab === "kb" && owner && !kbInventory) void loadKbInventory();
+        if (tab === "upload" && owner) void loadKbDocuments();
         if (tab === "manage") void loadVersions();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tab, owner, items.length, catalog.length, screens.length, intentTypes.length, decisionLog.length, kbInventory, loadQa, loadCatalog, loadScreens, loadPolicy, loadDecisionLog, loadKbInventory]);
+    }, [tab, owner, items.length, catalog.length, screens.length, intentTypes.length, decisionLog.length, kbInventory, loadQa, loadCatalog, loadScreens, loadPolicy, loadDecisionLog, loadKbInventory, loadKbDocuments]);
 
     // 설정 다운로드 — Epic 2 Story 2.4
     // 백엔드는 JSON 본문만 반환하므로, 브라우저에서 Blob으로 감싸 파일 다운로드를 트리거한다.
@@ -558,7 +725,7 @@ export default function AiAssistantDocsPage() {
 
             {/* 탭 */}
             <div className="flex gap-1 border-b border-gray-200 mb-6">
-                {(["qa", "catalog", "screen", "policy", "kb", "manage"] as Tab[]).map((t) => (
+                {(["qa", "catalog", "screen", "policy", "kb", "upload", "simulate", "manage"] as Tab[]).map((t) => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -579,7 +746,11 @@ export default function AiAssistantDocsPage() {
                                         ? "AI 의사결정 로직"
                                         : t === "kb"
                                             ? "지식베이스 현황"
-                                            : "설정 관리"}
+                                            : t === "upload"
+                                                ? "지식 업로드"
+                                                : t === "simulate"
+                                                    ? "응답 시뮬레이터"
+                                                    : "설정 관리"}
                     </button>
                 ))}
             </div>
@@ -861,6 +1032,12 @@ export default function AiAssistantDocsPage() {
                                     {t.trigger_examples.length > 0 && (
                                         <p className="mt-2 text-xs text-gray-400">
                                             예: {t.trigger_examples.map((e) => `"${e}"`).join(", ")}
+                                            <button
+                                                onClick={() => handleSimulateFromPolicy(t.trigger_examples[0])}
+                                                className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700 hover:bg-indigo-100"
+                                            >
+                                                이 유형으로 시뮬레이션 →
+                                            </button>
                                         </p>
                                     )}
                                     {t.related_types.length > 0 && (
@@ -999,6 +1176,242 @@ export default function AiAssistantDocsPage() {
                                         )}
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── 지식 업로드 탭 — Story 1.26, FR32-A ── */}
+            {tab === "upload" && (
+                <div className="space-y-5">
+                    <p className="text-xs text-gray-500">
+                        마크다운·PDF·OpenAPI 문서를 업로드해 지식베이스에 등록합니다. 등록된 문서는
+                        도메인 태그와 함께 청크 단위로 색인되며, 아래 목록에서 수정·삭제할 수 있습니다.
+                    </p>
+
+                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs text-gray-500 mb-1">제목</label>
+                                <input
+                                    type="text"
+                                    value={uploadTitle}
+                                    onChange={(e) => setUploadTitle(e.target.value)}
+                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                    placeholder="예: 예약 API 문서"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-500 mb-1">
+                                    도메인 태그(콤마 구분)
+                                </label>
+                                <input
+                                    type="text"
+                                    value={uploadDomainTags}
+                                    onChange={(e) => setUploadDomainTags(e.target.value)}
+                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                    placeholder="예: api-docs,billing"
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs text-gray-500 mb-1">소스 유형</label>
+                            <select
+                                value={uploadSourceType}
+                                onChange={(e) =>
+                                    setUploadSourceType(e.target.value as "markdown" | "pdf" | "openapi")
+                                }
+                                className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                            >
+                                <option value="markdown">마크다운/일반 텍스트</option>
+                                <option value="pdf">PDF 파일</option>
+                                <option value="openapi">OpenAPI 스펙(JSON/YAML)</option>
+                            </select>
+                        </div>
+                        {uploadSourceType === "pdf" ? (
+                            <div>
+                                <label className="block text-xs text-gray-500 mb-1">PDF 파일</label>
+                                <input
+                                    type="file"
+                                    accept="application/pdf"
+                                    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-indigo-700"
+                                />
+                            </div>
+                        ) : (
+                            <div>
+                                <label className="block text-xs text-gray-500 mb-1">
+                                    {uploadSourceType === "openapi" ? "OpenAPI 스펙 본문" : "본문 텍스트"}
+                                </label>
+                                <textarea
+                                    value={uploadTextBody}
+                                    onChange={(e) => setUploadTextBody(e.target.value)}
+                                    rows={6}
+                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm font-mono"
+                                    placeholder={
+                                        uploadSourceType === "openapi"
+                                            ? '{"paths": {"/example": {"get": {"summary": "..."}}}}'
+                                            : "문서 본문을 입력하세요"
+                                    }
+                                />
+                            </div>
+                        )}
+                        <button
+                            onClick={() => void handleUploadDocument()}
+                            disabled={uploading || !uploadTitle}
+                            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                        >
+                            {uploading ? "업로드 중…" : "업로드"}
+                        </button>
+                        {uploadResult && (
+                            <div
+                                className={
+                                    "rounded-lg px-4 py-2 text-sm " +
+                                    (uploadResult.ok
+                                        ? "border border-green-200 bg-green-50 text-green-800"
+                                        : "border border-red-200 bg-red-50 text-red-800")
+                                }
+                            >
+                                {uploadResult.ok
+                                    ? `${uploadResult.indexed_chunks}개 청크로 색인 완료`
+                                    : uploadResult.error || "업로드 실패"}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+                        {loadingKbDocuments && (
+                            <p className="p-4 text-sm text-gray-400">로딩 중…</p>
+                        )}
+                        {kbDocumentsError && (
+                            <p className="p-4 text-sm text-red-800">{kbDocumentsError}</p>
+                        )}
+                        {!loadingKbDocuments && !kbDocumentsError && (
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                                    <tr>
+                                        <th className="px-4 py-2">제목</th>
+                                        <th className="px-4 py-2">태그</th>
+                                        <th className="px-4 py-2">유형</th>
+                                        <th className="px-4 py-2">청크 수</th>
+                                        <th className="px-4 py-2">업로드 시각</th>
+                                        <th className="px-4 py-2"></th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {kbDocuments.map((doc) => (
+                                        <tr key={doc.document_id}>
+                                            <td className="px-4 py-2 text-gray-700">{doc.title}</td>
+                                            <td className="px-4 py-2 text-gray-500">
+                                                {doc.domain_tags.join(", ")}
+                                            </td>
+                                            <td className="px-4 py-2 text-gray-500">{doc.source_type}</td>
+                                            <td className="px-4 py-2 text-gray-500">{doc.chunk_count}</td>
+                                            <td className="px-4 py-2 text-gray-500">{doc.uploaded_at}</td>
+                                            <td className="px-4 py-2">
+                                                <button
+                                                    onClick={() => void handleDeleteDocument(doc.document_id)}
+                                                    className="text-xs text-red-600 hover:underline"
+                                                >
+                                                    삭제
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {kbDocuments.length === 0 && (
+                                        <tr>
+                                            <td className="px-4 py-2 text-gray-400" colSpan={6}>
+                                                업로드된 지식 문서가 없습니다.
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* ── 응답 시뮬레이터 탭 — Story 1.27, FR32-B(실 서비스 세션 무영향, 실 LLM 호출) ── */}
+            {tab === "simulate" && (
+                <div className="space-y-5">
+                    <p className="text-xs text-gray-500">
+                        예시 질문을 입력하면 실제 통화/채팅 세션에 영향을 주지 않고, 매칭된 지식
+                        문서·AI 의사결정 유형·실제 응답을 미리 확인할 수 있습니다. 실제 LLM을
+                        호출하므로 시간이 걸릴 수 있습니다(NFR8).
+                    </p>
+
+                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
+                        <div>
+                            <label className="block text-xs text-gray-500 mb-1">예시 발화</label>
+                            <textarea
+                                value={simulateQuery}
+                                onChange={(e) => setSimulateQuery(e.target.value)}
+                                rows={3}
+                                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                placeholder="예: 착신 규칙을 바꾸고 싶어요"
+                            />
+                        </div>
+                        <button
+                            onClick={() => void handleSimulate()}
+                            disabled={simulating || !owner || !simulateQuery.trim()}
+                            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                        >
+                            {simulating ? "실행 중… (실제 LLM 호출로 시간이 걸릴 수 있습니다)" : "시뮬레이션 실행"}
+                        </button>
+                        {simulateError && (
+                            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+                                {simulateError}
+                            </div>
+                        )}
+                    </div>
+
+                    {simulateResult && (
+                        <div className="space-y-4">
+                            <p className="text-xs text-gray-400">
+                                소요 시간: {simulateResult.elapsed_sec.toFixed(2)}초(실측, 캐시 아님)
+                            </p>
+
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
+                                    ① 매칭된 지식 문서
+                                </h3>
+                                {simulateResult.matched_documents.length === 0 ? (
+                                    <p className="text-sm text-gray-400">매칭된 문서가 없습니다.</p>
+                                ) : (
+                                    <ul className="space-y-1 text-sm">
+                                        {simulateResult.matched_documents.map((d, i) => (
+                                            <li key={`${d.doc_id}-${i}`} className="text-gray-700">
+                                                <span className="font-mono text-xs text-gray-500">{d.doc_id}</span>
+                                                {" · 유사도 "}
+                                                {d.score.toFixed(3)}
+                                                {d.related_domain && ` · ${d.related_domain}`}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
+                                    ② IntelliDecision 판정
+                                </h3>
+                                <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                                    {simulateResult.intellidecision_type !== "unknown"
+                                        ? `${simulateResult.intellidecision_type} · ${intentTypes.find((t) => t.code === simulateResult.intellidecision_type)?.name ?? ""}`
+                                        : "미확인"}
+                                </span>
+                                <p className="mt-2 text-sm text-gray-600">
+                                    {simulateResult.reasoning_summary || "-"}
+                                </p>
+                            </div>
+
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                <h3 className="mb-2 text-sm font-semibold text-gray-800">③ 실제 응답</h3>
+                                <p className="whitespace-pre-wrap text-sm text-gray-800">
+                                    {simulateResult.response}
+                                </p>
                             </div>
                         </div>
                     )}

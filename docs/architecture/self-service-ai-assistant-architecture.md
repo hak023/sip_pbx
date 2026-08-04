@@ -1,9 +1,9 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement Architecture
 
 **작성일**: 2026-07-14
-**버전**: 0.13 (2026-08-03 갱신 — Story 1.25(매뉴얼 색인 소스 어댑터 일반화) Task 1~4 구현 완료, Contextual Retrieval 적용은 의도적 미착수)
+**버전**: 0.20 (2026-08-04 갱신 — FR33 계획 증분: 업로드 진입점 통합·자동 지식베이스 구성·시뮬레이터 UX 고도화·유형 C 하이브리드 RAG 방향 문서화, Story 1.30~1.33)
 프롬프트 산문 자동 렌더링(Story 1.19))
-**상태**: Epic 1(Story 1.1~1.19) 구현·실서버 검증 완료 + Epic 2(Story 2.1~2.8) 구현·실서버 검증 완료, Story 1.20~1.23은 설계만 반영(Draft)
+**상태**: Epic 1(Story 1.1~1.19) 구현·실서버 검증 완료 + Epic 2(Story 2.1~2.8) 구현·실서버 검증 완료 + Story 1.23~1.25 구현 완료, 도메인 비종속 지식베이스 플랫폼(Story 1.26~1.29)는 설계만 반영(Draft)
 **관련 문서**:
 - [self-service-ai-assistant-prd.md](../product/self-service-ai-assistant-prd.md) — 본 아키텍처의 입력 PRD (FR1-11, NFR1-4, CR1-4, Epic 1 Story 1.1-1.9)
 - [self-service-ai-assistant-brief.md](../product/self-service-ai-assistant-brief.md) — 상위 Project Brief
@@ -34,21 +34,28 @@
 
 ### Change Log
 
-| Change                                | Date       | Version | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Author                        |
-| ------------------------------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| 초안 생성                             | 2026-07-14 | 0.1     | PRD 기반 브라운필드 아키텍처 최초 작성, 셀프콜 감지 지점을 코드 추적으로 재확정                                                                                                                                                                                                                                                                                                                                                                                                                                    | Copilot (BMAD Architect 역할) |
-| 구현 전 검토                          | 2026-07-14 | 0.2     | Story 1.4~1.9 작성 과정에서 발견된 드리프트 반영: StatisticsCollector(전역 싱글턴, 부적합) → call_record_db(owner 스코프) 정정, `self_service/onboarding.py` 컴포넌트 보완, Source Tree에 `config/self_service_exclusions.yaml`·Story 1.9 라우터 파일 추가, `_route_after_classify`/`_LANGGRAPH_SCHEMA_VERSION=8` 실제 코드로 재검증 완료                                                                                                                                                                          | Copilot (BMAD Architect 역할) |
-| 범위 추가                             | 2026-07-20 | 0.3     | 통화 이력 자연어 질의(Call History NLQ) 신규 컴포넌트 `self_service/call_history_query.py` 추가(PRD FR15/NFR5, Story 1.13) — 새 벡터 임베딩 없이 기존 `call_record_db.get_call_records_page` 구조화 검색/집계로 구현                                                                                                                                                                                                                                                                                               | Copilot (BMAD Architect 역할) |
-| Epic 2 신설                           | 2026-07-20 | 0.4     | 설정 카탈로그/Screen Graph 동적화(§Epic 2 Component Architecture 신설) — DB 저장소 + 함수 화이트리스트 레지스트리 패턴, 프론트엔드 다운로드/업로드 API, IntelliDecision 키워드 힌트 제거 방향 반영(PRD Epic 2, Story 2.1~2.8)                                                                                                                                                                                                                                                                                      | Copilot (BMAD Architect 역할) |
-| IntelliDecision 유형 C                | 2026-07-23 | 0.5     | 유형 A/B가 다루지 않던 포괄적 도움 요청("뭘 할 수 있어?")을 위한 유형 C 신설(PRD FR25, Story 1.15) — 기본 시스템 프롬프트에 추가되어 3개 Tool-calling 폴백 경로 모두에 항상 적용, 매뉴얼 §9 콘텐츠도 함께 최신화                                                                                                                                                                                                                                                                                                   | Copilot (BMAD Architect 역할) |
-| IntelliDecision 유형 D~I              | 2026-07-23 | 0.6     | 대화 수리·복구 패턴 6종(정정/실행취소/모호성해소/일괄처리/범위외설명/반복요청) 신설(PRD FR26, Story 1.16) — D/F/G/H/I는 프롬프트 규칙만 추가, E(Undo)만 신규 Tool 2개(`get_last_self_service_change`/`undo_last_self_service_change`) 추가                                                                                                                                                                                                                                                                         | Copilot (BMAD Architect 역할) |
-| 능력 레지스트리 구현                  | 2026-07-23 | 0.7     | 유형 C 능력 안내를 하드코딩 문구에서 `settings_catalog` 실시간 데이터+Tool 정적 매핑 기반 동적 생성으로 전환(PRD FR27, Story 1.17) — 신규 캐시/신규 API/신규 프론트엔드 탭 없이 기존 `settings_catalog`/`/catalog`/`/screen-graph`/도움말 페이지를 그대로 재사용(결정 지원 리포트 권장안 채택), 매뉴얼 §9 축소                                                                                                                                                                                                     | Copilot (BMAD Architect 역할) |
-| IntelliDecision 정책 레지스트리       | 2026-07-28 | 0.8     | 유형 A~I의 코드/이름/트리거 예시/Tool 필요 여부를 `intellidecision_policy.py` 정적 레지스트리로 데이터화, Screen Graph를 `knowledge_graph.py::traverse()`로 2-hop(도메인→writable 여부→적용 가능 유형)까지 확장(PRD FR28, Story 1.18), 읽기 전용 API+시각화 탭 추가                                                                                                                                                                                                                                                | Copilot (BMAD Architect 역할) |
-| 프롬프트 산문 자동 렌더링             | 2026-07-28 | 0.9     | 하드코딩 18개 응답 규칙을 `prompt_rules.py` 정적 리스트+센티널 토큰 기반 자동 렌더링으로 전환해 번호 재조정 함정을 구조적으로 해결(PRD FR29, Story 1.19)                                                                                                                                                                                                                                                                                                                                                           | Copilot (BMAD Architect 역할) |
-| IntelliDecision 판단 근거 투명성 설계 | 2026-07-29 | 0.10    | 판단 결과(유형 코드·근거 요약)를 별도 저장·프론트엔드 열람 가능하게 하는 설계 추가(PRD FR30/NFR6, Story 1.20~1.22) — 캡처 방식은 Story 1.20에서 스파이크로 결정 예정, 이번 갱신은 설계 옵션만 문서화                                                                                                                                                                                                                                                                                                               | Copilot (BMAD Architect 역할) |
-| RAG·IntelliDecision 고도화 설계 방향  | 2026-07-30 | 0.11    | 시장·연구 리서치([SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](../design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md)) 반영(PRD FR31/NFR7). §Epic 1 확장에 「지식베이스 인벤토리 투명성」(신규 읽기 전용 API+탭, Story 1.23)/「IntelliDecision-RAG 매칭 정책 메타데이터」(`intellidecision_policy.py` 확장+trace 로깅, Story 1.24)/「매뉴얼 색인 소스 어댑터 일반화」(`manual_indexer.py` 리팩터링, Story 1.25) 설계 방향 신설 — 이번 갱신은 방향 문서화만, 구현은 각 Story 착수 시 진행 | Copilot (BMAD Architect 역할) |
-| Story 1.23/1.24 구현 완료             | 2026-07-30 | 0.12    | 지식베이스 인벤토리 API+탭(Story 1.23), `IntentTypeSpec` RAG 매칭 메타데이터+`self_service_rag_matched` trace 로깅+프론트엔드 배지(Story 1.24) 코드·단위테스트 구현 완료(실서버 IV만 잔여) — 둘 다 순수 관측/메타데이터 추가로 응대 로직 무변경                                                                                                                                                                                                                                                                    | Copilot (BMAD Architect 역할) |
-| Story 1.25 구현 완료                  | 2026-08-03 | 0.13    | `manual_indexer.py`에 `SourceAdapter` 프로토콜+`MarkdownManualAdapter`(기존 파서 그대로 이관) 도입, `index_self_service_manual(adapter=)` 옵션 파라미터로 확장(기존 호출부 무수정). 리팩터링 전후 동일성 직접 비교 단위테스트 추가. Contextual Retrieval은 별도 스파이크 선행 필요로 미착수 유지 | Copilot (BMAD Architect 역할) |
+| Change                                                                               | Date       | Version | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Author                        |
+| ------------------------------------------------------------------------------------ | ---------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| 초안 생성                                                                            | 2026-07-14 | 0.1     | PRD 기반 브라운필드 아키텍처 최초 작성, 셀프콜 감지 지점을 코드 추적으로 재확정                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Copilot (BMAD Architect 역할) |
+| 구현 전 검토                                                                         | 2026-07-14 | 0.2     | Story 1.4~1.9 작성 과정에서 발견된 드리프트 반영: StatisticsCollector(전역 싱글턴, 부적합) → call_record_db(owner 스코프) 정정, `self_service/onboarding.py` 컴포넌트 보완, Source Tree에 `config/self_service_exclusions.yaml`·Story 1.9 라우터 파일 추가, `_route_after_classify`/`_LANGGRAPH_SCHEMA_VERSION=8` 실제 코드로 재검증 완료                                                                                                                                                                                                                              | Copilot (BMAD Architect 역할) |
+| 범위 추가                                                                            | 2026-07-20 | 0.3     | 통화 이력 자연어 질의(Call History NLQ) 신규 컴포넌트 `self_service/call_history_query.py` 추가(PRD FR15/NFR5, Story 1.13) — 새 벡터 임베딩 없이 기존 `call_record_db.get_call_records_page` 구조화 검색/집계로 구현                                                                                                                                                                                                                                                                                                                                                   | Copilot (BMAD Architect 역할) |
+| Epic 2 신설                                                                          | 2026-07-20 | 0.4     | 설정 카탈로그/Screen Graph 동적화(§Epic 2 Component Architecture 신설) — DB 저장소 + 함수 화이트리스트 레지스트리 패턴, 프론트엔드 다운로드/업로드 API, IntelliDecision 키워드 힌트 제거 방향 반영(PRD Epic 2, Story 2.1~2.8)                                                                                                                                                                                                                                                                                                                                          | Copilot (BMAD Architect 역할) |
+| IntelliDecision 유형 C                                                               | 2026-07-23 | 0.5     | 유형 A/B가 다루지 않던 포괄적 도움 요청("뭘 할 수 있어?")을 위한 유형 C 신설(PRD FR25, Story 1.15) — 기본 시스템 프롬프트에 추가되어 3개 Tool-calling 폴백 경로 모두에 항상 적용, 매뉴얼 §9 콘텐츠도 함께 최신화                                                                                                                                                                                                                                                                                                                                                       | Copilot (BMAD Architect 역할) |
+| IntelliDecision 유형 D~I                                                             | 2026-07-23 | 0.6     | 대화 수리·복구 패턴 6종(정정/실행취소/모호성해소/일괄처리/범위외설명/반복요청) 신설(PRD FR26, Story 1.16) — D/F/G/H/I는 프롬프트 규칙만 추가, E(Undo)만 신규 Tool 2개(`get_last_self_service_change`/`undo_last_self_service_change`) 추가                                                                                                                                                                                                                                                                                                                             | Copilot (BMAD Architect 역할) |
+| 능력 레지스트리 구현                                                                 | 2026-07-23 | 0.7     | 유형 C 능력 안내를 하드코딩 문구에서 `settings_catalog` 실시간 데이터+Tool 정적 매핑 기반 동적 생성으로 전환(PRD FR27, Story 1.17) — 신규 캐시/신규 API/신규 프론트엔드 탭 없이 기존 `settings_catalog`/`/catalog`/`/screen-graph`/도움말 페이지를 그대로 재사용(결정 지원 리포트 권장안 채택), 매뉴얼 §9 축소                                                                                                                                                                                                                                                         | Copilot (BMAD Architect 역할) |
+| IntelliDecision 정책 레지스트리                                                      | 2026-07-28 | 0.8     | 유형 A~I의 코드/이름/트리거 예시/Tool 필요 여부를 `intellidecision_policy.py` 정적 레지스트리로 데이터화, Screen Graph를 `knowledge_graph.py::traverse()`로 2-hop(도메인→writable 여부→적용 가능 유형)까지 확장(PRD FR28, Story 1.18), 읽기 전용 API+시각화 탭 추가                                                                                                                                                                                                                                                                                                    | Copilot (BMAD Architect 역할) |
+| 프롬프트 산문 자동 렌더링                                                            | 2026-07-28 | 0.9     | 하드코딩 18개 응답 규칙을 `prompt_rules.py` 정적 리스트+센티널 토큰 기반 자동 렌더링으로 전환해 번호 재조정 함정을 구조적으로 해결(PRD FR29, Story 1.19)                                                                                                                                                                                                                                                                                                                                                                                                               | Copilot (BMAD Architect 역할) |
+| IntelliDecision 판단 근거 투명성 설계                                                | 2026-07-29 | 0.10    | 판단 결과(유형 코드·근거 요약)를 별도 저장·프론트엔드 열람 가능하게 하는 설계 추가(PRD FR30/NFR6, Story 1.20~1.22) — 캡처 방식은 Story 1.20에서 스파이크로 결정 예정, 이번 갱신은 설계 옵션만 문서화                                                                                                                                                                                                                                                                                                                                                                   | Copilot (BMAD Architect 역할) |
+| RAG·IntelliDecision 고도화 설계 방향                                                 | 2026-07-30 | 0.11    | 시장·연구 리서치([SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](../design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md)) 반영(PRD FR31/NFR7). §Epic 1 확장에 「지식베이스 인벤토리 투명성」(신규 읽기 전용 API+탭, Story 1.23)/「IntelliDecision-RAG 매칭 정책 메타데이터」(`intellidecision_policy.py` 확장+trace 로깅, Story 1.24)/「매뉴얼 색인 소스 어댑터 일반화」(`manual_indexer.py` 리팩터링, Story 1.25) 설계 방향 신설 — 이번 갱신은 방향 문서화만, 구현은 각 Story 착수 시 진행                                                     | Copilot (BMAD Architect 역할) |
+| Story 1.23/1.24 구현 완료                                                            | 2026-07-30 | 0.12    | 지식베이스 인벤토리 API+탭(Story 1.23), `IntentTypeSpec` RAG 매칭 메타데이터+`self_service_rag_matched` trace 로깅+프론트엔드 배지(Story 1.24) 코드·단위테스트 구현 완료(실서버 IV만 잔여) — 둘 다 순수 관측/메타데이터 추가로 응대 로직 무변경                                                                                                                                                                                                                                                                                                                        | Copilot (BMAD Architect 역할) |
+| Story 1.25 구현 완료                                                                 | 2026-08-03 | 0.13    | `manual_indexer.py`에 `SourceAdapter` 프로토콜+`MarkdownManualAdapter`(기존 파서 그대로 이관) 도입, `index_self_service_manual(adapter=)` 옵션 파라미터로 확장(기존 호출부 무수정). 리팩터링 전후 동일성 직접 비교 단위테스트 추가. Contextual Retrieval은 별도 스파이크 선행 필요로 미착수 유지                                                                                                                                                                                                                                                                       | Copilot (BMAD Architect 역할) |
+| 도메인 비종속 지식베이스 플랫폼 설계                                                 | 2026-08-04 | 0.14    | 사용자가 범위를 넘어서는 더 큰 전환을 요청 — 리서치 문서를 재작성([SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](../design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md) v2.0)하고 신규 §로 반영(PRD FR32). 지식 문서 CRUD API/업로드 프론트(Story 1.26), 실제 LLM 응답 기반 응답 시뮬레이터(Story 1.27), `knowledge_graph.py` n-hop 일반화(Story 1.28), Contextual Retrieval 스파이크(Story 1.29) 설계 방향만 문서화 — 구현은 Story 착수 시 진행                                                                                              | Copilot (BMAD Architect 역할) |
+| Story 1.26 상세 아키텍처 설계                                                        | 2026-08-04 | 0.15    | Story 1.26 착수 직전, 컴포넌트 다이어그램(mermaid)·`knowledge_documents` 테이블 스키마·API 계약표·업로드/삭제 시퀀스 다이어그램(mermaid)·참고문헌 매핑표 신설(기존 `self_service_catalog_config`/`SourceAdapter`/`knowledge_service` 패턴 재사용, 신규 아키텍처 패턴 없음)                                                                                                                                                                                                                                                                                             | Copilot (BMAD Architect 역할) |
+| Story 1.27 상세 아키텍처 설계                                                        | 2026-08-04 | 0.16    | Story 1.27 착수 직전, 컴포넌트 다이어그램(mermaid)·시뮬레이션 요청/응답 시퀀스 다이어그램(mermaid)·IntelliDecision 판정 흐름도(flowchart)·API 계약표·참고문헌 매핑표 신설. 핵심 설계 결정: 기존 `POST /api/self-service/test/converse` 실행 경로를 그대로 재사용하고, `decision_rationale.py`의 fire-and-forget 비동기 캡처를 **동기 대기 가능한 형태로 리팩터링**(반환값 노출)해 시뮬레이터 응답에 유형·근거를 동기적으로 포함시키는 방향으로 확정                                                                                                                    | Copilot (BMAD Architect 역할) |
+| Story 1.27 구현+IV 검증 완료                                                         | 2026-08-04 | 0.17    | 백엔드(`knowledge_base_simulate.py`)/프론트엔드("응답 시뮬레이터" 탭) 구현 완료. **실서버 IV 검증 중 설계 오류 발견·수정**: 격리를 위해 `caller_number`를 임의의 `sim-` 값으로 썼으나, `detection.py::is_self_service_session()`이 caller_number==owner일 때만 True를 반환해 self_service_agent 경로 자체를 타지 못하는 치명적 버그를 발견 — caller_number=owner로 수정하고 격리는 call_id+캐시 미등록으로만 보장하도록 재설계. `test/converse`와의 크로스체크(matched_doc_ids 완전 일치)로 AC2 최종 검증 완료                                                         | Copilot (BMAD Architect 역할) |
+| Story 1.28 구현 완료                                                                 | 2026-08-04 | 0.18    | `knowledge_graph.py`를 노드 타입(`manual_qa`/`catalog_domain`/`frontend_screen`/`intent_type`+신규 `document`/`api_endpoint`/`procedure_step`) 및 엣지 타입(`rendered_by`/`writable`/`relates_to`+신규 `depends_on`/`documents`) 레지스트리로 일반화, 범용 `traverse_graph()` 구현. 기존 `traverse()`/`format_decision_hint()`는 이 엔진 위 얇은 래퍼로 재작성되어 Story 1.18과 바이트 단위 동일함을 직접비교 단위테스트로 검증(AC5). `relates_to` 엣지로 Story 1.26 업로드 문서를 `document` 노드로 실제 연결 검증, `rag_strategy_hint="graph_local"`을 유형 A에 적용 | Copilot (BMAD Dev 역할)       |
+| Story 1.29 스파이크 실측 완료                                                        | 2026-08-04 | 0.19    | `scripts/spike_contextual_retrieval.py`로 owner 9001 매뉴얼 Q&A 52건에 대해 Contextual Retrieval을 실제 Gemini 호출로 실측(self-retrieval hit@1/hit@3 벤치마크). **결론: 미채택**(hit@1 94.23%→86.54%로 악화, 52회 호출·362.9초 비용만 추가) — 순수 파이썬 BM25는 hit@1/hit@3 100%로 벡터 검색 대비 우수해 후속 Story 검토 권장. 프로덕션 코드는 무변경(스파이크 스크립트만 신설)                                                                                                                                                                                      | Copilot (BMAD Dev 역할)       |
+| FR33 계획 증분(업로드 통합·자동 지식베이스 구성·시뮬레이터 UX·유형 C 하이브리드 RAG) | 2026-08-04 | 0.20    | 사용자가 FR32 완료 후 잔여 정적 결합(설정 관리/지식 업로드 탭 이원화, 도메인 종속 카탈로그, 시뮬레이터 UX)을 지적하며 계획 수립 요청 → 신규 §"RAG·IntelliDecision 고도화 2단계"(아래) 추가(PRD FR33), Story 1.30(업로드 진입점 통합+시스템 표준 콘텐츠 구분)/1.31(업로드 기반 지식베이스 자동 구성)/1.32(시뮬레이터×IntelliDecision UX 통합)/1.33(유형 C 하이브리드 RAG) 설계 방향만 문서화 — 구현은 각 Story 착수 시 진행                                                                                                                                             | Copilot (BMAD Architect 역할) |
 
 ---
 
@@ -612,6 +619,347 @@ graph TD
 ```
 
 > **다이어그램 정정(구현 전 검토, 2026-07-14)**: 초안은 `STATS[StatisticsCollector / CDR]`로 표기했으나 위 §self_service/tools.py 수정 사항대로 `call_record_db`로 교체했다. 또한 `agent.py`는 "완전 무변경"이 아니라 "1줄만 추가"이므로 별도 서브그래프로 분리해 정확도를 높였고, `SIP Endpoint`는 어떤 신규 노드와도 연결되지 않음을 명시적으로 표시해 "SIP 레이어 무수정"이라는 §Enhancement Scope의 핵심 주장을 다이어그램에서도 시각적으로 뒷받침하도록 했다. `self_service/onboarding.py`(OB)도 누락되어 있었기에 추가했다.
+
+## RAG·IntelliDecision 고도화 2단계: 업로드 통합·자동 지식베이스 구성·시뮬레이터 UX 고도화 (Story 1.30~1.33)
+
+> 리서치·PRD: [SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](../design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md), PRD FR33. Story 1.26~1.29(위 절) 완료 후 발견된 잔여 정적 결합을 해소하기 위한 증분이다. 이 절은 **방향 문서화**이며, 각 Story 상세 설계(컴포넌트/시퀀스 다이어그램)는 해당 Story 착수 시 이 절에 이어서 작성한다(위 Story 1.26/1.27과 동일한 진행 방식).
+
+### 설계 원칙 — 무엇을 통합하고 무엇을 통합하지 않는가
+
+- **UX 계층만 통합, 데이터 모델은 통합하지 않는다(NFR8)**: "지식 업로드"(`knowledge_documents`,
+  테넌트별)와 "설정 관리"(`self_service_catalog_config`, 시스템 공통 구성 스키마)는 저장소·목적이
+  다르다. Story 1.30은 두 저장소를 병합하지 않고, 하나의 탭 안에서 소스 유형을 전환해 보는 방식
+  (세그먼트 UI)으로 진입점만 통합한다.
+- **지식베이스 자동 구성(Story 1.31)은 기존 하드코딩 경로를 대체하지 않고 추가한다**: 기존
+  `settings_catalog.py`/`screen_graph.py`(Epic 1/2, SIP PBX 전용) 응대 경로는 그대로 유지하며,
+  업로드 데이터 기반 자동 구성은 **새 테넌트/새 시스템**을 위한 병행 경로다.
+- **Tool 실제 실행 매칭은 명시적 Non-Goal(사용자 지시 반영)**: 업로드된 OpenAPI 스펙에서 "설정
+  항목처럼 보이는" 필드를 지식으로 구조화하는 것과, 그 필드를 실제로 변경하는 get_fn/update_fn을
+  안전하게 자동 생성하는 것은 전혀 다른 난이도의 문제다(후자는 임의 코드 실행 위험 — 기존 Epic 2
+  화이트리스트 레지스트리 원칙과 정면 충돌). Story 1.31은 전자까지만 다룬다.
+- **시뮬레이터 UX(Story 1.32)는 기존 API 재사용, 프론트엔드 재구성 위주**: Story 1.27의
+  `POST` 시뮬레이터 엔드포인트와 Story 1.18의 `GET /intellidecision-policy`를 그대로 호출하며,
+  신규 API는 "유형별 질문 예시 목록 조회"에만 국한한다(Story 1.31 완료 전엔 정적 폴백 유지).
+- **유형 C 하이브리드(Story 1.33)는 GraphRAG Global Search의 경량화 버전**: 자동 커뮤니티
+  클러스터링(Full GraphRAG)은 여전히 Non-Goal — 기존 도메인 태그 기반 컬렉션을
+  `asyncio.gather`로 병렬 검색·집계하는 수준으로 범위를 한정한다(NFR1 지연 예산 보호).
+
+### 컴포넌트 영향 범위 요약
+
+| Story | 신규/변경 컴포넌트                                                                        | 재사용 컴포넌트                                                                                                                         |
+| ----- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.30  | `frontend/.../docs/page.tsx` 탭 컨테이너 재구성(신규 세그먼트 UI)                         | Story 1.26 업로드 폼/목록, Epic 2 export/import/버전 이력 UI, 기존 API 전부                                                             |
+| 1.31  | `knowledge_base_assembler.py`(가칭, 신규) — Q&A 추출/설정 항목 매핑/화면 노드 등록        | `manual_indexer.py`(태그 파싱 일반화), `document_adapters.py::OpenApiSpecAdapter`, `knowledge_graph.py`(`document`/`api_endpoint` 노드) |
+| 1.32  | 질문 예시 목록 API(신규 또는 기존 확장), 프론트엔드 탭 구조 전면 재편(A~I 탭+멀티턴 세션) | Story 1.27 시뮬레이터 API, Story 1.18 정책 API, Story 1.28 그래프 뷰                                                                    |
+| 1.33  | `self_service_agent.py` 유형 C 분기(다중 도메인 병렬 검색)                                | `intellidecision_policy.py`(`rag_strategy_hint` 필드), Story 1.24 trace 로깅                                                            |
+
+## RAG·IntelliDecision 고도화: 도메인 비종속 지식베이스 플랫폼 (Story 1.26~1.29)
+
+> 시장·연구 리서치는 [SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](../design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md)(v2.3)를 참고. 이 절은 **Story 1.26(지식 문서 CRUD+업로드)** 착수를 위한 상세 아키텍처 설계다 — 컴포넌트 구조, 데이터 모델, API 계약, 시퀀스 다이어그램을 코드 작성 전에 확정한다.
+
+### Story 1.26 — 지식 문서 CRUD + 업로드: 컴포넌트 구조
+
+기존 저장소의 검증된 3가지 패턴을 그대로 재사용한다(신규 아키텍처 패턴 도입 없음):
+
+1. **버전 관리 DB 패턴** — `self_service_catalog_config` 테이블(Story 2.1)과 동일한
+   구조(`is_active`/`activated_at`/`activated_by`)를 신규 `knowledge_documents` 테이블에 적용.
+2. **SourceAdapter 프로토콜 확장** — Story 1.25의 `SourceAdapter`(`load_pairs`/
+   `load_pairs_with_meta`)를 그대로 구현하는 `PdfDocumentAdapter`/`OpenApiSpecAdapter` 추가.
+3. **이중 계층 지식 서비스 재사용** — `src/ai_voicebot/knowledge/knowledge_service.py`의
+   `add_knowledge()`/`list_knowledge()`/`delete_knowledge()`(ChromaDB 조작)를 그대로 호출하고,
+   신규로 필요한 것은 **문서 단위 lifecycle 메타데이터**(SQLite)뿐이다 — 벡터 스토어를 직접
+   조작하는 신규 코드를 만들지 않는다.
+
+```mermaid
+graph TB
+    subgraph Frontend["프론트엔드 (settings/ai-assistant/docs)"]
+        TAB6["신규: '지식 업로드' 탭<br/>(파일 업로드 + 메타데이터 폼 + 목록)"]
+    end
+
+    subgraph API["src/api/routers/knowledge_base_documents.py (신규 라우터)"]
+        EP1["POST /api/knowledge-base/documents"]
+        EP2["GET /api/knowledge-base/documents"]
+        EP3["GET /api/knowledge-base/documents/{id}"]
+        EP4["PUT /api/knowledge-base/documents/{id}"]
+        EP5["DELETE /api/knowledge-base/documents/{id}"]
+    end
+
+    subgraph Service["src/ai_voicebot/self_service/knowledge_documents.py (신규 서비스)"]
+        SVC["register_document() / list_documents() /<br/>get_document() / update_document() / delete_document()"]
+    end
+
+    subgraph Adapters["src/ai_voicebot/self_service/document_adapters.py (신규)"]
+        A1["MarkdownManualAdapter (기존, 무수정)"]
+        A2["PdfDocumentAdapter (신규)"]
+        A3["OpenApiSpecAdapter (신규)"]
+    end
+
+    subgraph Storage["저장소"]
+        DB[("SQLite<br/>knowledge_documents 테이블<br/>(lifecycle 메타데이터)")]
+        VDB[("ChromaDB<br/>knowledge_service.add_knowledge()<br/>(청크·임베딩)")]
+    end
+
+    TAB6 -->|"apiJson()"| EP1
+    TAB6 -->|"apiJson()"| EP2
+    TAB6 -->|"apiJson()"| EP4
+    TAB6 -->|"apiJson()"| EP5
+
+    EP1 --> SVC
+    EP2 --> SVC
+    EP3 --> SVC
+    EP4 --> SVC
+    EP5 --> SVC
+
+    SVC -->|"source_type별 분기"| A1
+    SVC --> A2
+    SVC --> A3
+
+    SVC -->|"lifecycle CRUD"| DB
+    SVC -->|"add_knowledge/list_knowledge/delete_knowledge"| VDB
+```
+
+### 데이터 모델
+
+**신규 테이블 `knowledge_documents`** (`src/booking/database.py::_DDL`에 추가, Story 2.1 패턴 재사용):
+
+```sql
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL UNIQUE,      -- 공개 식별자(UUID), API 응답/ChromaDB 메타데이터 공용
+    owner TEXT NOT NULL,                   -- 테넌트 격리 필터(NFR2)
+    title TEXT NOT NULL DEFAULT '',
+    domain_tags_json TEXT NOT NULL DEFAULT '[]',  -- 자유 텍스트 태그 배열(§4.4)
+    source_type TEXT NOT NULL,             -- "markdown" | "pdf" | "openapi"
+    chunk_doc_ids_json TEXT NOT NULL DEFAULT '[]', -- ChromaDB에 실제로 색인된 doc_id 목록
+    version_no INTEGER NOT NULL DEFAULT 1,
+    is_active INTEGER NOT NULL DEFAULT 1,  -- 소프트 삭제(0=삭제됨, 색인에서도 제거됨)
+    uploaded_by TEXT NOT NULL DEFAULT '',
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_owner
+    ON knowledge_documents(owner, is_active);
+```
+
+**설계 근거**: `chunk_doc_ids_json`에 ChromaDB 청크 doc_id를 저장해두면, 수정/삭제 시 "이 문서가
+색인한 청크가 정확히 무엇인지"를 조회 없이 바로 알 수 있다(Story 1.23의
+`knowledge_base_inventory.py`가 owner 전체를 스캔하는 방식과 달리, 문서 단위 조작은 정확한
+ID 목록이 있어야 안전하다).
+
+### API 계약
+
+| 메서드   | 경로                                                            | 요청                                                                                                                      | 응답                                                      |
+| -------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `POST`   | `/api/knowledge-base/documents`                                 | `multipart/form-data`: `owner`, `title`, `domain_tags`(콤마 구분 또는 JSON 배열), `source_type`, `file`(또는 `text_body`) | `{"ok": true, "document_id": str, "indexed_chunks": int}` |
+| `GET`    | `/api/knowledge-base/documents?owner=&domain_tag=&source_type=` | 쿼리 파라미터                                                                                                             | `{"total": int, "items": [DocumentSummary, ...]}`         |
+| `GET`    | `/api/knowledge-base/documents/{document_id}`                   | -                                                                                                                         | `DocumentDetail`(메타데이터 + 청크 목록)                  |
+| `PUT`    | `/api/knowledge-base/documents/{document_id}`                   | `{"title"?, "domain_tags"?, "text_body"?}`                                                                                | `{"ok": true, "reindexed_chunks": int}`                   |
+| `DELETE` | `/api/knowledge-base/documents/{document_id}`                   | -                                                                                                                         | `{"ok": true, "deleted_chunks": int}`                     |
+
+### 시퀀스 다이어그램 — 문서 업로드 플로우
+
+```mermaid
+sequenceDiagram
+    participant U as 운영자(브라우저)
+    participant FE as 프론트엔드<br/>(지식 업로드 탭)
+    participant API as POST /api/knowledge-base/documents
+    participant SVC as knowledge_documents.py<br/>(신규 서비스)
+    participant ADP as document_adapters.py<br/>(Markdown/Pdf/OpenApi)
+    participant KS as knowledge_service.py<br/>(기존, 무수정)
+    participant DB as SQLite<br/>knowledge_documents
+    participant VDB as ChromaDB
+
+    U->>FE: 파일 선택 + 메타데이터 입력(제목/태그) 후 업로드 클릭
+    FE->>API: multipart/form-data 전송
+    API->>SVC: register_document(owner, title, domain_tags, source_type, file)
+    SVC->>ADP: source_type에 맞는 어댑터 선택 후 load_pairs_with_meta(file)
+    ADP-->>SVC: [{"question":..., "answer":..., ...}, ...] (Q&A 유사 페어 목록)
+    loop 각 페어
+        SVC->>KS: add_knowledge(vector_db, embedder, text, owner, doc_type="knowledge_document", ...)
+        KS-->>SVC: {"ok": true, "doc_id": chunk_id}
+    end
+    SVC->>DB: INSERT knowledge_documents(document_id, chunk_doc_ids_json=[...])
+    DB-->>SVC: 저장 완료
+    SVC-->>API: {"ok": true, "document_id":..., "indexed_chunks": N}
+    API-->>FE: 200 OK
+    FE-->>U: "N개 청크로 색인 완료" 표시 + 목록 갱신
+```
+
+### 시퀀스 다이어그램 — 문서 삭제 플로우(청크 정합성 보장)
+
+```mermaid
+sequenceDiagram
+    participant U as 운영자
+    participant API as DELETE /api/knowledge-base/documents/{id}
+    participant SVC as knowledge_documents.py
+    participant DB as SQLite
+    participant KS as knowledge_service.py
+    participant VDB as ChromaDB
+
+    U->>API: 삭제 요청(document_id)
+    API->>SVC: delete_document(document_id, owner)
+    SVC->>DB: SELECT chunk_doc_ids_json WHERE document_id=? AND owner=?
+    DB-->>SVC: chunk_doc_ids=["c1","c2","c3"]
+    loop 각 chunk_id
+        SVC->>KS: delete_knowledge(vector_db, chunk_id)
+        KS->>VDB: collection.delete(ids=[chunk_id])
+    end
+    SVC->>DB: UPDATE knowledge_documents SET is_active=0 WHERE document_id=?
+    SVC-->>API: {"ok": true, "deleted_chunks": 3}
+    API-->>U: 200 OK, 목록에서 즉시 제거
+```
+
+**정합성 원칙**: DB의 `chunk_doc_ids_json`을 신뢰 가능한 단일 소스(source of truth)로 삼아,
+"SQLite 레코드는 있는데 ChromaDB 청크는 없는"(또는 반대) 불일치를 방지한다 — 삭제/수정 시 항상
+DB에 기록된 chunk_doc_ids 목록을 기준으로 ChromaDB를 조작한다.
+
+### 참고 문헌 매핑 (설계 결정 → 근거)
+
+| 설계 결정                                                | 근거 문서                                                                               |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 문서 단위 lifecycle을 SQLite로, 청크는 ChromaDB로 이원화 | `self_service_catalog_config` 패턴(Story 2.1), 검증된 저장소 컨벤션                     |
+| PDF/OpenAPI를 1단계부터 포함                             | 사용자 결정(2026-08-04) + Zendesk AI 에이전트의 "통합형 지식(PDF 등)" 실사용 사례(§3.8) |
+| `domain_tags`를 자유 텍스트 배열로                       | 목표 ①(도메인 비종속화), 리서치 §4.4                                                    |
+| 삭제 시 chunk_doc_ids 기준 정합성 보장                   | Fin의 "완전한 제어력"(§3.2) — 지식 변경이 예측 가능하고 되돌릴 수 있어야 한다는 원칙    |
+
+### Story 1.27 — 응답 시뮬레이터: 컴포넌트 구조
+
+> 목적: 운영자가 예시 발화를 입력하면 **실제 통화/채팅 세션에 아무 부수효과 없이** ①매칭된 지식
+> 문서 ②IntelliDecision 판정 유형과 근거 ③실제 LLM이 생성한 최종 응답을 한 번에 확인할 수 있게
+> 한다(Intercom Fin Testing suite와 동등, 리서치 §3.2/§3.4, 근거는 §참고 문헌 매핑 참고).
+
+**핵심 설계 원칙 — "시뮬레이터 전용 로직을 새로 만들지 않는다"**: 이미 저장소에 존재하는 3가지
+검증된 구성요소를 그대로 조합한다. 신규로 작성하는 코드는 오직 "이 3가지를 하나의 응답으로
+모아 반환하는 얇은 오케스트레이션 레이어"뿐이다.
+
+1. **실행 경로 재사용** — `src/api/routers/self_service_test.py::converse()`가 이미 실제
+   `ConversationAgent.process_utterance()`(STT 직후~TTS 직전, 음성·채팅 공통 진입점)를 그대로
+   호출하는 격리 세션 경로를 갖고 있다(Story 1.15~1.19에서 검증됨). 시뮬레이터는 이 함수를
+   **직접 호출**한다 — 별도의 LangGraph 실행 경로를 새로 만들지 않는다(AC2).
+2. **RAG 매칭 근거 재사용** — `self_service_agent.py`가 이미 각 턴마다 `self_service_rag_matched`
+   구조화 로그(매칭 문서 ID·유사도 점수·related_domain, Story 1.24)를 남긴다. 시뮬레이터는 이
+   로그를 실시간으로 다시 파싱하는 대신, **호출 직후 `call_data_record` 조회**(기존
+   `self_service_test.py`가 `tool_trace` 조립에 이미 쓰는 방식과 동일한 패턴, `category=="self_service"`
+   행에서 `event=="self_service_rag_search"`/원본 매칭 필드 추출)로 매칭 문서 정보를 얻는다 — 신규
+   조회 채널을 만들지 않는다.
+3. **IntelliDecision 판정 재사용(단, 실행 모드 전환 필요)** — `decision_rationale.py`의
+   `_capture_and_log()`가 이미 "발화+응답 → 유형 코드+근거 요약"을 LLM 별도 호출로 얻는 로직을
+   갖고 있다. 단, 현재는 `schedule_rationale_capture()`를 통해 **fire-and-forget 백그라운드
+   태스크**로만 실행되어 호출부에 결과를 반환하지 않는다(Story 1.21 설계 — 사용자 응답 지연을
+   피하기 위한 의도적 선택). 시뮬레이터는 애초에 "지연을 감수하고 완전한 결과를 보여주는" 것이
+   목적(AC4)이므로, **`_capture_and_log()`가 `(matched_type, reasoning_summary)`를 반환하도록
+   리팩터링**하고, `schedule_rationale_capture()`는 기존처럼 fire-and-forget으로 그 반환값을
+   버리며, 시뮬레이터는 동일 함수를 **직접 `await`**해 반환값을 그대로 API 응답에 싣는다. 판정
+   로직 자체(프롬프트, 파싱)는 한 글자도 바꾸지 않는다 — 실행 방식(비동기 예약 vs 직접 await)만
+   호출부에서 분기한다.
+
+```mermaid
+graph TB
+    subgraph Frontend["프론트엔드 (settings/ai-assistant/docs)"]
+        TAB5["기존: 'IntelliDecision 정책' 탭(Story 1.18)<br/>유형 클릭 시 대표 예시 발화로 바로가기(AC5)"]
+        TAB7["신규: '응답 시뮬레이터' 탭<br/>(질문 입력 → 매칭 문서/유형/응답 3단 표시 + 로딩 상태)"]
+    end
+
+    subgraph API["src/api/routers/knowledge_base_documents.py 또는 신규 simulate 라우터"]
+        EP["POST /api/knowledge-base/simulate<br/>(가칭, owner + query)"]
+    end
+
+    subgraph Orchestration["신규 오케스트레이션 레이어(유일한 신규 로직)"]
+        SIM["simulate_response()<br/>3개 결과를 하나로 조합"]
+    end
+
+    subgraph Reused1["재사용 ①: 실행 경로"]
+        CONV["self_service_test.py::converse()<br/>ConversationAgent.process_utterance()<br/>(격리 세션, 실 서비스 세션 무영향)"]
+    end
+
+    subgraph Reused2["재사용 ②: RAG 매칭 근거"]
+        CDR["call_data_record 조회<br/>(self_service_rag_search 이벤트)"]
+    end
+
+    subgraph Reused3["재사용 ③: IntelliDecision 판정(리팩터링: 반환값 노출)"]
+        RAT["decision_rationale.py::_capture_and_log()<br/>(await 직접 호출, fire-and-forget 아님)"]
+    end
+
+    TAB5 -->|"대표 예시 발화 자동입력"| TAB7
+    TAB7 -->|"apiJson()"| EP
+    EP --> SIM
+    SIM -->|"1. 실행"| CONV
+    SIM -->|"2. call_id로 매칭 문서 조회"| CDR
+    SIM -->|"3. (query, response) 판정"| RAT
+    SIM -->|"응답 텍스트 + 매칭 문서 + 유형/근거 + elapsed_sec"| EP
+    EP --> TAB7
+```
+
+### 판정 흐름도 — 하나의 시뮬레이션 요청이 3단계로 처리되는 방식
+
+```mermaid
+flowchart TD
+    A["운영자가 예시 발화 입력 + 실행 클릭"] --> B["POST /api/knowledge-base/simulate<br/>owner, query"]
+    B --> C{"격리 세션 준비<br/>caller_number = owner(필수! is_self_service_session()이<br/>caller_number==owner일 때만 True를 반환하기 때문, detection.py)<br/>call_id = 'simtest-' + uuid(매 호출마다 새로)"}
+    C --> D["ConversationAgent.process_utterance()<br/>실제 LangGraph 그래프 실행<br/>(RAG 검색 + Tool-calling 포함, 실 LLM 호출)"]
+    D --> E["① 최종 응답 텍스트 확보"]
+    D --> F["call_data_record에서<br/>self_service_rag_search 이벤트 조회"]
+    F --> G["② 매칭 문서 ID·유사도 점수·related_domain 확보"]
+    D --> H["decision_rationale._capture_and_log()<br/>직접 await (fire-and-forget 아님)"]
+    H --> I["③ IntelliDecision 유형(A~I) + 근거 요약 확보"]
+    E --> J["3개 결과를 SimulateResponse로 조합"]
+    G --> J
+    I --> J
+    J --> K["프론트엔드: 매칭 문서 / 유형 / 응답 3단 표시<br/>+ elapsed_sec(실 LLM 호출 지연 명시, NFR8)"]
+    C -.->|"에이전트는 _agent_cache에 등록되지 않고<br/>call_id도 매번 새로 생성되므로<br/>(1회성, caller_number가 owner와 같아도 오염 없음)"| L["실 서비스 세션(booking_context 등)에<br/>어떤 흔적도 남지 않음 — AC3 보장"]
+```
+
+### API 계약
+
+| 메서드 | 경로                           | 요청                           | 응답                                                                                                                                                         |
+| ------ | ------------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST` | `/api/knowledge-base/simulate` | `{"owner": str, "query": str}` | `{"response": str, "matched_documents": [{"doc_id","score","related_domain"}], "intellidecision_type": str, "reasoning_summary": str, "elapsed_sec": float}` |
+
+**격리 원칙(AC3)**: 실행마다 `call_id = f"simtest-{uuid4().hex[:12]}"`로 매번 새로운 호출을
+식별하고, `self_service_test.py`의 `_agent_cache`(멀티턴 재사용 캐시)에 **등록하지 않는다** —
+매 요청마다 `ConversationAgent`를 새로 생성한다. **주의(실서버 IV에서 발견, 2026-08-04)**:
+`caller_number`는 `owner`와 **동일한 값**을 써야 한다 — `detection.py::is_self_service_session()`이
+`caller_number`와 `owner`를 정규화 후 비교해 같을 때만 True를 반환하며, 다르면 self_service_agent
+경로 자체를 타지 않고 일반 chitchat 경로로 새 버려 AC1/AC2가 깨진다(최초 구현 시 격리를 위해
+임의의 `sim-` 접두 caller_number를 썼다가 실서버 검증에서 발견해 owner로 정정). 격리는
+caller_number가 아니라 **매번 새로 생성되는 call_id + 캐시에 남지 않는 1회성 에이전트
+인스턴스**로 보장되므로, caller_number를 owner와 같게 써도 실 서비스 세션과 섞이지 않는다.
+
+**지연·비용 표시(AC4, NFR8)**: `elapsed_sec`는 실행 경로 전체(LLM 호출 포함)의 실측 시간이며,
+프론트엔드는 이 값과 함께 "실제 LLM을 호출하므로 시간이 걸릴 수 있습니다" 안내 문구와 로딩
+스피너를 표시한다 — 결과가 캐시되거나 미리 계산된 것이 아님을 사용자에게 명확히 한다.
+
+### 참고 문헌 매핑 (설계 결정 → 근거)
+
+| 설계 결정                                                            | 근거 문서                                                                                                          |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 실제 LLM 응답까지 생성하는 dry-run(매칭 미리보기로 축소하지 않음)    | 사용자 결정(2026-08-04) + Intercom Fin "라이브 반영 전 테스트 스위트"(§3.2/§14)                                    |
+| 시뮬레이터 전용 로직 신설 금지, 기존 `test/converse` 경로 재사용     | RESEARCH.md §3.4 Anthropic 투명성 원칙("에이전트가 무엇을 할지 미리 보여줘야 한다") + AC2(불일치 방지)             |
+| IntelliDecision 판정을 fire-and-forget에서 동기 await로 분기         | Story 1.21 설계(응답 지연 회피)와 시뮬레이터 목적(완전한 결과 노출)이 상충 — 실행부만 분기해 양쪽 요구를 모두 만족 |
+| 유형별 대표 예시 발화 바로가기(IntelliDecision 정책 탭 → 시뮬레이터) | RESEARCH.md §5.3 "유형별 연결 투명성" + Anthropic Routing 워크플로 설명 가능성 원칙(§3.4)                          |
+| 격리 세션은 `_agent_cache`에 남기지 않는 1회성 실행                  | 기존 `self_service_test.py` 격리 세션 패턴(Story 1.15~1.19 검증) — 신규 격리 로직 없이 재사용                      |
+
+- **Story 1.28(그래프 n-hop 일반화, 구현 완료)**: `knowledge_graph.py`가 노드 타입 레지스트리
+  (`manual_qa`/`catalog_domain`/`frontend_screen`/`intent_type` + 신규 `document`/`api_endpoint`/
+  `procedure_step`)와 엣지 타입 레지스트리(`rendered_by`/`writable`/`relates_to`/`depends_on`/
+  `documents`)로 일반화됐다. 범용 `traverse_graph(start_type, start_id, *, max_hops, owner)`가
+  등록된 엣지를 실제로 순회하며, 기존 공개 API `traverse(domain)`/`format_decision_hint(domain)`은
+  이 엔진 위의 얇은 래퍼로 재작성되어 Story 1.18 시점과 **바이트 단위로 동일한 결과**를 반환한다
+  (직접 비교 단위테스트로 검증). `document` 노드는 `relates_to` 엣지(catalog_domain → document,
+  `knowledge_documents_db.list_documents(owner, domain_tag)` 재사용)로 Story 1.26 업로드 문서와
+  실제 연결됨을 검증했고, `api_endpoint`/`procedure_step`과 `depends_on`/`documents` 엣지는
+  예약만 해두고(no-op 리졸버) 실제 데이터 소스는 후속 Story로 남겼다. `intellidecision_policy.py`에
+  `rag_strategy_hint="graph_local"`(GraphRAG Local Search 개념 차용)을 추가해 유형 A에 적용했다.
+- **Story 1.29(Contextual Retrieval 스파이크, 실측 완료)**: owner 9001 매뉴얼 Q&A 52건을 실제 사용해
+  self-retrieval 벤치마크를 직접 실측했다. **결론: 미채택**(Contextual Retrieval이 baseline 대비
+  hit@1을 94.23%→86.54%로 오히려 악화시키면서 52회 LLM 호출·362.9초 비용만 추가 — 짧고
+  자기완결적인 Q&A 청크에는 Anthropic이 해결하려는 "문서 맥락 손실" 문제 자체가 없음).
+  순수 파이썬 BM25(외부 의존성 없음)는 동일 벤치마크에서 hit@1/hit@3 100%로 벡터 단독보다
+  우수해, 후속 Story에서 실사용 발화 기준 재검증 + Story 1.26 OpenAPI 문서 포함 재실측을
+  권장한다(결정 리포트: `docs/reports/2026-08/2026-08-04_story_1.29_contextual_retrieval_spike_decision.md`).
+  스파이크 코드(`scripts/spike_contextual_retrieval.py`)는 관례대로 프로덕션에 통합하지 않았다(AC5).
+
+Non-Goal(Full GraphRAG 자동 엔터티 추출, 벡터DB 교체, 물리 격리)는 이전 리서치와 일관되게 유지된다.
 
 ---
 

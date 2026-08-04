@@ -11,6 +11,7 @@ pydantic==2.10.6                     # pipecat-ai>=2.10.6
 pydantic-settings==2.1.0
 pydantic[email]==2.10.6              # Email validation support
 PyYAML==6.0.1
+pypdf==6.1.1                          # PDF 텍스트 추출 (Story 1.26, PdfDocumentAdapter)
 
 # Audio Processing
 opuslib==3.0.1  # Opus codec decoder

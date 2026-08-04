@@ -334,6 +334,27 @@ CREATE TABLE IF NOT EXISTS self_service_decision_log (
     created_at          TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_self_service_decision_log_owner ON self_service_decision_log(owner, created_at DESC);
+
+-- 도메인 비종속 지식베이스 문서 lifecycle (Story 1.26, FR32-A)
+-- 청크 자체(임베딩)는 ChromaDB(knowledge_service.add_knowledge)가 소유하며, 이 테이블은
+-- "어떤 문서가 어떤 청크들로 색인됐는지"만 추적하는 lifecycle 메타데이터다.
+-- chunk_doc_ids_json이 신뢰 가능한 단일 소스(source of truth) — 수정/삭제 시 이 목록을
+-- 기준으로 ChromaDB를 조작한다.
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id          TEXT    NOT NULL UNIQUE,
+    owner                TEXT    NOT NULL,
+    title                TEXT    NOT NULL DEFAULT '',
+    domain_tags_json     TEXT    NOT NULL DEFAULT '[]',
+    source_type          TEXT    NOT NULL,
+    chunk_doc_ids_json   TEXT    NOT NULL DEFAULT '[]',
+    version_no           INTEGER NOT NULL DEFAULT 1,
+    is_active            INTEGER NOT NULL DEFAULT 1,
+    uploaded_by          TEXT    NOT NULL DEFAULT '',
+    uploaded_at          TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at           TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_owner ON knowledge_documents(owner, is_active);
 """
 
 

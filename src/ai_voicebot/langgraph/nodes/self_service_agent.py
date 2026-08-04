@@ -609,22 +609,29 @@ async def self_service_agent_node(state: ConversationState) -> dict:
     # Story 1.24(FR31-B) — RAG 매칭 사후 실측 trace. IntelliDecision 정책 레지스트리의
     # rag_enabled/rag_strategy_hint(사전 예측)와 대조 검증할 수 있도록, 실제 매칭된 문서
     # ID/점수/related_domain을 남긴다. 판단/응답 로직에는 관여하지 않는 순수 관측 로깅이다.
+    matched_doc_ids = [str(getattr(d, "id", "") or "") for d in rag_documents]
+    matched_scores = [round(float(getattr(d, "score", 0.0) or 0.0), 4) for d in rag_documents]
+    matched_related_domains = [
+        str((getattr(d, "metadata", None) or {}).get("related_domain") or "")
+        for d in rag_documents
+    ]
     if rag_documents:
         logger.info(
             "self_service_rag_matched",
             call_id=call_id,
             query=user_query,
-            matched_doc_ids=[str(getattr(d, "id", "") or "") for d in rag_documents],
-            scores=[round(float(getattr(d, "score", 0.0) or 0.0), 4) for d in rag_documents],
-            related_domains=[
-                str((getattr(d, "metadata", None) or {}).get("related_domain") or "")
-                for d in rag_documents
-            ],
+            matched_doc_ids=matched_doc_ids,
+            scores=matched_scores,
+            related_domains=matched_related_domains,
         )
     if call_id:
+        # Story 1.27(응답 시뮬레이터) — call_data_record에서 call_id로 매칭 결과를 조회할 수 있도록
+        # self_service_rag_matched와 동일한 필드를 함께 남긴다(신규 조회 채널을 만들지 않기 위함).
         log_call_data(
             call_id, "self_service", "self_service_rag_search",
             rag_hit_count=len(rag_documents), elapsed_sec=round(rag_search_elapsed, 3),
+            matched_doc_ids=matched_doc_ids, scores=matched_scores,
+            related_domains=matched_related_domains,
         )
 
     # ── 온보딩 체크리스트(Story 1.5): 세션 첫 턴(messages가 비어있음)에만 조회 ──
