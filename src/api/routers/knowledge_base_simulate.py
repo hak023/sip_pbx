@@ -44,11 +44,23 @@ class MatchedDocument(BaseModel):
     related_domain: str
 
 
+class HopEdge(BaseModel):
+    """Story 1.32(FR33-D) — `knowledge_graph.traverse_graph()` 결과의 JSON 직렬화 가능한 부분집합."""
+
+    hop: int
+    edge_type: str
+    source_type: str
+    source_id: str
+    target_type: str
+    target_id: str
+
+
 class SimulateResponse(BaseModel):
     response: str
     matched_documents: List[MatchedDocument]
     intellidecision_type: str
     reasoning_summary: str
+    hop_path: List[HopEdge] = []
     elapsed_sec: float
 
 
@@ -97,6 +109,39 @@ def _extract_matched_documents(call_id: str) -> List[MatchedDocument]:
     return []
 
 
+_MAX_HOP_EDGES = 30
+
+
+def _collect_hop_path(matched_documents: List[MatchedDocument], owner: str) -> List[HopEdge]:
+    """매칭된 문서의 `related_domain`에서 시작해 `traverse_graph()`로 실제 hop 경로를
+    수집한다(Story 1.32 AC4-②). 개별 도메인 실패는 다른 도메인 수집을 막지 않는다(best-effort).
+    """
+    from src.ai_voicebot.self_service.knowledge_graph import traverse_graph
+
+    domains = sorted({d.related_domain for d in matched_documents if d.related_domain})
+    edges: List[HopEdge] = []
+    seen: set[tuple] = set()
+    for domain in domains:
+        try:
+            raw_edges = traverse_graph("catalog_domain", domain, max_hops=3, owner=owner)
+        except Exception as e:
+            logger.warning("knowledge_base_simulate_hop_path_failed", domain=domain, error=str(e))
+            continue
+        for e in raw_edges:
+            key = (e["hop"], e["edge_type"], str(e["source_id"]), str(e["target_id"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append(HopEdge(
+                hop=e["hop"], edge_type=e["edge_type"],
+                source_type=e["source_type"], source_id=str(e["source_id"]),
+                target_type=e["target_type"], target_id=str(e["target_id"]),
+            ))
+            if len(edges) >= _MAX_HOP_EDGES:
+                return edges
+    return edges
+
+
 @router.post("/simulate", response_model=SimulateResponse)
 async def simulate(body: SimulateRequest) -> SimulateResponse:
     """실제 통화/채팅 세션에 부수효과 없이 매칭 문서·IntelliDecision 유형·실제 응답을 미리 확인한다."""
@@ -132,6 +177,7 @@ async def simulate(body: SimulateRequest) -> SimulateResponse:
     )
 
     matched_documents = _extract_matched_documents(call_id)
+    hop_path = _collect_hop_path(matched_documents, owner)
     elapsed = time.time() - start
 
     logger.info(
@@ -145,5 +191,6 @@ async def simulate(body: SimulateRequest) -> SimulateResponse:
         matched_documents=matched_documents,
         intellidecision_type=matched_type,
         reasoning_summary=reasoning_summary,
+        hop_path=hop_path,
         elapsed_sec=round(elapsed, 3),
     )

@@ -105,3 +105,35 @@ class TestSimulateEndToEnd:
         assert len(result.matched_documents) == 1
         assert result.matched_documents[0].doc_id == "doc-1"
         assert result.elapsed_sec >= 0
+        assert len(result.hop_path) > 0
+
+
+class TestCollectHopPath:
+    def test_returns_edges_for_real_domain(self):
+        docs = [kbs.MatchedDocument(doc_id="d1", score=0.9, related_domain="booking")]
+        edges = kbs._collect_hop_path(docs, owner="1003")
+        assert len(edges) > 0
+        assert all(e.hop >= 1 for e in edges)
+
+    def test_empty_related_domain_yields_no_edges(self):
+        docs = [kbs.MatchedDocument(doc_id="d1", score=0.9, related_domain="")]
+        assert kbs._collect_hop_path(docs, owner="1003") == []
+
+    def test_deduplicates_across_documents_with_same_domain(self):
+        docs = [
+            kbs.MatchedDocument(doc_id="d1", score=0.9, related_domain="booking"),
+            kbs.MatchedDocument(doc_id="d2", score=0.5, related_domain="booking"),
+        ]
+        edges = kbs._collect_hop_path(docs, owner="1003")
+        keys = [(e.hop, e.edge_type, e.source_id, e.target_id) for e in edges]
+        assert len(keys) == len(set(keys))
+
+    def test_resolver_failure_does_not_raise(self, monkeypatch):
+        def fake_traverse_graph(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.knowledge_graph.traverse_graph", fake_traverse_graph
+        )
+        docs = [kbs.MatchedDocument(doc_id="d1", score=0.9, related_domain="booking")]
+        assert kbs._collect_hop_path(docs, owner="1003") == []

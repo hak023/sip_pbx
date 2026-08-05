@@ -1,7 +1,7 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement Architecture
 
 **작성일**: 2026-07-14
-**버전**: 0.20 (2026-08-04 갱신 — FR33 계획 증분: 업로드 진입점 통합·자동 지식베이스 구성·시뮬레이터 UX 고도화·유형 C 하이브리드 RAG 방향 문서화, Story 1.30~1.33)
+**버전**: 0.21 (2026-08-05 갱신 — Story 1.32 구현 완료: IntelliDecision 정책×응답 시뮬레이터 UX 통합(A~I 하위 탭, hop_path, 멀티턴))
 프롬프트 산문 자동 렌더링(Story 1.19))
 **상태**: Epic 1(Story 1.1~1.19) 구현·실서버 검증 완료 + Epic 2(Story 2.1~2.8) 구현·실서버 검증 완료 + Story 1.23~1.25 구현 완료, 도메인 비종속 지식베이스 플랫폼(Story 1.26~1.29)는 설계만 반영(Draft)
 **관련 문서**:
@@ -56,6 +56,7 @@
 | Story 1.28 구현 완료                                                                 | 2026-08-04 | 0.18    | `knowledge_graph.py`를 노드 타입(`manual_qa`/`catalog_domain`/`frontend_screen`/`intent_type`+신규 `document`/`api_endpoint`/`procedure_step`) 및 엣지 타입(`rendered_by`/`writable`/`relates_to`+신규 `depends_on`/`documents`) 레지스트리로 일반화, 범용 `traverse_graph()` 구현. 기존 `traverse()`/`format_decision_hint()`는 이 엔진 위 얇은 래퍼로 재작성되어 Story 1.18과 바이트 단위 동일함을 직접비교 단위테스트로 검증(AC5). `relates_to` 엣지로 Story 1.26 업로드 문서를 `document` 노드로 실제 연결 검증, `rag_strategy_hint="graph_local"`을 유형 A에 적용 | Copilot (BMAD Dev 역할)       |
 | Story 1.29 스파이크 실측 완료                                                        | 2026-08-04 | 0.19    | `scripts/spike_contextual_retrieval.py`로 owner 9001 매뉴얼 Q&A 52건에 대해 Contextual Retrieval을 실제 Gemini 호출로 실측(self-retrieval hit@1/hit@3 벤치마크). **결론: 미채택**(hit@1 94.23%→86.54%로 악화, 52회 호출·362.9초 비용만 추가) — 순수 파이썬 BM25는 hit@1/hit@3 100%로 벡터 검색 대비 우수해 후속 Story 검토 권장. 프로덕션 코드는 무변경(스파이크 스크립트만 신설)                                                                                                                                                                                      | Copilot (BMAD Dev 역할)       |
 | FR33 계획 증분(업로드 통합·자동 지식베이스 구성·시뮬레이터 UX·유형 C 하이브리드 RAG) | 2026-08-04 | 0.20    | 사용자가 FR32 완료 후 잔여 정적 결합(설정 관리/지식 업로드 탭 이원화, 도메인 종속 카탈로그, 시뮬레이터 UX)을 지적하며 계획 수립 요청 → 신규 §"RAG·IntelliDecision 고도화 2단계"(아래) 추가(PRD FR33), Story 1.30(업로드 진입점 통합+시스템 표준 콘텐츠 구분)/1.31(업로드 기반 지식베이스 자동 구성)/1.32(시뮬레이터×IntelliDecision UX 통합)/1.33(유형 C 하이브리드 RAG) 설계 방향만 문서화 — 구현은 각 Story 착수 시 진행                                                                                                                                             | Copilot (BMAD Architect 역할) |
+| Story 1.32 구현 완료 | 2026-08-05 | 0.21 | IntelliDecision 정책 탭(Story 1.18)을 유형 A~I 하위 탭 구조로 재편(AC1), 질문 예시마다 RAG/Tool 배지 추가(AC3, 기존 정책 메타데이터 재사용 — 신규 API 불필요). `knowledge_base_simulate.py`에 `hop_path`(traverse_graph 결과 직렬화) 추가(AC4-②). 응답 시뮬레이터 탭을 단일 결과에서 `simulateTurns` 배열 기반 멀티턴 대화로 전환(AC5). 질문 예시 목록은 Story 1.31 완료 전이라 정책의 `trigger_examples`(정적)를 그대로 사용(하위 호환 경로, 사용자 승인 후 동적화 여부 재검토 가능) | Copilot (BMAD Dev 역할) |
 
 ---
 
@@ -650,7 +651,7 @@ graph TD
 | ----- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | 1.30  | `frontend/.../docs/page.tsx` 탭 컨테이너 재구성(신규 세그먼트 UI)                         | Story 1.26 업로드 폼/목록, Epic 2 export/import/버전 이력 UI, 기존 API 전부                                                             |
 | 1.31  | `knowledge_base_assembler.py`(가칭, 신규) — Q&A 추출/설정 항목 매핑/화면 노드 등록        | `manual_indexer.py`(태그 파싱 일반화), `document_adapters.py::OpenApiSpecAdapter`, `knowledge_graph.py`(`document`/`api_endpoint` 노드) |
-| 1.32  | 질문 예시 목록 API(신규 또는 기존 확장), 프론트엔드 탭 구조 전면 재편(A~I 탭+멀티턴 세션) | Story 1.27 시뮬레이터 API, Story 1.18 정책 API, Story 1.28 그래프 뷰                                                                    |
+| 1.32  | 프론트엔드 탭 구조 재편(정책 탭 내부에 A~I 하위 탭 추가), `knowledge_base_simulate.py`에 `hop_path` 필드 추가(신규 API 불필요) | Story 1.27 시뮬레이터 API(hop_path만 확장), Story 1.18 정책 API(`trigger_examples`/`rag_*` 이미 있음, 신규 데이터 불필요), Story 1.28 `traverse_graph()`                          |
 | 1.33  | `self_service_agent.py` 유형 C 분기(다중 도메인 병렬 검색)                                | `intellidecision_policy.py`(`rag_strategy_hint` 필드), Story 1.24 trace 로깅                                                            |
 
 ## RAG·IntelliDecision 고도화: 도메인 비종속 지식베이스 플랫폼 (Story 1.26~1.29)

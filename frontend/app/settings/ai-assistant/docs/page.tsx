@@ -80,12 +80,28 @@ interface SimulateMatchedDocument {
     related_domain: string;
 }
 
+// Story 1.32(FR33-D) — IntelliDecision 유형×응답 시뮬레이터 통합 UX의 hop 경로 시각화
+interface SimulateHopEdge {
+    hop: number;
+    edge_type: string;
+    source_type: string;
+    source_id: string;
+    target_type: string;
+    target_id: string;
+}
+
 interface SimulateResponse {
     response: string;
     matched_documents: SimulateMatchedDocument[];
     intellidecision_type: string;
     reasoning_summary: string;
+    hop_path: SimulateHopEdge[];
     elapsed_sec: number;
+}
+
+// 시뮬레이터 허뢸 대화 턴 1건(질문+응답, Story 1.32 AC5 멀티턴)
+interface SimulateTurn extends SimulateResponse {
+    query: string;
 }
 
 // 판단 근거 투명성(Story 1.21/1.22, FR30) — 원본 발화 전문은 포함되지 않고 요약만 내려온다.
@@ -353,6 +369,8 @@ export default function AiAssistantDocsPage() {
     const [policyError, setPolicyError] = useState<string | null>(null);
     // 축 C-2: 표/그래프 보기 전환(신규 프론트엔드 의존성 없이 순수 SVG로 구현)
     const [policyView, setPolicyView] = useState<"list" | "graph">("list");
+    // Story 1.32(FR33-D): 유형 A~I 탭 선택 상태("list" 보기에서만 사용, 빈 문자열=미선택)
+    const [activeIntentCode, setActiveIntentCode] = useState<string>("");
 
     // 최근 판단 이력(Story 1.21/1.22, FR30) 상태
     const [decisionLog, setDecisionLog] = useState<DecisionLogItem[]>([]);
@@ -378,10 +396,10 @@ export default function AiAssistantDocsPage() {
     // Story 1.30(FR33-A): 지식 업로드 탭 내부 소스 유형 토글(기본값: 테넌트 지식 문서)
     const [uploadSection, setUploadSection] = useState<UploadSection>("tenant");
 
-    // 응답 시뮬레이터(Story 1.27)
+    // 응답 시뮬레이터(Story 1.27/1.32) — 멀티턴 대화 히스토리로 누적 표시(AC5)
     const [simulateQuery, setSimulateQuery] = useState("");
     const [simulating, setSimulating] = useState(false);
-    const [simulateResult, setSimulateResult] = useState<SimulateResponse | null>(null);
+    const [simulateTurns, setSimulateTurns] = useState<SimulateTurn[]>([]);
     const [simulateError, setSimulateError] = useState<string | null>(null);
 
     // 설정 관리(내보내기) 상태 — Epic 2 Story 2.4
@@ -455,7 +473,9 @@ export default function AiAssistantDocsPage() {
         setPolicyError(null);
         const res = await apiJson<IntelliDecisionPolicyResponse>("/api/settings/ai-assistant/intellidecision-policy");
         if (res.ok) {
-            setIntentTypes(res.data.types || []);
+            const types = res.data.types || [];
+            setIntentTypes(types);
+            setActiveIntentCode((prev) => prev || types[0]?.code || "");
         } else {
             setPolicyError(res.message);
         }
@@ -657,20 +677,21 @@ export default function AiAssistantDocsPage() {
         [owner, loadKbDocuments]
     );
 
-    // 응답 시뮬레이터 실행(Story 1.27) — 실 서비스 세션 무영향, 실 LLM 호출로 지연 발생(AC4)
+    // 응답 시뮬레이터 실행(Story 1.27/1.32) — 실 서비스 세션 무영향, 실 LLM 호출로 지연 발생(AC4).
+    // 결과는 덮어쓰지 않고 turns 리스트에 누적해 멀티턴 대화처럼 계속 이어갈 수 있게 한다(AC5).
     const handleSimulate = useCallback(
         async (queryOverride?: string) => {
             const query = (queryOverride ?? simulateQuery).trim();
             if (!owner || !query) return;
             setSimulating(true);
             setSimulateError(null);
-            setSimulateResult(null);
             const res = await apiJson<SimulateResponse>("/api/knowledge-base/simulate", {
                 method: "POST",
                 body: { owner, query },
             });
             if (res.ok) {
-                setSimulateResult(res.data);
+                setSimulateTurns((prev) => [...prev, { query, ...res.data }]);
+                setSimulateQuery("");
             } else {
                 setSimulateError(res.message);
             }
@@ -1018,8 +1039,29 @@ export default function AiAssistantDocsPage() {
                         <IntentTypeGraph intentTypes={intentTypes} />
                     )}
                     {policyView === "list" && (
-                        <div className="space-y-3">
-                            {intentTypes.map((t) => (
+                        <div>
+                            {/* Story 1.32(FR33-D) AC1: 유형 A~I 개별 tab으로 재구성 */}
+                            {intentTypes.length > 0 && (
+                                <div className="mb-4 flex flex-wrap gap-1.5">
+                                    {intentTypes.map((t) => (
+                                        <button
+                                            key={t.code}
+                                            onClick={() => setActiveIntentCode(t.code)}
+                                            className={
+                                                "rounded-full px-3 py-1 text-xs font-semibold transition-colors " +
+                                                (activeIntentCode === t.code
+                                                    ? "bg-indigo-600 text-white"
+                                                    : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+                                            }
+                                        >
+                                            {t.code} · {t.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            {intentTypes
+                                .filter((t) => t.code === activeIntentCode)
+                                .map((t) => (
                                 <div
                                     key={t.code}
                                     className="rounded-xl border border-gray-100 bg-white shadow-sm p-4"
@@ -1039,38 +1081,50 @@ export default function AiAssistantDocsPage() {
                                                 변경·되돌리기 필요(쓰기 가능 도메인만)
                                             </span>
                                         )}
-                                        {t.rag_enabled ? (
-                                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
-                                                RAG: {t.rag_strategy_hint}
-                                            </span>
-                                        ) : (
-                                            <span className="rounded bg-gray-50 px-1.5 py-0.5 text-xs text-gray-400">
-                                                RAG 미사용
-                                            </span>
-                                        )}
                                     </div>
                                     <p className="mt-1 text-sm text-gray-600">{t.summary}</p>
-                                    {t.trigger_examples.length > 0 && (
-                                        <p className="mt-2 text-xs text-gray-400">
-                                            예: {t.trigger_examples.map((e) => `"${e}"`).join(", ")}
-                                            <button
-                                                onClick={() => handleSimulateFromPolicy(t.trigger_examples[0])}
-                                                className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700 hover:bg-indigo-100"
-                                            >
-                                                이 유형으로 시뮬레이션 →
-                                            </button>
-                                        </p>
-                                    )}
                                     {t.related_types.length > 0 && (
                                         <p className="mt-1 text-xs text-gray-400">
                                             관련 유형: {t.related_types.join(", ")}
                                         </p>
                                     )}
-                                    {t.rag_enabled && (
-                                        <p className="mt-1 text-xs text-gray-400">
-                                            RAG 매칭 범위: {t.rag_source_scope}
-                                        </p>
+
+                                    {/* Story 1.32 AC2/AC3: 질문 예시 리스트 + 항목별 RAG/Tool 배지 */}
+                                    {t.trigger_examples.length > 0 && (
+                                        <ul className="mt-3 space-y-1.5 border-t border-gray-50 pt-3">
+                                            {t.trigger_examples.map((ex, i) => (
+                                                <li
+                                                    key={`${t.code}-${i}`}
+                                                    className="flex flex-wrap items-center gap-1.5 text-sm"
+                                                >
+                                                    <button
+                                                        onClick={() => handleSimulateFromPolicy(ex)}
+                                                        className="rounded-lg border border-gray-200 px-2.5 py-1 text-left text-gray-700 hover:bg-indigo-50 hover:text-indigo-700"
+                                                    >
+                                                        &quot;{ex}&quot;
+                                                    </button>
+                                                    {t.rag_enabled ? (
+                                                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                                                            RAG · {t.rag_strategy_hint}({t.rag_source_scope})
+                                                        </span>
+                                                    ) : (
+                                                        <span className="rounded bg-gray-50 px-1.5 py-0.5 text-xs text-gray-400">
+                                                            RAG 미사용
+                                                        </span>
+                                                    )}
+                                                    {t.requires_tool && (
+                                                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                                                            Tool 필요
+                                                        </span>
+                                                    )}
+                                                </li>
+                                            ))}
+                                        </ul>
                                     )}
+                                    <p className="mt-3 text-xs text-gray-400">
+                                        질문을 선택하면 &quot;응답 시뮬레이터&quot; 탭에서 판정 유형·hop 경로·
+                                        RAG 매칭 근거·실제 응답이 이어서 표시됩니다.
+                                    </p>
                                 </div>
                             ))}
                             {!loadingPolicy && intentTypes.length === 0 && !policyError && (
@@ -1598,13 +1652,14 @@ export default function AiAssistantDocsPage() {
                 </div>
             )}
 
-            {/* ── 응답 시뮬레이터 탭 — Story 1.27, FR32-B(실 서비스 세션 무영향, 실 LLM 호출) ── */}
+            {/* ── 응답 시뮬레이터 탭 — Story 1.27/1.32, FR32-B/FR33-D(실 서비스 세션 무영향, 실 LLM 호출, 멀티턴) ── */}
             {tab === "simulate" && (
                 <div className="space-y-5">
                     <p className="text-xs text-gray-500">
                         예시 질문을 입력하면 실제 통화/채팅 세션에 영향을 주지 않고, 매칭된 지식
-                        문서·AI 의사결정 유형·실제 응답을 미리 확인할 수 있습니다. 실제 LLM을
-                        호출하므로 시간이 걸릴 수 있습니다(NFR8).
+                        문서·AI 의사결정 유형·hop 경로·실제 응답을 미리 확인할 수 있습니다. 실제
+                        LLM을 호출하므로 시간이 걸릴 수 있습니다(NFR8). 결과 확인 후에도 아래에
+                        새 질문을 계속 입력해 대화를 이어갈 수 있습니다(AC5).
                     </p>
 
                     <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
@@ -1632,21 +1687,25 @@ export default function AiAssistantDocsPage() {
                         )}
                     </div>
 
-                    {simulateResult && (
-                        <div className="space-y-4">
+                    {/* Story 1.32 AC5: 대화 턴 리스트(최신 턴이 아래) — 매 턴마다 ①~④를 함께 기록 */}
+                    {simulateTurns.map((turn, turnIndex) => (
+                        <div key={turnIndex} className="space-y-3 rounded-2xl border border-gray-200 p-4">
+                            <p className="text-sm font-medium text-gray-800">
+                                턴 {turnIndex + 1} · &quot;{turn.query}&quot;
+                            </p>
                             <p className="text-xs text-gray-400">
-                                소요 시간: {simulateResult.elapsed_sec.toFixed(2)}초(실측, 캐시 아님)
+                                소요 시간: {turn.elapsed_sec.toFixed(2)}초(실측, 캐시 아님)
                             </p>
 
                             <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
                                 <h3 className="mb-2 text-sm font-semibold text-gray-800">
                                     ① 매칭된 지식 문서
                                 </h3>
-                                {simulateResult.matched_documents.length === 0 ? (
+                                {turn.matched_documents.length === 0 ? (
                                     <p className="text-sm text-gray-400">매칭된 문서가 없습니다.</p>
                                 ) : (
                                     <ul className="space-y-1 text-sm">
-                                        {simulateResult.matched_documents.map((d, i) => (
+                                        {turn.matched_documents.map((d, i) => (
                                             <li key={`${d.doc_id}-${i}`} className="text-gray-700">
                                                 <span className="font-mono text-xs text-gray-500">{d.doc_id}</span>
                                                 {" · 유사도 "}
@@ -1660,26 +1719,43 @@ export default function AiAssistantDocsPage() {
 
                             <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
                                 <h3 className="mb-2 text-sm font-semibold text-gray-800">
-                                    ② IntelliDecision 판정
+                                    ② IntelliDecision 판정 · hop 경로
                                 </h3>
                                 <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                                    {simulateResult.intellidecision_type !== "unknown"
-                                        ? `${simulateResult.intellidecision_type} · ${intentTypes.find((t) => t.code === simulateResult.intellidecision_type)?.name ?? ""}`
+                                    {turn.intellidecision_type !== "unknown"
+                                        ? `${turn.intellidecision_type} · ${intentTypes.find((t) => t.code === turn.intellidecision_type)?.name ?? ""}`
                                         : "미확인"}
                                 </span>
-                                <p className="mt-2 text-sm text-gray-600">
-                                    {simulateResult.reasoning_summary || "-"}
-                                </p>
+                                <p className="mt-2 text-sm text-gray-600">{turn.reasoning_summary || "-"}</p>
+                                {turn.hop_path.length > 0 ? (
+                                    <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+                                        {turn.hop_path.map((e, i) => (
+                                            <span key={i} className="inline-flex items-center gap-1">
+                                                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
+                                                    {e.source_type}:{e.source_id}
+                                                </span>
+                                                <span className="text-gray-400">
+                                                    --{e.edge_type}(hop{e.hop})--&gt;
+                                                </span>
+                                                <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
+                                                    {e.target_type}:{e.target_id}
+                                                </span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="mt-2 text-xs text-gray-400">
+                                        지식 그래프 hop 경로가 없습니다(매칭된 문서에 관련 도메인 정보가 없음).
+                                    </p>
+                                )}
                             </div>
 
                             <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
                                 <h3 className="mb-2 text-sm font-semibold text-gray-800">③ 실제 응답</h3>
-                                <p className="whitespace-pre-wrap text-sm text-gray-800">
-                                    {simulateResult.response}
-                                </p>
+                                <p className="whitespace-pre-wrap text-sm text-gray-800">{turn.response}</p>
                             </div>
                         </div>
-                    )}
+                    ))}
                 </div>
             )}
         </div>
