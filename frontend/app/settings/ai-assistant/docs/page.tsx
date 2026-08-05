@@ -117,6 +117,23 @@ interface KnowledgeBaseInventoryResponse {
     domain_distribution: KnowledgeBaseDomainCount[];
     last_indexed_at: string;
     doc_type: string;
+    auto_assembled: AutoAssembledSummary | null;
+}
+
+// Story 1.31(FR33-B) — 업로드 데이터 기반 지식베이스 자동 구성 집계
+interface AutoAssembledSettingItem {
+    label: string;
+    method: string;
+    writable: boolean;
+    description: string;
+}
+
+interface AutoAssembledSummary {
+    manual_qa_count: number;
+    setting_item_count: number;
+    writable_setting_item_count: number;
+    setting_items: AutoAssembledSettingItem[];
+    screen_node_count: number;
 }
 
 interface CatalogConfigExportResponse {
@@ -1171,7 +1188,7 @@ export default function AiAssistantDocsPage() {
                                                 <td className="px-4 py-2 text-gray-500">{d.count}</td>
                                             </tr>
                                         ))}
-                                        {kbInventory.domain_distribution.length === 0 && (
+                                                                        {kbInventory.domain_distribution.length === 0 && (
                                             <tr>
                                                 <td className="px-4 py-2 text-gray-400" colSpan={2}>
                                                     색인된 도움말 문서가 없습니다.
@@ -1181,6 +1198,67 @@ export default function AiAssistantDocsPage() {
                                     </tbody>
                                 </table>
                             </div>
+
+                            {/* Story 1.31(FR33-B) — 업로드 데이터 기반 지식베이스 자동 구성 집계 */}
+                            {kbInventory.auto_assembled && (
+                                <div className="space-y-3">
+                                    <p className="text-xs font-medium text-gray-600">
+                                        업로드 문서 기반 자동 구성 현황(지식 업로드 탭에서 등록한 문서 대상)
+                                    </p>
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                                        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                            <p className="text-xs text-gray-400">이용 매뉴얼 Q&A</p>
+                                            <p className="mt-1 text-2xl font-semibold text-gray-900">
+                                                {kbInventory.auto_assembled.manual_qa_count}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                            <p className="text-xs text-gray-400">AI 변경 가능 설정 후보</p>
+                                            <p className="mt-1 text-2xl font-semibold text-gray-900">
+                                                {kbInventory.auto_assembled.setting_item_count}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                            <p className="text-xs text-gray-400">그중 쓰기 가능 후보</p>
+                                            <p className="mt-1 text-2xl font-semibold text-gray-900">
+                                                {kbInventory.auto_assembled.writable_setting_item_count}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                            <p className="text-xs text-gray-400">화면/문서 안내 노드 수</p>
+                                            <p className="mt-1 text-2xl font-semibold text-gray-900">
+                                                {kbInventory.auto_assembled.screen_node_count}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    {kbInventory.auto_assembled.setting_item_count > 0 && (
+                                        <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+                                            <table className="w-full text-left text-sm">
+                                                <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                                                    <tr>
+                                                        <th className="px-4 py-2">엔드포인트</th>
+                                                        <th className="px-4 py-2">메서드</th>
+                                                        <th className="px-4 py-2">쓰기 가능</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {kbInventory.auto_assembled.setting_items.map((s, i) => (
+                                                        <tr key={`${s.label}-${i}`}>
+                                                            <td className="px-4 py-2 font-mono text-xs text-gray-700">
+                                                                {s.label}
+                                                            </td>
+                                                            <td className="px-4 py-2 text-gray-500">{s.method}</td>
+                                                            <td className="px-4 py-2 text-gray-500">
+                                                                {s.writable ? "예" : "아니오"}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

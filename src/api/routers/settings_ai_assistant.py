@@ -170,6 +170,23 @@ class KnowledgeBaseDomainCount(BaseModel):
     count: int
 
 
+class AutoAssembledSettingItem(BaseModel):
+    label: str
+    method: str
+    writable: bool
+    description: str
+
+
+class AutoAssembledSummary(BaseModel):
+    """Story 1.31(FR33-B) 업로드 데이터 기반 지식베이스 자동 구성 집계."""
+
+    manual_qa_count: int
+    setting_item_count: int
+    writable_setting_item_count: int
+    setting_items: List[AutoAssembledSettingItem]
+    screen_node_count: int
+
+
 class KnowledgeBaseInventoryResponse(BaseModel):
     owner: str
     total_chunks: int
@@ -177,6 +194,7 @@ class KnowledgeBaseInventoryResponse(BaseModel):
     domain_distribution: List[KnowledgeBaseDomainCount]
     last_indexed_at: str
     doc_type: str
+    auto_assembled: Optional[AutoAssembledSummary] = None
 
 
 class CatalogConfigDiff(BaseModel):
@@ -500,6 +518,9 @@ async def get_knowledge_base_inventory(
     색인이 없는 신규 테넌트에서도 예외 없이 0건 결과를 반환한다.
     """
     from src.ai_voicebot.self_service.knowledge_base_inventory import summarize_inventory
+    from src.ai_voicebot.self_service.knowledge_base_assembler import (
+        summarize_auto_assembled_knowledge_base,
+    )
 
     ks = _knowledge_service()
     try:
@@ -508,6 +529,14 @@ async def get_knowledge_base_inventory(
         raise HTTPException(status_code=503, detail=f"ChromaDB 조회 실패: {e}") from e
 
     inventory = summarize_inventory(raw_all, owner=owner)
+
+    from src.common import knowledge_documents_db
+
+    document_records = knowledge_documents_db.list_documents(owner=owner)
+    auto_assembled = summarize_auto_assembled_knowledge_base(
+        raw_all, owner=owner, document_records=document_records
+    )
+
     return KnowledgeBaseInventoryResponse(
         owner=inventory["owner"],
         total_chunks=inventory["total_chunks"],
@@ -517,6 +546,15 @@ async def get_knowledge_base_inventory(
         ],
         last_indexed_at=inventory["last_indexed_at"],
         doc_type=inventory["doc_type"],
+        auto_assembled=AutoAssembledSummary(
+            manual_qa_count=auto_assembled["manual_qa_count"],
+            setting_item_count=auto_assembled["setting_item_count"],
+            writable_setting_item_count=auto_assembled["writable_setting_item_count"],
+            setting_items=[
+                AutoAssembledSettingItem(**s) for s in auto_assembled["setting_items"]
+            ],
+            screen_node_count=auto_assembled["screen_node_count"],
+        ),
     )
 
 
