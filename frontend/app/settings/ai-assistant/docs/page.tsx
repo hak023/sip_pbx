@@ -1062,71 +1062,71 @@ export default function AiAssistantDocsPage() {
                             {intentTypes
                                 .filter((t) => t.code === activeIntentCode)
                                 .map((t) => (
-                                <div
-                                    key={t.code}
-                                    className="rounded-xl border border-gray-100 bg-white shadow-sm p-4"
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">
-                                            {t.code}
-                                        </span>
-                                        <span className="font-semibold text-gray-800">{t.name}</span>
-                                        {t.requires_tool && (
-                                            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
-                                                Tool 필요
+                                    <div
+                                        key={t.code}
+                                        className="rounded-xl border border-gray-100 bg-white shadow-sm p-4"
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">
+                                                {t.code}
                                             </span>
+                                            <span className="font-semibold text-gray-800">{t.name}</span>
+                                            {t.requires_tool && (
+                                                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                                                    Tool 필요
+                                                </span>
+                                            )}
+                                            {t.requires_writable_domain && (
+                                                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                                                    변경·되돌리기 필요(쓰기 가능 도메인만)
+                                                </span>
+                                            )}
+                                        </div>
+                                        <p className="mt-1 text-sm text-gray-600">{t.summary}</p>
+                                        {t.related_types.length > 0 && (
+                                            <p className="mt-1 text-xs text-gray-400">
+                                                관련 유형: {t.related_types.join(", ")}
+                                            </p>
                                         )}
-                                        {t.requires_writable_domain && (
-                                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
-                                                변경·되돌리기 필요(쓰기 가능 도메인만)
-                                            </span>
-                                        )}
-                                    </div>
-                                    <p className="mt-1 text-sm text-gray-600">{t.summary}</p>
-                                    {t.related_types.length > 0 && (
-                                        <p className="mt-1 text-xs text-gray-400">
-                                            관련 유형: {t.related_types.join(", ")}
-                                        </p>
-                                    )}
 
-                                    {/* Story 1.32 AC2/AC3: 질문 예시 리스트 + 항목별 RAG/Tool 배지 */}
-                                    {t.trigger_examples.length > 0 && (
-                                        <ul className="mt-3 space-y-1.5 border-t border-gray-50 pt-3">
-                                            {t.trigger_examples.map((ex, i) => (
-                                                <li
-                                                    key={`${t.code}-${i}`}
-                                                    className="flex flex-wrap items-center gap-1.5 text-sm"
-                                                >
-                                                    <button
-                                                        onClick={() => handleSimulateFromPolicy(ex)}
-                                                        className="rounded-lg border border-gray-200 px-2.5 py-1 text-left text-gray-700 hover:bg-indigo-50 hover:text-indigo-700"
+                                        {/* Story 1.32 AC2/AC3: 질문 예시 리스트 + 항목별 RAG/Tool 배지 */}
+                                        {t.trigger_examples.length > 0 && (
+                                            <ul className="mt-3 space-y-1.5 border-t border-gray-50 pt-3">
+                                                {t.trigger_examples.map((ex, i) => (
+                                                    <li
+                                                        key={`${t.code}-${i}`}
+                                                        className="flex flex-wrap items-center gap-1.5 text-sm"
                                                     >
-                                                        &quot;{ex}&quot;
-                                                    </button>
-                                                    {t.rag_enabled ? (
-                                                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
-                                                            RAG · {t.rag_strategy_hint}({t.rag_source_scope})
-                                                        </span>
-                                                    ) : (
-                                                        <span className="rounded bg-gray-50 px-1.5 py-0.5 text-xs text-gray-400">
-                                                            RAG 미사용
-                                                        </span>
-                                                    )}
-                                                    {t.requires_tool && (
-                                                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
-                                                            Tool 필요
-                                                        </span>
-                                                    )}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                    <p className="mt-3 text-xs text-gray-400">
-                                        질문을 선택하면 &quot;응답 시뮬레이터&quot; 탭에서 판정 유형·hop 경로·
-                                        RAG 매칭 근거·실제 응답이 이어서 표시됩니다.
-                                    </p>
-                                </div>
-                            ))}
+                                                        <button
+                                                            onClick={() => handleSimulateFromPolicy(ex)}
+                                                            className="rounded-lg border border-gray-200 px-2.5 py-1 text-left text-gray-700 hover:bg-indigo-50 hover:text-indigo-700"
+                                                        >
+                                                            &quot;{ex}&quot;
+                                                        </button>
+                                                        {t.rag_enabled ? (
+                                                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                                                                RAG · {t.rag_strategy_hint}({t.rag_source_scope})
+                                                            </span>
+                                                        ) : (
+                                                            <span className="rounded bg-gray-50 px-1.5 py-0.5 text-xs text-gray-400">
+                                                                RAG 미사용
+                                                            </span>
+                                                        )}
+                                                        {t.requires_tool && (
+                                                            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                                                                Tool 필요
+                                                            </span>
+                                                        )}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                        <p className="mt-3 text-xs text-gray-400">
+                                            질문을 선택하면 &quot;응답 시뮬레이터&quot; 탭에서 판정 유형·hop 경로·
+                                            RAG 매칭 근거·실제 응답이 이어서 표시됩니다.
+                                        </p>
+                                    </div>
+                                ))}
                             {!loadingPolicy && intentTypes.length === 0 && !policyError && (
                                 <p className="text-sm text-gray-400">등록된 정책 정보가 없습니다.</p>
                             )}
