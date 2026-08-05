@@ -301,7 +301,11 @@ const DOMAIN_LABEL: Record<string, string> = {
     intro: "서비스 소개",
 };
 
-type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "manage" | "upload" | "simulate";
+// Story 1.30(FR33-A): "지식 업로드"·"설정 관리" 최상위 탭을 하나로 통합 — "manage"는
+// 더 이상 최상위 탭이 아니라 "upload" 탭 내부의 소스 유형 섹션(uploadSection="system")이다.
+type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "upload" | "simulate";
+// 지식 업로드 탭 내부 소스 유형 — ①테넌트 지식 문서(Story 1.26) ②시스템 공통 설정/구성(Epic 2)
+type UploadSection = "tenant" | "system";
 
 // ---------------------------------------------------------------------------
 // 컴포넌트
@@ -354,6 +358,8 @@ export default function AiAssistantDocsPage() {
     const [uploadFile, setUploadFile] = useState<File | null>(null);
     const [uploading, setUploading] = useState(false);
     const [uploadResult, setUploadResult] = useState<KnowledgeDocumentUploadResponse | null>(null);
+    // Story 1.30(FR33-A): 지식 업로드 탭 내부 소스 유형 토글(기본값: 테넌트 지식 문서)
+    const [uploadSection, setUploadSection] = useState<UploadSection>("tenant");
 
     // 응답 시뮬레이터(Story 1.27)
     const [simulateQuery, setSimulateQuery] = useState("");
@@ -673,8 +679,8 @@ export default function AiAssistantDocsPage() {
         if (tab === "policy" && intentTypes.length === 0) void loadPolicy();
         if (tab === "policy" && owner && decisionLog.length === 0) void loadDecisionLog();
         if (tab === "kb" && owner && !kbInventory) void loadKbInventory();
-        if (tab === "upload" && owner) void loadKbDocuments();
-        if (tab === "manage") void loadVersions();
+        if (tab === "upload" && uploadSection === "tenant" && owner) void loadKbDocuments();
+        if (tab === "upload" && uploadSection === "system") void loadVersions();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tab, owner, items.length, catalog.length, screens.length, intentTypes.length, decisionLog.length, kbInventory, loadQa, loadCatalog, loadScreens, loadPolicy, loadDecisionLog, loadKbInventory, loadKbDocuments]);
 
@@ -725,7 +731,7 @@ export default function AiAssistantDocsPage() {
 
             {/* 탭 */}
             <div className="flex gap-1 border-b border-gray-200 mb-6">
-                {(["qa", "catalog", "screen", "policy", "kb", "upload", "simulate", "manage"] as Tab[]).map((t) => (
+                {(["qa", "catalog", "screen", "policy", "kb", "upload", "simulate"] as Tab[]).map((t) => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -748,9 +754,7 @@ export default function AiAssistantDocsPage() {
                                             ? "지식베이스 현황"
                                             : t === "upload"
                                                 ? "지식 업로드"
-                                                : t === "simulate"
-                                                    ? "응답 시뮬레이터"
-                                                    : "설정 관리"}
+                                                : "응답 시뮬레이터"}
                     </button>
                 ))}
             </div>
@@ -1182,9 +1186,29 @@ export default function AiAssistantDocsPage() {
                 </div>
             )}
 
-            {/* ── 지식 업로드 탭 — Story 1.26, FR32-A ── */}
+            {/* ── 지식 업로드 탭 — Story 1.26/1.30, FR32-A/FR33-A/C(진입점 통합) ── */}
             {tab === "upload" && (
                 <div className="space-y-5">
+                    {/* 소스 유형 세그먼트 — Story 1.30: 테넌트 지식 문서 vs 시스템 공통 설정/구성 */}
+                    <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-sm">
+                        {(["tenant", "system"] as UploadSection[]).map((s) => (
+                            <button
+                                key={s}
+                                onClick={() => setUploadSection(s)}
+                                className={
+                                    "flex-1 rounded-md px-3 py-1.5 font-medium transition-colors " +
+                                    (uploadSection === s
+                                        ? "bg-white text-indigo-700 shadow-sm"
+                                        : "text-gray-500 hover:text-gray-700")
+                                }
+                            >
+                                {s === "tenant" ? "① 테넌트 지식 문서" : "② 시스템 공통 설정/구성"}
+                            </button>
+                        ))}
+                    </div>
+
+                    {uploadSection === "tenant" && (
+                    <div className="space-y-5">
                     <p className="text-xs text-gray-500">
                         마크다운·PDF·OpenAPI 문서를 업로드해 지식베이스에 등록합니다. 등록된 문서는
                         도메인 태그와 함께 청크 단위로 색인되며, 아래 목록에서 수정·삭제할 수 있습니다.
@@ -1330,101 +1354,28 @@ export default function AiAssistantDocsPage() {
                             </table>
                         )}
                     </div>
-                </div>
-            )}
-
-            {/* ── 응답 시뮬레이터 탭 — Story 1.27, FR32-B(실 서비스 세션 무영향, 실 LLM 호출) ── */}
-            {tab === "simulate" && (
-                <div className="space-y-5">
-                    <p className="text-xs text-gray-500">
-                        예시 질문을 입력하면 실제 통화/채팅 세션에 영향을 주지 않고, 매칭된 지식
-                        문서·AI 의사결정 유형·실제 응답을 미리 확인할 수 있습니다. 실제 LLM을
-                        호출하므로 시간이 걸릴 수 있습니다(NFR8).
-                    </p>
-
-                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
-                        <div>
-                            <label className="block text-xs text-gray-500 mb-1">예시 발화</label>
-                            <textarea
-                                value={simulateQuery}
-                                onChange={(e) => setSimulateQuery(e.target.value)}
-                                rows={3}
-                                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                placeholder="예: 착신 규칙을 바꾸고 싶어요"
-                            />
-                        </div>
-                        <button
-                            onClick={() => void handleSimulate()}
-                            disabled={simulating || !owner || !simulateQuery.trim()}
-                            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-                        >
-                            {simulating ? "실행 중… (실제 LLM 호출로 시간이 걸릴 수 있습니다)" : "시뮬레이션 실행"}
-                        </button>
-                        {simulateError && (
-                            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-                                {simulateError}
-                            </div>
-                        )}
                     </div>
-
-                    {simulateResult && (
-                        <div className="space-y-4">
-                            <p className="text-xs text-gray-400">
-                                소요 시간: {simulateResult.elapsed_sec.toFixed(2)}초(실측, 캐시 아님)
-                            </p>
-
-                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
-                                    ① 매칭된 지식 문서
-                                </h3>
-                                {simulateResult.matched_documents.length === 0 ? (
-                                    <p className="text-sm text-gray-400">매칭된 문서가 없습니다.</p>
-                                ) : (
-                                    <ul className="space-y-1 text-sm">
-                                        {simulateResult.matched_documents.map((d, i) => (
-                                            <li key={`${d.doc_id}-${i}`} className="text-gray-700">
-                                                <span className="font-mono text-xs text-gray-500">{d.doc_id}</span>
-                                                {" · 유사도 "}
-                                                {d.score.toFixed(3)}
-                                                {d.related_domain && ` · ${d.related_domain}`}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </div>
-
-                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
-                                    ② IntelliDecision 판정
-                                </h3>
-                                <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                                    {simulateResult.intellidecision_type !== "unknown"
-                                        ? `${simulateResult.intellidecision_type} · ${intentTypes.find((t) => t.code === simulateResult.intellidecision_type)?.name ?? ""}`
-                                        : "미확인"}
-                                </span>
-                                <p className="mt-2 text-sm text-gray-600">
-                                    {simulateResult.reasoning_summary || "-"}
-                                </p>
-                            </div>
-
-                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-                                <h3 className="mb-2 text-sm font-semibold text-gray-800">③ 실제 응답</h3>
-                                <p className="whitespace-pre-wrap text-sm text-gray-800">
-                                    {simulateResult.response}
-                                </p>
-                            </div>
-                        </div>
                     )}
-                </div>
-            )}
 
-            {/* ── 설정 관리(내보내기) 탭 — Epic 2 Story 2.4 ── */}
-            {tab === "manage" && (
-                <div>
-                    <p className="mb-4 text-sm text-gray-600">
-                        현재 AI 도우미 설정(카탈로그·화면 안내)을 파일로 다운로드해 검토하거나
-                        백업할 수 있습니다.
-                    </p>
+                    {uploadSection === "system" && (
+                    <div>
+                        {/* 시스템 표준(FR33-C) 안내 — intellidecision_policy 유형 정의는 테넌트 무관 고정,
+                            catalog_config/screen_graph는 테넌트별 편집 가능임을 명확히 구분한다. */}
+                        <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50/50 p-4">
+                            <p className="text-xs font-medium text-amber-800">
+                                시스템 표준(읽기 전용) vs 테넌트별 편집 가능
+                            </p>
+                            <p className="mt-1 text-xs text-amber-700">
+                                &quot;AI 의사결정 로직&quot;(IntelliDecision 유형 A~I) 탭의 정책 정의는 테넌트·
+                                도메인에 무관하게 재사용되는 시스템 표준이며 이 화면에서 편집할 수
+                                없습니다. 아래 카탈로그·화면 안내 설정은 테넌트별로 다운로드/업로드/
+                                롤백이 가능합니다.
+                            </p>
+                        </div>
+                        <p className="mb-4 text-sm text-gray-600">
+                            현재 AI 도우미 설정(카탈로그·화면 안내)을 파일로 다운로드해 검토하거나
+                            백업할 수 있습니다.
+                        </p>
                     <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-5">
                         <div className="flex items-center justify-between gap-4">
                             <div>
@@ -1564,6 +1515,93 @@ export default function AiAssistantDocsPage() {
                             onRollback={(v) => void rollbackToVersion("screen_graph", v)}
                         />
                     </div>
+                    </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── 응답 시뮬레이터 탭 — Story 1.27, FR32-B(실 서비스 세션 무영향, 실 LLM 호출) ── */}
+            {tab === "simulate" && (
+                <div className="space-y-5">
+                    <p className="text-xs text-gray-500">
+                        예시 질문을 입력하면 실제 통화/채팅 세션에 영향을 주지 않고, 매칭된 지식
+                        문서·AI 의사결정 유형·실제 응답을 미리 확인할 수 있습니다. 실제 LLM을
+                        호출하므로 시간이 걸릴 수 있습니다(NFR8).
+                    </p>
+
+                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
+                        <div>
+                            <label className="block text-xs text-gray-500 mb-1">예시 발화</label>
+                            <textarea
+                                value={simulateQuery}
+                                onChange={(e) => setSimulateQuery(e.target.value)}
+                                rows={3}
+                                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                placeholder="예: 착신 규칙을 바꾸고 싶어요"
+                            />
+                        </div>
+                        <button
+                            onClick={() => void handleSimulate()}
+                            disabled={simulating || !owner || !simulateQuery.trim()}
+                            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                        >
+                            {simulating ? "실행 중… (실제 LLM 호출로 시간이 걸릴 수 있습니다)" : "시뮬레이션 실행"}
+                        </button>
+                        {simulateError && (
+                            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+                                {simulateError}
+                            </div>
+                        )}
+                    </div>
+
+                    {simulateResult && (
+                        <div className="space-y-4">
+                            <p className="text-xs text-gray-400">
+                                소요 시간: {simulateResult.elapsed_sec.toFixed(2)}초(실측, 캐시 아님)
+                            </p>
+
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
+                                    ① 매칭된 지식 문서
+                                </h3>
+                                {simulateResult.matched_documents.length === 0 ? (
+                                    <p className="text-sm text-gray-400">매칭된 문서가 없습니다.</p>
+                                ) : (
+                                    <ul className="space-y-1 text-sm">
+                                        {simulateResult.matched_documents.map((d, i) => (
+                                            <li key={`${d.doc_id}-${i}`} className="text-gray-700">
+                                                <span className="font-mono text-xs text-gray-500">{d.doc_id}</span>
+                                                {" · 유사도 "}
+                                                {d.score.toFixed(3)}
+                                                {d.related_domain && ` · ${d.related_domain}`}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
+                                    ② IntelliDecision 판정
+                                </h3>
+                                <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                                    {simulateResult.intellidecision_type !== "unknown"
+                                        ? `${simulateResult.intellidecision_type} · ${intentTypes.find((t) => t.code === simulateResult.intellidecision_type)?.name ?? ""}`
+                                        : "미확인"}
+                                </span>
+                                <p className="mt-2 text-sm text-gray-600">
+                                    {simulateResult.reasoning_summary || "-"}
+                                </p>
+                            </div>
+
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
+                                <h3 className="mb-2 text-sm font-semibold text-gray-800">③ 실제 응답</h3>
+                                <p className="whitespace-pre-wrap text-sm text-gray-800">
+                                    {simulateResult.response}
+                                </p>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
         </div>
