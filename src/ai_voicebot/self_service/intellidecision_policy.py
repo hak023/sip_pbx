@@ -77,7 +77,8 @@ _register(IntentTypeSpec(
     trigger_examples=["뭘 할 수 있어?", "어떤 도움을 줄 수 있어?", "사용법 알려줘"],
     requires_tool=False,
     rag_enabled=True,
-    rag_strategy_hint="hybrid",
+    # Story 1.33(FR33-E): 카탈로그 도메인별 병렬 검색으로 보강되는 하이브리드 다중 도메인 전략
+    rag_strategy_hint="hybrid_multi_domain",
 ))
 _register(IntentTypeSpec(
     code="D", name="정정",

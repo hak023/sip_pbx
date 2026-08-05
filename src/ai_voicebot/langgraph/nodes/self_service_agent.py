@@ -73,6 +73,7 @@ Story 1.17 범위: 유형 C(도움 요청, Story 1.15)의 하드코딩 능력 �
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime
 from typing import Any
@@ -80,11 +81,12 @@ from typing import Any
 import structlog
 
 from src.ai_voicebot.langgraph.state import ConversationState
-from src.ai_voicebot.langgraph.call_context import get_llm_client
+from src.ai_voicebot.langgraph.call_context import get_embedder, get_llm_client, get_vector_db
 from src.ai_voicebot.langgraph.nodes.generate_response import RESPONSE_UNKNOWN_NEEDS_FOLLOWUP
 from src.ai_voicebot.self_service import settings_catalog
 from src.ai_voicebot.self_service import knowledge_graph
 from src.ai_voicebot.self_service import prompt_rules
+from src.ai_voicebot.self_service.hybrid_rag import looks_like_broad_help_query, search_hybrid_multi_domain
 from src.ai_voicebot.self_service.onboarding import get_onboarding_checklist
 from src.ai_voicebot.self_service.rag import get_self_service_rag_engine
 from src.ai_voicebot.self_service.screen_graph import describe_screen_for_conversation
@@ -589,16 +591,46 @@ async def self_service_agent_node(state: ConversationState) -> dict:
     rag_documents = []
     rag_search_elapsed = 0.0
     rag_engine = get_self_service_rag_engine()
+    # Story 1.33(FR33-E): 유형 C(포괄적 도움 요청) 후보 발화는 카탈로그 도메인별 하이브리드
+    # 검색을 기존 검색과 **병렬**로 추가 실행해 특정 도메인에 치우치지 않는 근거를 보강한다.
+    # 최종 유형 판정(LLM)보다 먼저 실행되므로 휴리스틱으로만 후보를 좁힌다(오탐 시에도 문서가
+    # 몇 개 더 검색될 뿐 다른 유형 응대 로직에는 영향이 없어 안전).
+    is_broad_help_query = looks_like_broad_help_query(user_query)
+    hybrid_documents: list = []
     if rag_engine is not None and user_query:
         rag_start = time.time()
-        try:
-            search_result = await rag_engine.search(
-                user_query, owner_filter=owner, call_id=call_id, intent="question",
+        tasks = [rag_engine.search(user_query, owner_filter=owner, call_id=call_id, intent="question")]
+        if is_broad_help_query:
+            tasks.append(
+                search_hybrid_multi_domain(
+                    user_query, owner=owner, vector_db=get_vector_db(), embedder=get_embedder(),
+                )
             )
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        search_result = results[0]
+        if isinstance(search_result, BaseException):
+            logger.warning("self_service_agent_rag_search_error", call_id=call_id, error=str(search_result))
+        else:
             rag_documents = search_result.documents
-        except Exception as e:
-            logger.warning("self_service_agent_rag_search_error", call_id=call_id, error=str(e))
+        if is_broad_help_query and len(results) > 1 and not isinstance(results[1], BaseException):
+            hybrid_documents = results[1]
         rag_search_elapsed = time.time() - rag_start
+
+    # 하이브리드 결과를 기존 매뉴얼 검색 결과에 병합(중복 doc_id 제외) — 이후 프롬프트 조립/
+    # 화면 안내/trace 로깅은 rag_documents 하나로 통합되어 기존 경로를 그대로 재사용한다.
+    if hybrid_documents:
+        seen_ids = {str(getattr(d, "id", "") or "") for d in rag_documents}
+        for doc in hybrid_documents:
+            doc_id = str(getattr(doc, "id", "") or "")
+            if doc_id and doc_id in seen_ids:
+                continue
+            if doc_id:
+                seen_ids.add(doc_id)
+            rag_documents.append(doc)
+        logger.info(
+            "self_service_agent_hybrid_rag_merged",
+            call_id=call_id, hybrid_doc_count=len(hybrid_documents), merged_total=len(rag_documents),
+        )
 
     logger.info(
         "self_service_agent_rag_search_done",
