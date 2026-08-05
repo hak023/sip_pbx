@@ -1188,7 +1188,7 @@ export default function AiAssistantDocsPage() {
                                                 <td className="px-4 py-2 text-gray-500">{d.count}</td>
                                             </tr>
                                         ))}
-                                                                        {kbInventory.domain_distribution.length === 0 && (
+                                        {kbInventory.domain_distribution.length === 0 && (
                                             <tr>
                                                 <td className="px-4 py-2 text-gray-400" colSpan={2}>
                                                     색인된 도움말 문서가 없습니다.
