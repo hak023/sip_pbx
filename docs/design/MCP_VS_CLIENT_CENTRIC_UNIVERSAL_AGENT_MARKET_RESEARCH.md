@@ -270,13 +270,13 @@ Story 1.31(`OpenApiSpecAdapter`가 각 엔드포인트를 Q&A로 자동 변환 �
 
 ### 4.5 그 외 확인된 동일 카테고리 프로젝트(규모 실증용, 상세 인용 생략)
 
-| 저장소 | Stars | 설명(README 발췌) |
-|---|---|---|
-| [open-webui/mcpo](https://github.com/open-webui/mcpo) | 4,333 | "A simple, secure MCP-to-OpenAPI **proxy** server" — 반대 방향(MCP→OpenAPI) 변환기도 활발함을 보여주는 사례 |
-| [harsha-iiiv/openapi-mcp-generator](https://github.com/harsha-iiiv/openapi-mcp-generator) | 629 | "A tool that converts OpenAPI specifications to MCP server" |
-| [higress-group/openapi-to-mcpserver](https://github.com/higress-group/openapi-to-mcpserver) | 277 | Alibaba Higress(API 게이트웨이) 팀이 공개한 변환기 |
-| [ckanthony/openapi-mcp](https://github.com/ckanthony/openapi-mcp) | 191 | "Dockerized MCP Server to allow your AI agent to access any API with existing api docs" |
-| [taskade/mcp](https://github.com/taskade/mcp) | 163 | "Build AI agent tools from **any** OpenAPI API and connect to Claude, Cursor, …" |
+| 저장소                                                                                      | Stars | 설명(README 발췌)                                                                                           |
+| ------------------------------------------------------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------- |
+| [open-webui/mcpo](https://github.com/open-webui/mcpo)                                       | 4,333 | "A simple, secure MCP-to-OpenAPI **proxy** server" — 반대 방향(MCP→OpenAPI) 변환기도 활발함을 보여주는 사례 |
+| [harsha-iiiv/openapi-mcp-generator](https://github.com/harsha-iiiv/openapi-mcp-generator)   | 629   | "A tool that converts OpenAPI specifications to MCP server"                                                 |
+| [higress-group/openapi-to-mcpserver](https://github.com/higress-group/openapi-to-mcpserver) | 277   | Alibaba Higress(API 게이트웨이) 팀이 공개한 변환기                                                          |
+| [ckanthony/openapi-mcp](https://github.com/ckanthony/openapi-mcp)                           | 191   | "Dockerized MCP Server to allow your AI agent to access any API with existing api docs"                     |
+| [taskade/mcp](https://github.com/taskade/mcp)                                               | 163   | "Build AI agent tools from **any** OpenAPI API and connect to Claude, Cursor, …"                            |
 
 **종합 시사점**: "openapi to mcp"라는 단일 검색어로만 400개 이상의 저장소가 나오고, 그중 상위
 다수가 (Twilio·Alibaba Higress 같은) 실제 기업이 공식 배포한 프로젝트라는 사실은, 사용자의
@@ -287,18 +287,18 @@ Story 1.31(`OpenApiSpecAdapter`가 각 엔드포인트를 Q&A로 자동 변환 �
 
 ## 5. 종합 비교표
 
-| 구분                             | 접근 방향                                                             | 사전 통합 필요 여부                      | 실행(쓰기) 지원                        | 우리 시스템(Story 1.26~1.33)과의 관계       |
-| -------------------------------- | --------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------- | ------------------------------------------- |
-| **MCP**                          | 서버 표준화                                                           | 서버가 MCP를 구현해야 함(신규 개발 필요) | 서버 구현에 따라 다름                  | 대조군 — 우리는 MCP 서버를 만들지 않음      |
-| **OpenAI GPT Actions**           | 클라이언트가 사전 등록된 OpenAPI 스키마를 이해                        | 개발자가 스키마를 사전 등록(정적)        | 지원(함수 호출로 실행)                 | 가장 유사 — 단, 런타임 업로드형 적응은 없음 |
-| **ChatGPT Plugins(폐지)**        | 클라이언트가 매니페스트+스펙을 이해                                   | 사전 등록                                | 지원                                   | 역사적 선례, GPT Actions로 흡수됨           |
-| **Zapier NLA→MCP**               | (과거)클라이언트 이해 → (현재)서버 표준화                             | 과거: 사전 연동 앱만 / 현재: MCP         | 지원                                   | 시장이 MCP로 수렴한 실증 사례               |
-| **Composio / open-connector**    | 중개 SaaS(또는 OSS)가 1,000+ 서비스를 사전 정규화                     | 사전 통합된 서비스만                     | 지원(샌드박스 실행)                    | 유사 — 단, "이미 등록된 서비스"에 한정      |
-| **Gorilla/OpenFunctions/GoEx**   | LLM 자체가 다양한 API 호출을 학습                                     | 학습 데이터 필요(사전)                   | GoEx가 undo/damage confinement로 지원  | 안전장치(Undo) 설계 철학 일치               |
-| **RestGPT**                      | LLM이 RESTful API 문서를 보고 실시간 계획·실행                        | **런타임 문서 제공만으로 가능**          | 지원(API Executor)                     | **가장 근접** — 우리 방향과 구조적으로 동일 |
-| **API-Bank**                     | (벤치마크) 도메인 비종속 Tool 사용 평가                               | 해당 없음(평가셋)                        | 평가 대상에 포함                       | 우리 문제의식이 이미 표준 연구주제임을 실증 |
-| **mcp-link / openapi-mcp-server 등(OSS)** | 범용 OpenAPI→MCP 변환기(수백~수천 stars, Twilio·Alibaba 등 벤더 채택 | **불필요(스펙 URL만 지정)**      | 지원(원본 API 그대로 호출, 무수정)      | **가장 근접** — "서버 무수정"이 핵심 공통점 |
-| **우리 시스템(Story 1.26/1.31)** | 클라이언트(RAG+LangGraph)가 **런타임 업로드된** OpenAPI/매뉴얼을 이해 | **불필요(업로드만 하면 즉시 반영)**      | **미지원(Non-Goal로 명시, 후속 과제)** | —                                           |
+| 구분                                      | 접근 방향                                                             | 사전 통합 필요 여부                      | 실행(쓰기) 지원                        | 우리 시스템(Story 1.26~1.33)과의 관계       |
+| ----------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------- | ------------------------------------------- |
+| **MCP**                                   | 서버 표준화                                                           | 서버가 MCP를 구현해야 함(신규 개발 필요) | 서버 구현에 따라 다름                  | 대조군 — 우리는 MCP 서버를 만들지 않음      |
+| **OpenAI GPT Actions**                    | 클라이언트가 사전 등록된 OpenAPI 스키마를 이해                        | 개발자가 스키마를 사전 등록(정적)        | 지원(함수 호출로 실행)                 | 가장 유사 — 단, 런타임 업로드형 적응은 없음 |
+| **ChatGPT Plugins(폐지)**                 | 클라이언트가 매니페스트+스펙을 이해                                   | 사전 등록                                | 지원                                   | 역사적 선례, GPT Actions로 흡수됨           |
+| **Zapier NLA→MCP**                        | (과거)클라이언트 이해 → (현재)서버 표준화                             | 과거: 사전 연동 앱만 / 현재: MCP         | 지원                                   | 시장이 MCP로 수렴한 실증 사례               |
+| **Composio / open-connector**             | 중개 SaaS(또는 OSS)가 1,000+ 서비스를 사전 정규화                     | 사전 통합된 서비스만                     | 지원(샌드박스 실행)                    | 유사 — 단, "이미 등록된 서비스"에 한정      |
+| **Gorilla/OpenFunctions/GoEx**            | LLM 자체가 다양한 API 호출을 학습                                     | 학습 데이터 필요(사전)                   | GoEx가 undo/damage confinement로 지원  | 안전장치(Undo) 설계 철학 일치               |
+| **RestGPT**                               | LLM이 RESTful API 문서를 보고 실시간 계획·실행                        | **런타임 문서 제공만으로 가능**          | 지원(API Executor)                     | **가장 근접** — 우리 방향과 구조적으로 동일 |
+| **API-Bank**                              | (벤치마크) 도메인 비종속 Tool 사용 평가                               | 해당 없음(평가셋)                        | 평가 대상에 포함                       | 우리 문제의식이 이미 표준 연구주제임을 실증 |
+| **mcp-link / openapi-mcp-server 등(OSS)** | 범용 OpenAPI→MCP 변환기(수백~수천 stars, Twilio·Alibaba 등 벤더 채택  | **불필요(스펙 URL만 지정)**              | 지원(원본 API 그대로 호출, 무수정)     | **가장 근접** — "서버 무수정"이 핵심 공통점 |
+| **우리 시스템(Story 1.26/1.31)**          | 클라이언트(RAG+LangGraph)가 **런타임 업로드된** OpenAPI/매뉴얼을 이해 | **불필요(업로드만 하면 즉시 반영)**      | **미지원(Non-Goal로 명시, 후속 과제)** | —                                           |
 
 ---
 
