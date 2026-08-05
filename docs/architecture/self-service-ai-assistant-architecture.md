@@ -1,7 +1,7 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement Architecture
 
 **작성일**: 2026-07-14
-**버전**: 0.23 (2026-08-05 갱신 — Epic 3(FR34) 계획 증분: 도메인 비종속 AI 에이전트 플랫폼 전환 방향)
+**버전**: 0.24 (2026-08-05 갱신 — Epic 3(FR34) 방향 수정: 시뮬레이터 폐지+실제 채팅 패널+판단 이력 실제화)
 프롬프트 산문 자동 렌더링(Story 1.19))
 **상태**: Epic 1(Story 1.1~1.19) 구현·실서버 검증 완료 + Epic 2(Story 2.1~2.8) 구현·실서버 검증 완료 + Story 1.23~1.25 구현 완료, 도메인 비종속 지식베이스 플랫폼(Story 1.26~1.29)는 설계만 반영(Draft)
 **관련 문서**:
@@ -58,7 +58,8 @@
 | FR33 계획 증분(업로드 통합·자동 지식베이스 구성·시뮬레이터 UX·유형 C 하이브리드 RAG) | 2026-08-04 | 0.20    | 사용자가 FR32 완료 후 잔여 정적 결합(설정 관리/지식 업로드 탭 이원화, 도메인 종속 카탈로그, 시뮬레이터 UX)을 지적하며 계획 수립 요청 → 신규 §"RAG·IntelliDecision 고도화 2단계"(아래) 추가(PRD FR33), Story 1.30(업로드 진입점 통합+시스템 표준 콘텐츠 구분)/1.31(업로드 기반 지식베이스 자동 구성)/1.32(시뮬레이터×IntelliDecision UX 통합)/1.33(유형 C 하이브리드 RAG) 설계 방향만 문서화 — 구현은 각 Story 착수 시 진행                                                                                                                                                                          | Copilot (BMAD Architect 역할) |
 | Story 1.32 구현 완료                                                                 | 2026-08-05 | 0.21    | IntelliDecision 정책 탭(Story 1.18)을 유형 A~I 하위 탭 구조로 재편(AC1), 질문 예시마다 RAG/Tool 배지 추가(AC3, 기존 정책 메타데이터 재사용 — 신규 API 불필요). `knowledge_base_simulate.py`에 `hop_path`(traverse_graph 결과 직렬화) 추가(AC4-②). 응답 시뮬레이터 탭을 단일 결과에서 `simulateTurns` 배열 기반 멀티턴 대화로 전환(AC5). 질문 예시 목록은 Story 1.31 완료 전이라 정책의 `trigger_examples`(정적)를 그대로 사용(하위 호환 경로, 사용자 승인 후 동적화 여부 재검토 가능)                                                                                                               | Copilot (BMAD Dev 역할)       |
 | Story 1.33 구현 완료                                                                 | 2026-08-05 | 0.22    | Task 1에서 `self_service_agent.py`가 유형 판정 전 단일 `rag_engine.search()` 호출만 함을 코드로 재확인(Story 1.24 IV 선례와 동일 패턴). 신규 `hybrid_rag.py`(`looks_like_broad_help_query()` 휴리스틱 + `search_hybrid_multi_domain()` — 카탈로그 도메인별 ChromaDB 직접 조회를 `asyncio.gather`로 병렬 실행)를 기존 RAG 검색과 병렬로 추가 실행하도록 배선, 결과는 기존 `rag_documents`에 병합되어 프롬프트/화면안내/trace/Story 1.32 hop_path 경로를 그대로 재사용(AC3 자동 충족, 코드 수정 불필요). `intellidecision_policy.py` 유형 C `rag_strategy_hint`를 `hybrid_multi_domain`으로 갱신(AC1) | Copilot (BMAD Dev 역할)       |
-| Epic 3(FR34) 계획 증분 — 도메인 비종속 AI 에이전트 플랫폼 전환 | 2026-08-05 | 0.23 | 사용자가 시장 리서치([MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md](../design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md)) 기반으로 개발 방향 재편 요청 → 신규 §"Epic 3: 도메인 비종속 AI 에이전트 플랫폼 전환 방향"(아래) 추가(PRD FR34), Story 1.34(실행 안전 설계 스파이크)~1.39(시뮬레이터 통합 재검토) 설계 방향만 문서화 — 구현은 각 Story 착수 시 진행 | Copilot (BMAD Architect 역할) |
+| Epic 3(FR34) 계획 증분 — 도메인 비종속 AI 에이전트 플랫폼 전환                       | 2026-08-05 | 0.23    | 사용자가 시장 리서치([MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md](../design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md)) 기반으로 개발 방향 재편 요청 → 신규 §"Epic 3: 도메인 비종속 AI 에이전트 플랫폼 전환 방향"(아래) 추가(PRD FR34), Story 1.34(실행 안전 설계 스파이크)~1.39(시뮬레이터 통합 재검토) 설계 방향만 문서화 — 구현은 각 Story 착수 시 진행                                                                                                                                                                                                             | Copilot (BMAD Architect 역할) |
+| Epic 3(FR34) 방향 수정 — 시뮬레이터 폐지·실제 채팅 패널·판단 이력 실제화             | 2026-08-05 | 0.24    | 사용자가 3가지 추가 요청 제시(① IntelliDecision 탭 시뮬레이션 폐지→KB 기반 설명 매뉴얼, ② 응답 시뮬레이터 완전 삭제→기존 `GlobalSmsDock` 상시 노출로 실제 채팅 패널 신설, ③ "최근 판단 이력"을 실제 대화 기반 순서도로 고도화) → PRD FR34-D/E/F 재작성 + NFR10 추가(v1.6), 본 문서 설계 원칙 4 재작성, IA 다이어그램·Story 설계 표 갱신(Story 1.38/1.39 재정의 + 1.40 신설), Story 1.38/1.39 파일 재작성 및 1.40 신규 생성 예정                                                                                                                                                                                          | Copilot (BMAD Architect 역할) |
 
 ---
 
@@ -682,32 +683,38 @@ graph TD
    ```
    AI 에이전트 (최상위 신규 메뉴, 기존 "설정" 메뉴에서 완전히 독립)
    ├── 지식베이스           # 업로드(Story 1.26)+현황(Story 1.23/1.31)+Tool/API 상세 카드(Story 1.37) 통합
-   ├── 응대 투명성          # IntelliDecision 순서도(Story 1.38)+RAG/hop 시각화+(가능하면) 시뮬레이터 통합(Story 1.39)
+   ├── 응대 투명성          # IntelliDecision 설명 매뉴얼(Story 1.40)+최근 판단 이력 순서도(Story 1.38)+실제 채팅 패널(Story 1.39)
    └── 시스템 설정          # Epic 2 catalog_config/screen_graph 관리(기존 "설정 관리" 탭 그대로 이관)
    ```
 
    기존 API 계약(엔드포인트 경로)은 변경하지 않는다 — Next.js App Router 라우트(`app/settings/
    ai-assistant/docs/page.tsx`)를 새 경로(예: `app/ai-agent/*`)로 이관하고 기존 경로는 리다이렉트
    처리하는 방식을 검토한다(CR3 계승, 하위 호환).
-4. **투명성은 "사후 조회"가 아니라 "실행 중 실시간 시각화"를 지향한다(FR34-D/E)** — 현재
-   Story 1.32 시뮬레이터가 제공하는 hop_path/판정 유형/RAG 매칭 근거를, 시뮬레이터 전용 화면이
-   아니라 **실제 대화 흐름과 동일한 컴포넌트로 재사용 가능하게** 설계해 "시뮬레이터가 결국
-   필요 없어지는" 방향(사용자 요청 4번)을 목표로 한다. 다만 실시간 음성 파이프라인에 UI 갱신
-   훅을 넣는 것은 리스크가 크므로(Story 4.2가 이미 겪은 "TTS 조기 송출 vs barge-in" 충돌 사례
-   참고), 1단계는 **채팅(SIP MESSAGE) 세션 한정으로 투명성 패널을 실시간 노출**하는 것부터
-   검토하고, 음성 세션은 기존처럼 시뮬레이터로 사전 검증하는 것을 유지한다(Story 1.39에서
-   최종 결정).
+4. **응대 투명성은 "시뮬레이션"이 아니라 "지식베이스 설명 + 실제 이력"으로 확보한다(FR34-D/E/F,
+   2026-08-05 사용자 추가 요청으로 방향 확정)** — 기존 계획은 "시뮬레이터를 실제 대화와 통합할지
+   재검토"하는 열린 결정이었으나, 사용자가 구체적으로 3가지로 확정했다:
+   - **(a) IntelliDecision 탭은 시뮬레이션을 완전히 제거하고 "지식베이스 기반 설명 매뉴얼"로 전환**
+     (Story 1.40) — 유형별로 실제 LLM 호출 없이 정적 사례(업로드된 지식베이스에서 추출)로 설명.
+   - **(b) 응답 시뮬레이터는 삭제하고, 기존 `GlobalSmsDock`(평소에는 숨겨진 SIP MESSAGE 수신 패널)을
+     상시 활성화해 테넌트 관리자가 자기 자신에게 실제 문자를 보내도록 한다**(Story 1.39) — 실제
+     `chat-relay`/`self_service_agent` 경로를 그대로 타므로 시뮬레이션이 필요 없어진다.
+   - **(c) "최근 판단 이력"(Story 1.21/1.22)을 실제 대화 기반 순서도(flowchart)로 고도화**(Story 1.38)
+     — (b)로 발생한 실제 대화 이력을 기반으로, 사용자가 프론트엔드만 확인해도 AI가 어떻게
+     응대했는지 이해할 수 있게 한다(NFR10 — 실제 데이터만 사용, 추측 금지).
+   음성 세션의 실시간 투명성 노출은 이번에도 Non-Goal로 유지한다(Story 4.2의 TTS 조기 송출 vs
+   barge-in 충돌 사례 참고).
 
 ### Story별 설계 방향 요약
 
-| Story | 목표 | 핵심 컴포넌트(신규/변경) | 재사용 |
-|---|---|---|---|
-| 1.34 | 실행 안전 설계 스파이크(코드 변경 최소) | `tool_execution_policy.py`(가칭) — 화이트리스트 승인 상태 저장, undo 스냅샷 규칙 | Epic 2 화이트리스트 원칙, Story 1.17 Undo 패턴 |
-| 1.35 | 업로드 OpenAPI → 실제 실행 Tool 연결 | `document_adapters.py::OpenApiSpecAdapter` 확장(엔드포인트 메타 보존), 신규 `dynamic_api_tool.py`(HTTP 호출 실행기) | LangGraph Tool-calling 3단계 폴백(`booking_gemini_fc.py`) |
-| 1.36 | Frontend IA 재편 | 신규 최상위 라우트, 탭→섹션 재배치(컴포넌트 로직 대부분 재사용) | Story 1.30 세그먼트 UI 패턴 |
-| 1.37 | 지식베이스 API/Tool 상세 카드 | Tool 상세 카드 컴포넌트(엔드포인트·writable·hop 경로 인라인) | Story 1.23/1.31 현황 API, Story 1.28 `traverse_graph()` |
-| 1.38 | IntelliDecision 순서도 UI | flowchart 컴포넌트(mermaid 또는 순수 SVG, Story 1.18 `IntentTypeGraph` 패턴 확장) | Story 1.24 정책 메타데이터, Story 1.32 hop_path |
-| 1.39 | 시뮬레이터 통합/재검토 | 결정 문서(구현 스파이크 결과에 따라 코드 변경 여부 결정) | Story 1.27/1.32 시뮬레이터 API 전부 |
+| Story | 목표                                    | 핵심 컴포넌트(신규/변경)                                                                                            | 재사용                                                    |
+| ----- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| 1.34  | 실행 안전 설계 스파이크(코드 변경 최소) | `tool_execution_policy.py`(가칭) — 화이트리스트 승인 상태 저장, undo 스냅샷 규칙                                    | Epic 2 화이트리스트 원칙, Story 1.17 Undo 패턴            |
+| 1.35  | 업로드 OpenAPI → 실제 실행 Tool 연결    | `document_adapters.py::OpenApiSpecAdapter` 확장(엔드포인트 메타 보존), 신규 `dynamic_api_tool.py`(HTTP 호출 실행기) | LangGraph Tool-calling 3단계 폴백(`booking_gemini_fc.py`) |
+| 1.36  | Frontend IA 재편                        | 신규 최상위 라우트, 탭→섹션 재배치(컴포넌트 로직 대부분 재사용)                                                     | Story 1.30 세그먼트 UI 패턴                               |
+| 1.37  | 지식베이스 API/Tool 상세 카드           | Tool 상세 카드 컴포넌트(엔드포인트·writable·hop 경로 인라인)                                                        | Story 1.23/1.31 현황 API, Story 1.28 `traverse_graph()`   |
+| 1.38  | 최근 판단 이력 → 실제 대화 기반 순서도 고도화 | "최근 판단 이력" 테이블을 flowchart로 재구성(mermaid 또는 순수 SVG), 실제 `self_service_decision_log`/`call_data_record`만 사용 | Story 1.21/1.22 판단 이력 API, Story 1.24 정책 메타데이터, Story 1.28 hop |
+| 1.39  | 응답 시뮬레이터 폐지 + 실제 채팅 패널 신설 | `GlobalSmsDock` 상시 활성화/노출 코드, 자기 테넌트 번호로 전송 가능하도록 UI 보완                          | `frontend/app/chat/page.tsx` 전송 로직, 기존 chat-relay 파이프라인   |
+| 1.40  | IntelliDecision 설명 매뉴얼 전환            | "AI 의사결정 로직" 탭의 시뮬레이션 트리거를 정적 사례 설명으로 교체                                              | Story 1.18/1.32 정책 API+A~I 하위 탭, Story 1.31 KB 자동 구성        |
 
 ## RAG·IntelliDecision 고도화: 도메인 비종속 지식베이스 플랫폼 (Story 1.26~1.29)
 
