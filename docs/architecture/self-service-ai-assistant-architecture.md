@@ -1,7 +1,7 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement Architecture
 
 **작성일**: 2026-07-14
-**버전**: 0.25 (2026-08-05 갱신 — Story 1.38 범위 재정의: 단일 턴이 아닌 call_id 세션 단위 유형 전환 순서도)
+**버전**: 0.26 (2026-08-05 갱신 — Story 1.38 세션 그룹핑 키 수정: call_id 단일 기준 → 채널별(음성 call_id / 채팅 owner+caller_number+시간 윈도우))
 프롬프트 산문 자동 렌더링(Story 1.19))
 **상태**: Epic 1(Story 1.1~1.19) 구현·실서버 검증 완료 + Epic 2(Story 2.1~2.8) 구현·실서버 검증 완료 + Story 1.23~1.25 구현 완료, 도메인 비종속 지식베이스 플랫폼(Story 1.26~1.29)는 설계만 반영(Draft)
 **관련 문서**:
@@ -61,6 +61,7 @@
 | Epic 3(FR34) 계획 증분 — 도메인 비종속 AI 에이전트 플랫폼 전환                       | 2026-08-05 | 0.23    | 사용자가 시장 리서치([MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md](../design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md)) 기반으로 개발 방향 재편 요청 → 신규 §"Epic 3: 도메인 비종속 AI 에이전트 플랫폼 전환 방향"(아래) 추가(PRD FR34), Story 1.34(실행 안전 설계 스파이크)~1.39(시뮬레이터 통합 재검토) 설계 방향만 문서화 — 구현은 각 Story 착수 시 진행                                                                                                                                                                                                             | Copilot (BMAD Architect 역할) |
 | Epic 3(FR34) 방향 수정 — 시뮬레이터 폐지·실제 채팅 패널·판단 이력 실제화             | 2026-08-05 | 0.24    | 사용자가 3가지 추가 요청 제시(① IntelliDecision 탭 시뮬레이션 폐지→KB 기반 설명 매뉴얼, ② 응답 시뮬레이터 완전 삭제→기존 `GlobalSmsDock` 상시 노출로 실제 채팅 패널 신설, ③ "최근 판단 이력"을 실제 대화 기반 순서도로 고도화) → PRD FR34-D/E/F 재작성 + NFR10 추가(v1.6), 본 문서 설계 원칙 4 재작성, IA 다이어그램·Story 설계 표 갱신(Story 1.38/1.39 재정의 + 1.40 신설), Story 1.38/1.39 파일 재작성 및 1.40 신규 생성 예정                                                                                                                                                                     | Copilot (BMAD Architect 역할) |
 | Story 1.38 범위 재정의 — 단일 턴 flowchart → call_id 세션 단위 유형 전환 순서도       | 2026-08-05 | 0.25    | 사용자가 "한 건의 질의/응답만 보여주면 의미 없다 — 여러 턴을 주고받으며 유형이 옮겨가는 과정 자체가 IntelliDecision 핵심"이라고 지적 → Story 1.38을 "단일 턴 flowchart"에서 "동일 call_id 세션 내 여러 턴이 유형 간 이동하는 흐름 전체"로 전면 재정의(AC 8개로 재작성, 세션 목록/상세 2단계 API 설계 추가), 본 문서 설계 원칙 (c)와 Story 표 1.38 행 동기화                                                                                                                                                                                                    | Copilot (BMAD Architect 역할) |
+| Story 1.38 세션 그룹핑 키 정정 — call_id 단일 기준 → 채널별 그룹핑                    | 2026-08-05 | 0.26    | 사용자가 "call_id 그룹핑은 통화 기준엔 맞지만, 문자(SIP MESSAGE)는 call_id가 트랜잭션마다 발급되지 않냐"고 지적 → `sip_endpoint.py` 코드 확인 결과 정확한 지적(MESSAGE 1건마다 신규 call_id 발급, 실제 채팅 이력은 `chat_service.py`의 `thread_id`+`owner`로 그룹핑) → 세션 그룹핑 키를 채널별로 분리(음성=call_id, 채팅=owner+caller_number+시간 윈도우)하도록 재정의, `self_service_decision_log`에 caller_number 컬럼 신규 추가 필요성 명시, Story 1.38 AC/Task 전면 수정                                                                                                          | Copilot (BMAD Architect 역할) |
 
 ---
 
@@ -716,7 +717,7 @@ graph TD
 | 1.35  | 업로드 OpenAPI → 실제 실행 Tool 연결          | `document_adapters.py::OpenApiSpecAdapter` 확장(엔드포인트 메타 보존), 신규 `dynamic_api_tool.py`(HTTP 호출 실행기)             | LangGraph Tool-calling 3단계 폴백(`booking_gemini_fc.py`)                 |
 | 1.36  | Frontend IA 재편                              | 신규 최상위 라우트, 탭→섹션 재배치(컴포넌트 로직 대부분 재사용)                                                                 | Story 1.30 세그먼트 UI 패턴                                               |
 | 1.37  | 지식베이스 API/Tool 상세 카드                 | Tool 상세 카드 컴포넌트(엔드포인트·writable·hop 경로 인라인)                                                                    | Story 1.23/1.31 현황 API, Story 1.28 `traverse_graph()`                   |
-| 1.38  | 최근 판단 이력 → 세션 단위 유형 전환 순서도 고도화(실제 대화, 멀티턴) | call_id 그룹핑 세션 목록/상세 API + 턴 간 유형 전환 엣지 flowchart(mermaid 또는 순수 SVG), 실제 `self_service_decision_log`/`call_data_record`만 사용 | Story 1.21/1.22 판단 이력 API(call_id 포함), Story 1.24 정책 메타데이터, Story 1.28 hop |
+| 1.38  | 최근 판단 이력 → 세션 단위 유형 전환 순서도 고도화(채널별 그룹핑 키, 멀티턴) | `self_service_decision_log`에 caller_number 컬럼 추가 + 채널별 세션 그룹핑(음성=call_id, 채팅=owner+caller_number+시간 윈도우) + 세션 목록/상세 API + 턴 간 유형 전환 엣지 flowchart | Story 1.21/1.22 판단 이력 API, Story 1.24 정책 메타데이터, Story 1.28 hop, `chat_service.py` thread_id 그룹핑 패턴 |
 | 1.39  | 응답 시뮬레이터 폐지 + 실제 채팅 패널 신설    | `GlobalSmsDock` 상시 활성화/노출 코드, 자기 테넌트 번호로 전송 가능하도록 UI 보완                                               | `frontend/app/chat/page.tsx` 전송 로직, 기존 chat-relay 파이프라인        |
 | 1.40  | IntelliDecision 설명 매뉴얼 전환              | "AI 의사결정 로직" 탭의 시뮬레이션 트리거를 정적 사례 설명으로 교체                                                             | Story 1.18/1.32 정책 API+A~I 하위 탭, Story 1.31 KB 자동 구성             |
 

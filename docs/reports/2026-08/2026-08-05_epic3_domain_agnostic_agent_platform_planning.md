@@ -136,3 +136,37 @@ Q&A 1건짜리 flowchart는 이 개념을 전혀 반영하지 못한다.
 - 코드 변경 없음(순수 계획 재정의). 다음 세션 착수 시 Task 1(스키마 검토)부터 진행하되, call_id
   그룹핑 쿼리 설계(Task 2)를 최우선으로 검증할 것.
 
+## 9. Story 1.38 세션 그룹핑 키 정정(같은 날, §8 직후) — call_id 단일 기준 → 채널별 그룹핑
+
+사용자가 §8의 "동일 call_id 세션" 설계를 검토하며 "call_id 그룹핑은 통화 기준에선 좋은 방법이지만,
+주로 사용이 예상되는 문자의 경우는 call_id가 하나의 트랜잭션마다 나뉘지 않냐"고 지적했다.
+
+**코드로 직접 확인한 결과, 정확한 지적이었다**:
+
+- `src/sip_core/sip_endpoint.py`가 SIP MESSAGE 1건(트랜잭션)마다
+  `call_id = f"{uuid.uuid4().hex}@{host}"`로 **매번 새 call_id를 발급**한다 — 음성 통화의 call_id
+  (통화 하나 전체에 유지)와 근본적으로 다른 개념이다.
+- 실제 채팅 대화 이력은 `src/services/chat_service.py`의 `thread_id`(상대방 번호)+`owner`로
+  그룹핑되고 있었다(`chat_messages` 테이블).
+- 그런데 `self_service_decision_log` 테이블(`src/common/self_service_decision_log_db.py`)에는
+  `owner`/`call_id`/`matched_type`/`reasoning_summary`/`related_domain`만 있고 **`caller_number`/
+  `thread_id` 컬럼 자체가 없다** — 애초에 채팅 세션을 그룹핑할 수단이 로그에 남아있지 않았다.
+
+**반영 결과**:
+
+- Story 1.38의 세션 그룹핑 키를 채널별로 분리 — 음성 통화는 기존대로 `call_id`, 채팅/MESSAGE는
+  `(owner, caller_number)` + 시간 윈도우(예: 마지막 턴으로부터 N분 이내 후속 메시지는 같은 세션,
+  N은 튜닝 가능한 설정값)로 재정의. Task 1에 `self_service_decision_log`에 `caller_number` 컬럼
+  추가를 선행 조건으로 명시.
+- PRD FR34-F(v1.8)/architecture 설계원칙(c)·Story표(v0.26)/Story 1.38 AC·Task·Dev Notes 전체
+  동기화. 시간 윈도우 임계값은 실측 데이터 없이 정하기 어려우므로 넉넉한 기본값(예: 30분)으로
+  시작하고 IV 검증 중 조정 여지를 열어둠.
+- **교훈**: "여러 턴을 하나의 세션으로 묶는" 기능을 설계할 때는, 그 그룹핑 키가 **모든 채널에서
+  동일한 의미를 갖는지** 반드시 코드로 직접 확인할 것 — 이번처럼 음성 통화에서는 자연스러운 개념
+  (call_id=세션)이 다른 채널(SIP MESSAGE=트랜잭션 단위 ID)에서는 전혀 다른 의미를 가질 수 있다.
+  하나의 식별자 이름(`call_id`)이 여러 프로토콜/채널에 걸쳐 재사용되고 있으면, 그 필드가 각
+  채널에서 실제로 무엇을 나타내는지 코드 레벨에서 검증하지 않고 "이름이 같으니 같은 개념일 것"
+  이라 가정하지 말 것.
+- 코드 변경 없음(순수 계획 재정의). 다음 세션 착수 시 Story 1.38 Task 1(`caller_number` 컬럼
+  추가)부터 진행할 것.
+
