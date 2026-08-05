@@ -1208,314 +1208,314 @@ export default function AiAssistantDocsPage() {
                     </div>
 
                     {uploadSection === "tenant" && (
-                    <div className="space-y-5">
-                    <p className="text-xs text-gray-500">
-                        마크다운·PDF·OpenAPI 문서를 업로드해 지식베이스에 등록합니다. 등록된 문서는
-                        도메인 태그와 함께 청크 단위로 색인되며, 아래 목록에서 수정·삭제할 수 있습니다.
-                    </p>
+                        <div className="space-y-5">
+                            <p className="text-xs text-gray-500">
+                                마크다운·PDF·OpenAPI 문서를 업로드해 지식베이스에 등록합니다. 등록된 문서는
+                                도메인 태그와 함께 청크 단위로 색인되며, 아래 목록에서 수정·삭제할 수 있습니다.
+                            </p>
 
-                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">제목</label>
-                                <input
-                                    type="text"
-                                    value={uploadTitle}
-                                    onChange={(e) => setUploadTitle(e.target.value)}
-                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                    placeholder="예: 예약 API 문서"
-                                />
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs text-gray-500 mb-1">제목</label>
+                                        <input
+                                            type="text"
+                                            value={uploadTitle}
+                                            onChange={(e) => setUploadTitle(e.target.value)}
+                                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                            placeholder="예: 예약 API 문서"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-gray-500 mb-1">
+                                            도메인 태그(콤마 구분)
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={uploadDomainTags}
+                                            onChange={(e) => setUploadDomainTags(e.target.value)}
+                                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                            placeholder="예: api-docs,billing"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-500 mb-1">소스 유형</label>
+                                    <select
+                                        value={uploadSourceType}
+                                        onChange={(e) =>
+                                            setUploadSourceType(e.target.value as "markdown" | "pdf" | "openapi")
+                                        }
+                                        className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                    >
+                                        <option value="markdown">마크다운/일반 텍스트</option>
+                                        <option value="pdf">PDF 파일</option>
+                                        <option value="openapi">OpenAPI 스펙(JSON/YAML)</option>
+                                    </select>
+                                </div>
+                                {uploadSourceType === "pdf" ? (
+                                    <div>
+                                        <label className="block text-xs text-gray-500 mb-1">PDF 파일</label>
+                                        <input
+                                            type="file"
+                                            accept="application/pdf"
+                                            onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                                            className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-indigo-700"
+                                        />
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <label className="block text-xs text-gray-500 mb-1">
+                                            {uploadSourceType === "openapi" ? "OpenAPI 스펙 본문" : "본문 텍스트"}
+                                        </label>
+                                        <textarea
+                                            value={uploadTextBody}
+                                            onChange={(e) => setUploadTextBody(e.target.value)}
+                                            rows={6}
+                                            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm font-mono"
+                                            placeholder={
+                                                uploadSourceType === "openapi"
+                                                    ? '{"paths": {"/example": {"get": {"summary": "..."}}}}'
+                                                    : "문서 본문을 입력하세요"
+                                            }
+                                        />
+                                    </div>
+                                )}
+                                <button
+                                    onClick={() => void handleUploadDocument()}
+                                    disabled={uploading || !uploadTitle}
+                                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                                >
+                                    {uploading ? "업로드 중…" : "업로드"}
+                                </button>
+                                {uploadResult && (
+                                    <div
+                                        className={
+                                            "rounded-lg px-4 py-2 text-sm " +
+                                            (uploadResult.ok
+                                                ? "border border-green-200 bg-green-50 text-green-800"
+                                                : "border border-red-200 bg-red-50 text-red-800")
+                                        }
+                                    >
+                                        {uploadResult.ok
+                                            ? `${uploadResult.indexed_chunks}개 청크로 색인 완료`
+                                            : uploadResult.error || "업로드 실패"}
+                                    </div>
+                                )}
                             </div>
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">
-                                    도메인 태그(콤마 구분)
-                                </label>
-                                <input
-                                    type="text"
-                                    value={uploadDomainTags}
-                                    onChange={(e) => setUploadDomainTags(e.target.value)}
-                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                    placeholder="예: api-docs,billing"
-                                />
+
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+                                {loadingKbDocuments && (
+                                    <p className="p-4 text-sm text-gray-400">로딩 중…</p>
+                                )}
+                                {kbDocumentsError && (
+                                    <p className="p-4 text-sm text-red-800">{kbDocumentsError}</p>
+                                )}
+                                {!loadingKbDocuments && !kbDocumentsError && (
+                                    <table className="w-full text-left text-sm">
+                                        <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                                            <tr>
+                                                <th className="px-4 py-2">제목</th>
+                                                <th className="px-4 py-2">태그</th>
+                                                <th className="px-4 py-2">유형</th>
+                                                <th className="px-4 py-2">청크 수</th>
+                                                <th className="px-4 py-2">업로드 시각</th>
+                                                <th className="px-4 py-2"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {kbDocuments.map((doc) => (
+                                                <tr key={doc.document_id}>
+                                                    <td className="px-4 py-2 text-gray-700">{doc.title}</td>
+                                                    <td className="px-4 py-2 text-gray-500">
+                                                        {doc.domain_tags.join(", ")}
+                                                    </td>
+                                                    <td className="px-4 py-2 text-gray-500">{doc.source_type}</td>
+                                                    <td className="px-4 py-2 text-gray-500">{doc.chunk_count}</td>
+                                                    <td className="px-4 py-2 text-gray-500">{doc.uploaded_at}</td>
+                                                    <td className="px-4 py-2">
+                                                        <button
+                                                            onClick={() => void handleDeleteDocument(doc.document_id)}
+                                                            className="text-xs text-red-600 hover:underline"
+                                                        >
+                                                            삭제
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {kbDocuments.length === 0 && (
+                                                <tr>
+                                                    <td className="px-4 py-2 text-gray-400" colSpan={6}>
+                                                        업로드된 지식 문서가 없습니다.
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                )}
                             </div>
                         </div>
-                        <div>
-                            <label className="block text-xs text-gray-500 mb-1">소스 유형</label>
-                            <select
-                                value={uploadSourceType}
-                                onChange={(e) =>
-                                    setUploadSourceType(e.target.value as "markdown" | "pdf" | "openapi")
-                                }
-                                className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                            >
-                                <option value="markdown">마크다운/일반 텍스트</option>
-                                <option value="pdf">PDF 파일</option>
-                                <option value="openapi">OpenAPI 스펙(JSON/YAML)</option>
-                            </select>
-                        </div>
-                        {uploadSourceType === "pdf" ? (
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">PDF 파일</label>
-                                <input
-                                    type="file"
-                                    accept="application/pdf"
-                                    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-indigo-700"
-                                />
-                            </div>
-                        ) : (
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">
-                                    {uploadSourceType === "openapi" ? "OpenAPI 스펙 본문" : "본문 텍스트"}
-                                </label>
-                                <textarea
-                                    value={uploadTextBody}
-                                    onChange={(e) => setUploadTextBody(e.target.value)}
-                                    rows={6}
-                                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm font-mono"
-                                    placeholder={
-                                        uploadSourceType === "openapi"
-                                            ? '{"paths": {"/example": {"get": {"summary": "..."}}}}'
-                                            : "문서 본문을 입력하세요"
-                                    }
-                                />
-                            </div>
-                        )}
-                        <button
-                            onClick={() => void handleUploadDocument()}
-                            disabled={uploading || !uploadTitle}
-                            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-                        >
-                            {uploading ? "업로드 중…" : "업로드"}
-                        </button>
-                        {uploadResult && (
-                            <div
-                                className={
-                                    "rounded-lg px-4 py-2 text-sm " +
-                                    (uploadResult.ok
-                                        ? "border border-green-200 bg-green-50 text-green-800"
-                                        : "border border-red-200 bg-red-50 text-red-800")
-                                }
-                            >
-                                {uploadResult.ok
-                                    ? `${uploadResult.indexed_chunks}개 청크로 색인 완료`
-                                    : uploadResult.error || "업로드 실패"}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
-                        {loadingKbDocuments && (
-                            <p className="p-4 text-sm text-gray-400">로딩 중…</p>
-                        )}
-                        {kbDocumentsError && (
-                            <p className="p-4 text-sm text-red-800">{kbDocumentsError}</p>
-                        )}
-                        {!loadingKbDocuments && !kbDocumentsError && (
-                            <table className="w-full text-left text-sm">
-                                <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                                    <tr>
-                                        <th className="px-4 py-2">제목</th>
-                                        <th className="px-4 py-2">태그</th>
-                                        <th className="px-4 py-2">유형</th>
-                                        <th className="px-4 py-2">청크 수</th>
-                                        <th className="px-4 py-2">업로드 시각</th>
-                                        <th className="px-4 py-2"></th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                    {kbDocuments.map((doc) => (
-                                        <tr key={doc.document_id}>
-                                            <td className="px-4 py-2 text-gray-700">{doc.title}</td>
-                                            <td className="px-4 py-2 text-gray-500">
-                                                {doc.domain_tags.join(", ")}
-                                            </td>
-                                            <td className="px-4 py-2 text-gray-500">{doc.source_type}</td>
-                                            <td className="px-4 py-2 text-gray-500">{doc.chunk_count}</td>
-                                            <td className="px-4 py-2 text-gray-500">{doc.uploaded_at}</td>
-                                            <td className="px-4 py-2">
-                                                <button
-                                                    onClick={() => void handleDeleteDocument(doc.document_id)}
-                                                    className="text-xs text-red-600 hover:underline"
-                                                >
-                                                    삭제
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                    {kbDocuments.length === 0 && (
-                                        <tr>
-                                            <td className="px-4 py-2 text-gray-400" colSpan={6}>
-                                                업로드된 지식 문서가 없습니다.
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        )}
-                    </div>
-                    </div>
                     )}
 
                     {uploadSection === "system" && (
-                    <div>
-                        {/* 시스템 표준(FR33-C) 안내 — intellidecision_policy 유형 정의는 테넌트 무관 고정,
+                        <div>
+                            {/* 시스템 표준(FR33-C) 안내 — intellidecision_policy 유형 정의는 테넌트 무관 고정,
                             catalog_config/screen_graph는 테넌트별 편집 가능임을 명확히 구분한다. */}
-                        <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50/50 p-4">
-                            <p className="text-xs font-medium text-amber-800">
-                                시스템 표준(읽기 전용) vs 테넌트별 편집 가능
+                            <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50/50 p-4">
+                                <p className="text-xs font-medium text-amber-800">
+                                    시스템 표준(읽기 전용) vs 테넌트별 편집 가능
+                                </p>
+                                <p className="mt-1 text-xs text-amber-700">
+                                    &quot;AI 의사결정 로직&quot;(IntelliDecision 유형 A~I) 탭의 정책 정의는 테넌트·
+                                    도메인에 무관하게 재사용되는 시스템 표준이며 이 화면에서 편집할 수
+                                    없습니다. 아래 카탈로그·화면 안내 설정은 테넌트별로 다운로드/업로드/
+                                    롤백이 가능합니다.
+                                </p>
+                            </div>
+                            <p className="mb-4 text-sm text-gray-600">
+                                현재 AI 도우미 설정(카탈로그·화면 안내)을 파일로 다운로드해 검토하거나
+                                백업할 수 있습니다.
                             </p>
-                            <p className="mt-1 text-xs text-amber-700">
-                                &quot;AI 의사결정 로직&quot;(IntelliDecision 유형 A~I) 탭의 정책 정의는 테넌트·
-                                도메인에 무관하게 재사용되는 시스템 표준이며 이 화면에서 편집할 수
-                                없습니다. 아래 카탈로그·화면 안내 설정은 테넌트별로 다운로드/업로드/
-                                롤백이 가능합니다.
-                            </p>
-                        </div>
-                        <p className="mb-4 text-sm text-gray-600">
-                            현재 AI 도우미 설정(카탈로그·화면 안내)을 파일로 다운로드해 검토하거나
-                            백업할 수 있습니다.
-                        </p>
-                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-5">
-                        <div className="flex items-center justify-between gap-4">
-                            <div>
-                                <h2 className="text-sm font-semibold text-gray-800">설정 다운로드</h2>
-                                <p className="mt-1 text-xs text-gray-500">
-                                    카탈로그 설정과 화면 안내 정보를 JSON 파일로 내려받습니다.
-                                </p>
-                            </div>
-                            <button
-                                onClick={() => void downloadCatalogConfig()}
-                                disabled={exporting}
-                                className="flex-shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                            >
-                                {exporting ? "다운로드 중…" : "설정 다운로드"}
-                            </button>
-                        </div>
-
-                        {exportError && (
-                            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                                {exportError}
-                            </div>
-                        )}
-
-                        {lastExport && !exportError && (
-                            <div className="mt-4 space-y-1 border-t border-gray-100 pt-3 text-xs text-gray-500">
-                                <p>
-                                    카탈로그:{" "}
-                                    {lastExport.catalog_source === "db"
-                                        ? `버전 v${lastExport.catalog_version}(DB에 저장된 활성 설정)`
-                                        : "아직 저장된 버전이 없어 기본값을 내려받았습니다"}
-                                </p>
-                                <p>
-                                    화면 안내:{" "}
-                                    {lastExport.screen_graph_source === "db"
-                                        ? `버전 v${lastExport.screen_graph_version}(DB에 저장된 활성 설정)`
-                                        : "아직 저장된 버전이 없어 기본값을 내려받았습니다"}
-                                </p>
-                                <p>내보낸 시각: {new Date(lastExport.exported_at).toLocaleString()}</p>
-                            </div>
-                        )}
-                    </div>
-                    <p className="mt-3 text-xs text-gray-400">
-                        다운로드한 파일을 편집한 뒤 아래에서 다시 업로드해 설정을 갱신할 수 있습니다.
-                    </p>
-
-                    {/* 설정 업로드 — Epic 2 Story 2.5 */}
-                    <div className="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm p-5">
-                        <h2 className="text-sm font-semibold text-gray-800">설정 업로드</h2>
-                        <p className="mt-1 text-xs text-gray-500">
-                            편집한 JSON 파일을 선택하면 서버가 먼저 검증하고, 무엇이 바뀌는지
-                            미리보기를 보여줍니다. &quot;확정 적용&quot;을 눌러야 실제로 반영됩니다.
-                        </p>
-                        <input
-                            type="file"
-                            accept="application/json"
-                            disabled={importing}
-                            onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) void handleFileSelected(file);
-                                e.target.value = "";
-                            }}
-                            className="mt-3 block text-xs text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-indigo-700 hover:file:bg-indigo-100"
-                        />
-                        {importing && <p className="mt-2 text-xs text-gray-400">검증 중…</p>}
-
-                        {importError && (
-                            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                                {importError}
-                            </div>
-                        )}
-
-                        {importResult && !importResult.ok && (
-                            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                                <p className="font-medium">검증 실패 — 아무것도 반영되지 않았습니다.</p>
-                                {importResult.catalog_errors.length > 0 && (
-                                    <ul className="mt-1 list-disc pl-4">
-                                        {importResult.catalog_errors.map((e, i) => (
-                                            <li key={`ce-${i}`}>[카탈로그] {e}</li>
-                                        ))}
-                                    </ul>
-                                )}
-                                {importResult.screen_graph_errors.length > 0 && (
-                                    <ul className="mt-1 list-disc pl-4">
-                                        {importResult.screen_graph_errors.map((e, i) => (
-                                            <li key={`se-${i}`}>[화면 안내] {e}</li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </div>
-                        )}
-
-                        {importResult && importResult.ok && (
-                            <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/50 px-4 py-3">
-                                <p className="text-xs font-medium text-indigo-800">
-                                    검증 통과 — 미리보기(아직 적용되지 않음)
-                                </p>
-                                <div className="mt-2 space-y-2 text-xs text-gray-700">
-                                    <DiffPreview label="카탈로그" diff={importResult.catalog_diff} />
-                                    <DiffPreview label="화면 안내" diff={importResult.screen_graph_diff} />
+                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-5">
+                                <div className="flex items-center justify-between gap-4">
+                                    <div>
+                                        <h2 className="text-sm font-semibold text-gray-800">설정 다운로드</h2>
+                                        <p className="mt-1 text-xs text-gray-500">
+                                            카탈로그 설정과 화면 안내 정보를 JSON 파일로 내려받습니다.
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => void downloadCatalogConfig()}
+                                        disabled={exporting}
+                                        className="flex-shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                                    >
+                                        {exporting ? "다운로드 중…" : "설정 다운로드"}
+                                    </button>
                                 </div>
-                                <button
-                                    onClick={() => void applyImportedVersions()}
+
+                                {exportError && (
+                                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                                        {exportError}
+                                    </div>
+                                )}
+
+                                {lastExport && !exportError && (
+                                    <div className="mt-4 space-y-1 border-t border-gray-100 pt-3 text-xs text-gray-500">
+                                        <p>
+                                            카탈로그:{" "}
+                                            {lastExport.catalog_source === "db"
+                                                ? `버전 v${lastExport.catalog_version}(DB에 저장된 활성 설정)`
+                                                : "아직 저장된 버전이 없어 기본값을 내려받았습니다"}
+                                        </p>
+                                        <p>
+                                            화면 안내:{" "}
+                                            {lastExport.screen_graph_source === "db"
+                                                ? `버전 v${lastExport.screen_graph_version}(DB에 저장된 활성 설정)`
+                                                : "아직 저장된 버전이 없어 기본값을 내려받았습니다"}
+                                        </p>
+                                        <p>내보낸 시각: {new Date(lastExport.exported_at).toLocaleString()}</p>
+                                    </div>
+                                )}
+                            </div>
+                            <p className="mt-3 text-xs text-gray-400">
+                                다운로드한 파일을 편집한 뒤 아래에서 다시 업로드해 설정을 갱신할 수 있습니다.
+                            </p>
+
+                            {/* 설정 업로드 — Epic 2 Story 2.5 */}
+                            <div className="mt-6 rounded-xl border border-gray-100 bg-white shadow-sm p-5">
+                                <h2 className="text-sm font-semibold text-gray-800">설정 업로드</h2>
+                                <p className="mt-1 text-xs text-gray-500">
+                                    편집한 JSON 파일을 선택하면 서버가 먼저 검증하고, 무엇이 바뀌는지
+                                    미리보기를 보여줍니다. &quot;확정 적용&quot;을 눌러야 실제로 반영됩니다.
+                                </p>
+                                <input
+                                    type="file"
+                                    accept="application/json"
+                                    disabled={importing}
+                                    onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) void handleFileSelected(file);
+                                        e.target.value = "";
+                                    }}
+                                    className="mt-3 block text-xs text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-indigo-700 hover:file:bg-indigo-100"
+                                />
+                                {importing && <p className="mt-2 text-xs text-gray-400">검증 중…</p>}
+
+                                {importError && (
+                                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                                        {importError}
+                                    </div>
+                                )}
+
+                                {importResult && !importResult.ok && (
+                                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                                        <p className="font-medium">검증 실패 — 아무것도 반영되지 않았습니다.</p>
+                                        {importResult.catalog_errors.length > 0 && (
+                                            <ul className="mt-1 list-disc pl-4">
+                                                {importResult.catalog_errors.map((e, i) => (
+                                                    <li key={`ce-${i}`}>[카탈로그] {e}</li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                        {importResult.screen_graph_errors.length > 0 && (
+                                            <ul className="mt-1 list-disc pl-4">
+                                                {importResult.screen_graph_errors.map((e, i) => (
+                                                    <li key={`se-${i}`}>[화면 안내] {e}</li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+                                )}
+
+                                {importResult && importResult.ok && (
+                                    <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+                                        <p className="text-xs font-medium text-indigo-800">
+                                            검증 통과 — 미리보기(아직 적용되지 않음)
+                                        </p>
+                                        <div className="mt-2 space-y-2 text-xs text-gray-700">
+                                            <DiffPreview label="카탈로그" diff={importResult.catalog_diff} />
+                                            <DiffPreview label="화면 안내" diff={importResult.screen_graph_diff} />
+                                        </div>
+                                        <button
+                                            onClick={() => void applyImportedVersions()}
+                                            disabled={applying}
+                                            className="mt-3 rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                                        >
+                                            {applying ? "적용 중…" : "확정 적용"}
+                                        </button>
+                                    </div>
+                                )}
+
+                                {applyError && (
+                                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                                        {applyError}
+                                    </div>
+                                )}
+                                {applySuccessMsg && (
+                                    <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+                                        {applySuccessMsg}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 버전 이력 + 롤백 — Epic 2 Story 2.5 */}
+                            <div className="mt-6 grid gap-4 md:grid-cols-2">
+                                <VersionHistoryTable
+                                    title="카탈로그 버전 이력"
+                                    versions={catalogVersions}
+                                    loading={loadingVersions}
                                     disabled={applying}
-                                    className="mt-3 rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                                >
-                                    {applying ? "적용 중…" : "확정 적용"}
-                                </button>
+                                    onRollback={(v) => void rollbackToVersion("catalog", v)}
+                                />
+                                <VersionHistoryTable
+                                    title="화면 안내 버전 이력"
+                                    versions={screenGraphVersions}
+                                    loading={loadingVersions}
+                                    disabled={applying}
+                                    onRollback={(v) => void rollbackToVersion("screen_graph", v)}
+                                />
                             </div>
-                        )}
-
-                        {applyError && (
-                            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                                {applyError}
-                            </div>
-                        )}
-                        {applySuccessMsg && (
-                            <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
-                                {applySuccessMsg}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* 버전 이력 + 롤백 — Epic 2 Story 2.5 */}
-                    <div className="mt-6 grid gap-4 md:grid-cols-2">
-                        <VersionHistoryTable
-                            title="카탈로그 버전 이력"
-                            versions={catalogVersions}
-                            loading={loadingVersions}
-                            disabled={applying}
-                            onRollback={(v) => void rollbackToVersion("catalog", v)}
-                        />
-                        <VersionHistoryTable
-                            title="화면 안내 버전 이력"
-                            versions={screenGraphVersions}
-                            loading={loadingVersions}
-                            disabled={applying}
-                            onRollback={(v) => void rollbackToVersion("screen_graph", v)}
-                        />
-                    </div>
-                    </div>
+                        </div>
                     )}
                 </div>
             )}
