@@ -410,6 +410,20 @@ function HopPathTrail({ edges }: { edges: HopEdgeLike[] }) {
     );
 }
 
+// Story 1.43(FR35-C): "플랫폼 공통(모든 테넌트 고정)" vs "테넌트 데이터(업로드로 만들어짐)" 구분 배지.
+// 신규 백엔드 필드 없이, 어느 탭/섹션 데이터인지(호출 맥락)로 판별한다(AC3).
+function OriginBadge({ kind }: { kind: "platform" | "tenant" }) {
+    return kind === "platform" ? (
+        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700">
+            🏛️ 플랫폼 공통
+        </span>
+    ) : (
+        <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700">
+            📁 테넌트 데이터
+        </span>
+    );
+}
+
 // Story 1.46(FR35-F): 세션 턴 카드의 "① 유형 ② RAG ③ hop ④ Tool ⑤ 응답" 번호 나열을
 // 한 줄 자연어 요약으로 번역(배지 자체는 상세 확인용으로 그대로 유지).
 function summarizeTurnPlain(
@@ -1273,10 +1287,15 @@ export default function AiAssistantDocsPage() {
             {/* ── AI 의사결정 로직(IntelliDecision 정책 레지스트리) 탭 — Story 1.18, 축 C-1 ── */}
             {tab === "policy" && (
                 <div>
+                    <div className="mb-2">
+                        <OriginBadge kind="platform" />
+                    </div>
                     <p className="mb-4 text-xs text-gray-500">
                         AI 도우미가 발화를 유형 A~I로 어떻게 구분해 응대하는지 보여주는 판단 기준
                         레지스트리입니다. &quot;변경·되돌리기 필요&quot;로 표시된 유형은 실제로 쓰기
-                        가능한(설정 변경 API가 있는) 도메인에서만 성립합니다.
+                        가능한(설정 변경 API가 있는) 도메인에서만 성립합니다. 이 유형 정의는 테넌트가
+                        업로드하는 데이터와 무관하게 모든 테넌트에 항상 동일하게 적용되는 플랫폼
+                        표준입니다.
                     </p>
                     <div className="mb-4 flex gap-1">
                         <button
@@ -1497,8 +1516,9 @@ export default function AiAssistantDocsPage() {
 
                                         {/* Story 1.40(FR34-D): 지식베이스 기반 정적 사례 — 실시간 LLM 호출 없음 */}
                                         <div className="mt-4 border-t border-gray-50 pt-3">
-                                            <p className="mb-2 text-xs font-semibold text-gray-500">
+                                            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-500">
                                                 지식베이스 사례(LLM 미호출, 벡터 검색·지식 그래프 조회만 사용)
+                                                <OriginBadge kind="tenant" />
                                             </p>
                                             {loadingManualCases && <p className="text-xs text-gray-400">로딩 중…</p>}
                                             {manualCasesError && (
@@ -1681,6 +1701,9 @@ export default function AiAssistantDocsPage() {
             {/* ── 지식베이스 현황 탭 — Story 1.23, FR31-A(순수 관측, 응대 로직 무영향) ── */}
             {tab === "kb" && (
                 <div>
+                    <div className="mb-2">
+                        <OriginBadge kind="tenant" />
+                    </div>
                     <p className="mb-4 text-xs text-gray-500">
                         매뉴얼 RAG(ChromaDB)에 실제로 어떤 도움말 문서가 몇 개 청크로 색인되어 있고
                         마지막으로 언제 색인됐는지 보여줍니다. 이 화면은 조회 전용이며 AI 응대
