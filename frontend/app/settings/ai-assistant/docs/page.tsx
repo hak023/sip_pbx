@@ -444,8 +444,10 @@ function summarizeTurnPlain(
 
 // Story 1.30(FR33-A): "지식 업로드"·"설정 관리" 최상위 탭을 하나로 통합 — "manage"는
 // 더 이상 최상위 탭이 아니라 "upload" 탭 내부의 소스 유형 섹션(uploadSection="system")이다.
-// Story 1.39(FR34-E): 응답 시뮬레이터("simulate")를 삭제하고 실제 채팅 패널("chat")로 대체.
-type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "upload" | "chat";
+// Story 1.39(FR34-E): 응답 시뮬레이터("simulate")를 삭제하고 실제 채팅 패널(GlobalSmsDock)로 대체.
+// 사용자 요청(2026-08-06) 반영: 채팅 패널이 항상 최소화 상태로 떠 있으므로(GlobalSmsDock
+// 자체 초기화) 별도 "실제 채팅" 탭은 더 이상 필요 없어 제거함.
+type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "upload";
 // 지식 업로드 탭 내부 소스 유형 — ①테넌트 지식 문서(Story 1.26) ②시스템 공통 설정/구성(Epic 2)
 type UploadSection = "tenant" | "system";
 
@@ -946,10 +948,10 @@ export default function AiAssistantDocsPage() {
         [owner, loadKbDocuments]
     );
 
-    // Story 1.39(FR34-E): IntelliDecision 정책 탭 → 실제 채팅 탭 바로가기(예시 발화를 채팅
+    // Story 1.39(FR34-E): IntelliDecision 정책 탭 → 실제 채팅 바로가기(예시 발화를 채팅
     // 입력창에 채워주기만 함 — 실제 전송은 사용자가 직접 눌러야 함, 자동 발송하지 않는다).
+    // 사용자 요청(2026-08-06): 탭 전환 없이 항상 떠 있는 최소화 도크를 그대로 펼친다.
     const handleChatFromPolicy = useCallback((example: string) => {
-        setTab("chat");
         if (owner) {
             useActiveSmsDockStore.getState().openThreadFromCall({ owner, peer: owner });
         }
@@ -975,12 +977,8 @@ export default function AiAssistantDocsPage() {
         setLoadingExplorerPreview(false);
     }, [owner]);
 
-    // Story 1.39(FR34-E): "실제 채팅" 탭 진입 시 GlobalSmsDock(평소 수신 시에만 열리는 패널)을
-    // 자기 자신(owner==peer, NFR10) 스레드로 강제 활성화한다.
-    useEffect(() => {
-        if (tab !== "chat" || !owner) return;
-        useActiveSmsDockStore.getState().openThreadFromCall({ owner, peer: owner });
-    }, [tab, owner]);
+    // Story 1.39(FR34-E) → 2026-08-06 제거: "실제 채팅" 탭이 사라지면서 이 강제 활성화 효과도
+    // 불필요(GlobalSmsDock이 자체적으로 항상 최소화 상태로 떠 있음).
 
     useEffect(() => {
         if (tab === "qa" && owner && items.length === 0) void loadQa();
@@ -1044,7 +1042,7 @@ export default function AiAssistantDocsPage() {
 
             {/* 탭 */}
             <div className="flex gap-1 border-b border-gray-200 mb-6">
-                {(["qa", "catalog", "screen", "policy", "kb", "upload", "chat"] as Tab[]).map((t) => (
+                {(["qa", "catalog", "screen", "policy", "kb", "upload"] as Tab[]).map((t) => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -1065,9 +1063,7 @@ export default function AiAssistantDocsPage() {
                                         ? "AI 의사결정 로직"
                                         : t === "kb"
                                             ? "지식베이스 현황"
-                                            : t === "upload"
-                                                ? "지식 업로드"
-                                                : "실제 채팅"}
+                                            : "지식 업로드"}
                     </button>
                 ))}
             </div>
@@ -1424,7 +1420,7 @@ export default function AiAssistantDocsPage() {
                                             </ul>
                                         )}
                                         <p className="mt-3 text-xs text-gray-400">
-                                            질문을 선택하면 &quot;실제 채팅&quot; 탭으로 이동해 입력창에 채워집니다 —
+                                            질문을 선택하면 화면 왼쪽 아래 채팅 패널의 입력창에 채워집니다 —
                                             직접 전송을 눌러야 실제 AI 응답을 받습니다(사전 시뮬레이션 아님).
                                         </p>
 
@@ -2274,30 +2270,6 @@ export default function AiAssistantDocsPage() {
                             </div>
                         </div>
                     )}
-                </div>
-            )}
-
-            {/* ── 실제 채팅 탭 — Story 1.39, FR34-E(응답 시뮬레이터 폐지, 실제 chat-relay 파이프라인 재사용) ── */}
-            {tab === "chat" && (
-                <div className="space-y-5">
-                    <p className="text-xs text-gray-500">
-                        사전 시뮬레이션이 아니라, 왼쪽 하단에 열린 채팅 패널로 실제 나 자신(테넌트
-                        내선)에게 문자를 보내 실제 AI 응답을 받아볼 수 있습니다(NFR10 — 실제
-                        chat-relay/self_service_agent 경로를 그대로 사용). 주고받은 대화는 다른
-                        SIP MESSAGE와 동일하게 기록되어, &quot;최근 판단 이력&quot;에도 그대로
-                        반영됩니다.
-                    </p>
-                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-2">
-                        <p className="text-sm text-gray-700">
-                            화면 왼쪽 아래에 채팅 패널이 열려 있는지 확인하세요. 닫혀 있거나 최소화
-                            되어 있다면 다시 이 탭을 클릭하면 자동으로 열립니다.
-                        </p>
-                        {!owner && (
-                            <p className="text-sm text-red-600">
-                                테넌트(owner)가 설정되지 않아 채팅 패널을 열 수 없습니다.
-                            </p>
-                        )}
-                    </div>
                 </div>
             )}
         </div>

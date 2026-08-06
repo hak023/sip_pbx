@@ -26,13 +26,12 @@ const SECTIONS = [
     {
         id: "transparency",
         label: "응대 투명성",
-        description: "IntelliDecision 설명 매뉴얼·판단 이력 순서도·실제 채팅 패널",
+        description: "IntelliDecision 설명 매뉴얼·판단 이력 순서도·항상 떠 있는 채팅 패널",
         href: "/ai-agent/transparency",
         icon: "🔍",
         items: [
             { label: "AI 의사결정 로직 매뉴얼(플랫폼 공통)", href: "/settings/ai-assistant/docs#policy" },
             { label: "최근 판단 이력 순서도(테넌트 데이터)", href: "/settings/ai-assistant/docs#policy" },
-            { label: "실제 채팅 패널", href: "/settings/ai-assistant/docs#chat" },
         ],
     },
     {

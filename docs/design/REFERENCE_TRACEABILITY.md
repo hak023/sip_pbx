@@ -15,13 +15,13 @@
 
 ## 1. IntelliDecision 정책 레지스트리 (`src/ai_voicebot/self_service/intellidecision_policy.py`)
 
-| 레퍼런스 | 근거 | 채택/변형/기각 |
-|---|---|---|
-| **Amazon Alexa 표준 내장 인텐트**([공식 문서](https://developer.amazon.com/en-US/docs/alexa/custom-skills/standard-built-in-intents.html)) | `AMAZON.HelpIntent`(유형 C)/`AMAZON.FallbackIntent`(유형 F)/`AMAZON.RepeatIntent`(유형 I)/`AMAZON.CancelIntent`(유형 D/E)가 우리 유형 A~I와 1:1 대응 | **채택** — "임의 분류가 아니라 업계 표준 검증된 패턴"이라는 근거로 유형 A~I 설계를 뒷받침. 유형 G/H는 Alexa에 직접 대응 없어 "우리 도메인 특화 확장"으로 정직하게 구분 |
-| **Microsoft GraphRAG Local/Global Search**([공식 문서](https://microsoft.github.io/graphrag/)) | "질문 유형에 따라 다른 그래프 순회 전략을 매칭"한다는 개념이 `rag_strategy_hint`(유형별 RAG 전략 힌트) 설계의 학술 근거 | **부분 채택(경량화)** — Full GraphRAG(엔터티 자동추출+Leiden 클러스터링)는 규모상 과설계로 기각(2026-07-16/27 결론 유지), "질문유형별 hop전략 매칭" 개념만 `rag_strategy_hint` 필드로 재사용 |
-| **Mixed-Initiative Dialogue**(Jurafsky & Martin 교과서) + **Rasa Forms**(Unhappy Path) | "시스템주도/사용자주도/혼합주도" 학술 분류 + "대화가 예상 경로를 벗어났을 때 복구"하는 실제 오픈소스 패턴 | **채택** — IntelliDecision의 "대화로 사용자 목표를 끌어내되 이탈 시 복구"(유형 D/E/F) 철학의 이론적 근거로 채택 |
-| **Anthropic "Building Effective Agents"**(2024-12, Routing 워크플로) | "고객 문의 유형별 분류→전용 처리" 구조가 유형 A~I 라우팅과 구조적으로 동일 | **채택** — 관심사 분리(Routing) 원칙을 `intellidecision_policy.py` 레지스트리 패턴(코드가 아닌 데이터로 유형 정의)에 반영 |
-| **Semantic Router**(aurelio-labs, GitHub 3.8k stars) | 임베딩 기반 저지연 의도 라우팅, 콜센터 10ms 라우팅 실사례 | **검토 후 기각** — 저장소가 과거(Story 2.6) 유사한 임베딩 기반 사전 라우팅(`intent_tier.py`)을 베이스라인 검증 후 이미 제거한 이력이 있어, 재도입 시 동일한 검증 절차 필요(Non-Goal로 문서화, §6) |
+| 레퍼런스                                                                                                                                   | 근거                                                                                                                                                 | 채택/변형/기각                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Amazon Alexa 표준 내장 인텐트**([공식 문서](https://developer.amazon.com/en-US/docs/alexa/custom-skills/standard-built-in-intents.html)) | `AMAZON.HelpIntent`(유형 C)/`AMAZON.FallbackIntent`(유형 F)/`AMAZON.RepeatIntent`(유형 I)/`AMAZON.CancelIntent`(유형 D/E)가 우리 유형 A~I와 1:1 대응 | **채택** — "임의 분류가 아니라 업계 표준 검증된 패턴"이라는 근거로 유형 A~I 설계를 뒷받침. 유형 G/H는 Alexa에 직접 대응 없어 "우리 도메인 특화 확장"으로 정직하게 구분                            |
+| **Microsoft GraphRAG Local/Global Search**([공식 문서](https://microsoft.github.io/graphrag/))                                             | "질문 유형에 따라 다른 그래프 순회 전략을 매칭"한다는 개념이 `rag_strategy_hint`(유형별 RAG 전략 힌트) 설계의 학술 근거                              | **부분 채택(경량화)** — Full GraphRAG(엔터티 자동추출+Leiden 클러스터링)는 규모상 과설계로 기각(2026-07-16/27 결론 유지), "질문유형별 hop전략 매칭" 개념만 `rag_strategy_hint` 필드로 재사용      |
+| **Mixed-Initiative Dialogue**(Jurafsky & Martin 교과서) + **Rasa Forms**(Unhappy Path)                                                     | "시스템주도/사용자주도/혼합주도" 학술 분류 + "대화가 예상 경로를 벗어났을 때 복구"하는 실제 오픈소스 패턴                                            | **채택** — IntelliDecision의 "대화로 사용자 목표를 끌어내되 이탈 시 복구"(유형 D/E/F) 철학의 이론적 근거로 채택                                                                                   |
+| **Anthropic "Building Effective Agents"**(2024-12, Routing 워크플로)                                                                       | "고객 문의 유형별 분류→전용 처리" 구조가 유형 A~I 라우팅과 구조적으로 동일                                                                           | **채택** — 관심사 분리(Routing) 원칙을 `intellidecision_policy.py` 레지스트리 패턴(코드가 아닌 데이터로 유형 정의)에 반영                                                                         |
+| **Semantic Router**(aurelio-labs, GitHub 3.8k stars)                                                                                       | 임베딩 기반 저지연 의도 라우팅, 콜센터 10ms 라우팅 실사례                                                                                            | **검토 후 기각** — 저장소가 과거(Story 2.6) 유사한 임베딩 기반 사전 라우팅(`intent_tier.py`)을 베이스라인 검증 후 이미 제거한 이력이 있어, 재도입 시 동일한 검증 절차 필요(Non-Goal로 문서화, §6) |
 
 원본: [SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md) §3.10~3.12(Alexa/GraphRAG/Mixed-Initiative), §3.4(Semantic Router)
 
@@ -29,8 +29,8 @@
 
 ## 2. 유형 C 하이브리드 다중 도메인 RAG (`src/ai_voicebot/self_service/hybrid_rag.py`)
 
-| 레퍼런스 | 근거 | 채택/변형/기각 |
-|---|---|---|
+| 레퍼런스                             | 근거                                                                                                                              | 채택/변형/기각                                                                                                                                                                                                |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Microsoft GraphRAG Global Search** | "말뭉치 전체에 대한 총체적 질문 → 커뮤니티 요약 활용" 개념이 유형 C(포괄적 도움 요청)가 여러 카테고리를 총괄해야 하는 상황과 대응 | **경량화 채택** — Full GraphRAG의 자동 커뮤니티 클러스터링 없이, `settings_catalog.list_domains()`의 각 도메인을 병렬 조회하는 것으로 "Global Search류 총괄 검색"을 경량 구현(`search_hybrid_multi_domain()`) |
 
 원본: [SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md) §3.11
@@ -39,12 +39,12 @@
 
 ## 3. 도메인 비종속 지식 문서 업로드 (`src/ai_voicebot/self_service/knowledge_documents.py`, `document_adapters.py`)
 
-| 레퍼런스 | 근거 | 채택/변형/기각 |
-|---|---|---|
-| **OpenAI GPT Actions**([공식 문서](https://developers.openai.com/api/docs/actions/introduction)) | OpenAPI 스키마만 등록하면 서버 무수정으로 자연어 인터페이스 생성 | **부분 채택, 핵심 차별화** — "서버 무수정" 철학은 동일하나, GPT Actions는 사전 등록(정적)이 필요한 반면 우리 시스템은 **런타임 업로드 즉시 반영**이 차별점 |
-| **RestGPT**(arXiv:2306.06624) | LLM이 RESTful API 문서를 실시간으로 보고 계획·실행(API Executor 포함) | **채택(가장 근접한 구조)** — "런타임 문서 제공만으로 적응" 구조가 우리 방향과 구조적으로 동일. 단, 실제 실행(쓰기)은 Story 1.31에서 Non-Goal로 미뤄뒀다가 Story 1.34/1.35에서 화이트리스트 승인 방식으로 뒤늦게 도입 |
-| **mcp-link / openapi-mcp-server 등(OSS, GitHub 수백~수천 stars)** | 범용 OpenAPI→MCP 변환기, "Zero Code Modification"(원본 API 무수정) | **채택** — "서버는 그대로, 클라이언트만 적응"하는 핵심 아이디어가 사용자 요청과 정확히 일치함을 재확인 |
-| **GoEx**(Gorilla Execution Engine, arXiv:2404.06921) | LLM이 생성한 API 호출을 실제 실행하되 "undo/damage confinement"로 위험을 제한 | **채택** — Story 1.17 Undo Tool 설계 및 Story 1.34 `tool_execution_policy.py`(승인 화이트리스트+Undo 스냅샷)의 철학적 근거 |
+| 레퍼런스                                                                                         | 근거                                                                          | 채택/변형/기각                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenAI GPT Actions**([공식 문서](https://developers.openai.com/api/docs/actions/introduction)) | OpenAPI 스키마만 등록하면 서버 무수정으로 자연어 인터페이스 생성              | **부분 채택, 핵심 차별화** — "서버 무수정" 철학은 동일하나, GPT Actions는 사전 등록(정적)이 필요한 반면 우리 시스템은 **런타임 업로드 즉시 반영**이 차별점                                                           |
+| **RestGPT**(arXiv:2306.06624)                                                                    | LLM이 RESTful API 문서를 실시간으로 보고 계획·실행(API Executor 포함)         | **채택(가장 근접한 구조)** — "런타임 문서 제공만으로 적응" 구조가 우리 방향과 구조적으로 동일. 단, 실제 실행(쓰기)은 Story 1.31에서 Non-Goal로 미뤄뒀다가 Story 1.34/1.35에서 화이트리스트 승인 방식으로 뒤늦게 도입 |
+| **mcp-link / openapi-mcp-server 등(OSS, GitHub 수백~수천 stars)**                                | 범용 OpenAPI→MCP 변환기, "Zero Code Modification"(원본 API 무수정)            | **채택** — "서버는 그대로, 클라이언트만 적응"하는 핵심 아이디어가 사용자 요청과 정확히 일치함을 재확인                                                                                                               |
+| **GoEx**(Gorilla Execution Engine, arXiv:2404.06921)                                             | LLM이 생성한 API 호출을 실제 실행하되 "undo/damage confinement"로 위험을 제한 | **채택** — Story 1.17 Undo Tool 설계 및 Story 1.34 `tool_execution_policy.py`(승인 화이트리스트+Undo 스냅샷)의 철학적 근거                                                                                           |
 
 원본: [MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md](MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md) §2.1, §3.1~3.2, §4.1, §5(비교표)
 
@@ -52,11 +52,11 @@
 
 ## 4. 응대 투명성 UI (Story 1.32/1.38/1.44, `intellidecision_manual.py` 등)
 
-| 레퍼런스 | 근거 | 채택/변형/기각 |
-|---|---|---|
-| **Fin.ai / Glean** | RAG 매칭 근거와 hop 경로를 사용자에게 투명하게 노출하는 실사용 UX 패턴 | **채택** — "AI 응대가 실제로 어떤 데이터에 기반했는가"를 화면에 노출하는 설계 방향의 실사용 근거 |
-| **Anthropic Contextual Retrieval** | 청크 단위 검색 품질·투명성 실증치 | **참고만(적용 보류)** — 비용·품질 실측 스파이크 선행 필요로 Story 1.25에서 명시적 범위 제외 |
-| **Google Dialogflow CX**(공식 아키텍처 다이어그램) | 흐름/페이지/라우트 상태 머신 개념 | **개념 참고** — 인텐트 경로 vs 조건 경로 구분을 `intellidecision_policy.py` 설계에 참고(직접 코드 채택은 아님) |
+| 레퍼런스                                           | 근거                                                                   | 채택/변형/기각                                                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Fin.ai / Glean**                                 | RAG 매칭 근거와 hop 경로를 사용자에게 투명하게 노출하는 실사용 UX 패턴 | **채택** — "AI 응대가 실제로 어떤 데이터에 기반했는가"를 화면에 노출하는 설계 방향의 실사용 근거               |
+| **Anthropic Contextual Retrieval**                 | 청크 단위 검색 품질·투명성 실증치                                      | **참고만(적용 보류)** — 비용·품질 실측 스파이크 선행 필요로 Story 1.25에서 명시적 범위 제외                    |
+| **Google Dialogflow CX**(공식 아키텍처 다이어그램) | 흐름/페이지/라우트 상태 머신 개념                                      | **개념 참고** — 인텐트 경로 vs 조건 경로 구분을 `intellidecision_policy.py` 설계에 참고(직접 코드 채택은 아님) |
 
 원본: [SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md) §3.1~3.9
 
@@ -64,10 +64,10 @@
 
 ## 5. Non-Goal로 확정된 레퍼런스(참고했으나 채택하지 않음)
 
-| 레퍼런스 | 기각 사유 |
-|---|---|
+| 레퍼런스                                             | 기각 사유                                                                                                                                                                     |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Full GraphRAG**(엔터티 자동추출+Leiden 클러스터링) | 노드/엣지 규모(100개 미만)에 비해 알고리즘 복잡도가 과도(2026-07-16/27 최초 결론, 2026-07-30 재확인 — "파이프라인 확장성/관측성" 축과 "알고리즘 복잡도" 축을 구분해서 재확인) |
-| **Full MCP 서버 자체 구현** | Epic 3(FR34) 계획 단계에서 명시적 Non-Goal — 업로드 기반 명시적 등록이 우선, MCP 게이트웨이는 별도 Epic 후보(FR35-G)로 분리 |
+| **Full MCP 서버 자체 구현**                          | Epic 3(FR34) 계획 단계에서 명시적 Non-Goal — 업로드 기반 명시적 등록이 우선, MCP 게이트웨이는 별도 Epic 후보(FR35-G)로 분리                                                   |
 
 ---
 

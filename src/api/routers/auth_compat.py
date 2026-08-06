@@ -26,7 +26,9 @@ def _tenant_rows() -> List[Dict[str, Any]]:
                 return data
         except json.JSONDecodeError:
             pass
-    csv = os.environ.get("SIP_TENANT_EXTENSIONS", "1001,1002,1003,1004")
+    # 9001: self_service/Epic 1~4 QA에서 지속적으로 쓰인 테스트 테넌트(다수 Story의 실서버 IV
+    # 기본 owner) — 로그인 화면에서 선택 가능하도록 기본 목록에 포함.
+    csv = os.environ.get("SIP_TENANT_EXTENSIONS", "1001,1002,1003,1004,9001")
     out: List[Dict[str, Any]] = []
     for part in csv.split(","):
         ext = part.strip()

@@ -57,6 +57,7 @@ export function GlobalSmsDock() {
   const dismiss = useActiveSmsDockStore((s) => s.dismiss);
   const appendOutboundPending = useActiveSmsDockStore((s) => s.appendOutboundPending);
   const completePendingOutbound = useActiveSmsDockStore((s) => s.completePendingOutbound);
+  const ensureSelfThreadMinimized = useActiveSmsDockStore((s) => s.ensureSelfThreadMinimized);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
@@ -65,6 +66,15 @@ export function GlobalSmsDock() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   /** caller_contacts.display_name — 없으면 말풍선에 "상대" 유지 */
   const [peerContactName, setPeerContactName] = useState<string | null>(null);
+
+  // 사용자 요청 반영: "실제 채팅" 진입 없이도 항상 최소화된 상태로 도크가 떠 있어야 한다 —
+  // 페이지 최초 로드 시 자기 자신 스레드를 idle일 때만 최소화 상태로 미리 열어둔다.
+  useEffect(() => {
+    const owner = getTenantOwner().trim();
+    if (owner) ensureSelfThreadMinimized(owner);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   const ownerDisplay = useMemo(() => {
     const t = getTenantOwner().trim();

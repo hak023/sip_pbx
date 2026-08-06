@@ -58,6 +58,9 @@ type State = {
     expand?: boolean;
   }) => void;
   openThreadFromCall: (args: { owner: string; peer: string; relatedCallId?: string | null }) => void;
+  /** 사용자 요청 반영: 페이지 로드 시 자기 자신과의 스레드를 항상 최소화 상태로 미리 열어둔다
+   * (기존에 다른 스레드가 열려 있으면 건드리지 않음 — idle일 때만 적용). */
+  ensureSelfThreadMinimized: (owner: string) => void;
   pushLine: (line: Omit<SmsDockLine, "id" | "ts"> & { id?: string; ts?: string }) => void;
   /** HTTP 발신 직후 pending 줄 */
   appendOutboundPending: (args: {
@@ -129,6 +132,22 @@ export const useActiveSmsDockStore = create<State>()(
           lines: [],
           dockExpanded: true,
           userMinimized: false,
+        });
+      },
+
+      ensureSelfThreadMinimized: (owner) => {
+        const trimmed = owner.trim();
+        if (!trimmed || get().phase !== "idle") return;
+        const threadId = buildSmsThreadId(trimmed, trimmed);
+        set({
+          phase: "open",
+          activeThreadId: threadId,
+          activePeerKey: trimmed,
+          peerLabel: trimmed,
+          relatedCallId: null,
+          lines: [],
+          dockExpanded: false,
+          userMinimized: true,
         });
       },
 
