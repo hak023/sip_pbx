@@ -412,6 +412,11 @@ export default function AiAssistantDocsPage() {
     const [manualCases, setManualCases] = useState<IntelliDecisionManualCase[]>([]);
     const [loadingManualCases, setLoadingManualCases] = useState(false);
     const [manualCasesError, setManualCasesError] = useState<string | null>(null);
+    // Story 1.44(FR35-D): 응대 유형 탐색기 — 질문 선택 시 실제 채팅 이동 전에 매칭 미리보기를 먼저 보여준다(LLM 응답 생성 없음).
+    const [explorerPreview, setExplorerPreview] = useState<IntelliDecisionManualCase | null>(null);
+    const [explorerPreviewQuery, setExplorerPreviewQuery] = useState<string | null>(null);
+    const [loadingExplorerPreview, setLoadingExplorerPreview] = useState(false);
+    const [explorerPreviewError, setExplorerPreviewError] = useState<string | null>(null);
 
     // 최근 판단 이력 → 세션 단위 순서도(Story 1.38, FR34-F) 상태
     const [decisionSessions, setDecisionSessions] = useState<DecisionSessionSummary[]>([]);
@@ -860,6 +865,25 @@ export default function AiAssistantDocsPage() {
         useActiveSmsDockStore.getState().setDraftText(example);
     }, [owner]);
 
+    // Story 1.44(FR35-D): "응대 유형 탐색기" — 질문 예시를 고르면 곧바로 채팅으로 넘어가지 않고,
+    // 먼저 실제 벡터 검색+지식 그래프 조회로 매칭 미리보기를 보여준다(LLM 응답 생성 없음).
+    const handleExplorePreview = useCallback(async (code: string, example: string) => {
+        setExplorerPreviewQuery(example);
+        setExplorerPreview(null);
+        setExplorerPreviewError(null);
+        if (!owner) return;
+        setLoadingExplorerPreview(true);
+        const res = await apiJson<IntelliDecisionManualCase>(
+            `/api/settings/ai-assistant/intellidecision-manual/preview?owner=${encodeURIComponent(owner)}&code=${encodeURIComponent(code)}&query=${encodeURIComponent(example)}`
+        );
+        if (res.ok) {
+            setExplorerPreview(res.data);
+        } else {
+            setExplorerPreviewError(res.message);
+        }
+        setLoadingExplorerPreview(false);
+    }, [owner]);
+
     // Story 1.39(FR34-E): "실제 채팅" 탭 진입 시 GlobalSmsDock(평소 수신 시에만 열리는 패널)을
     // 자기 자신(owner==peer, NFR10) 스레드로 강제 활성화한다.
     useEffect(() => {
@@ -1206,7 +1230,12 @@ export default function AiAssistantDocsPage() {
                                     {intentTypes.map((t) => (
                                         <button
                                             key={t.code}
-                                            onClick={() => setActiveIntentCode(t.code)}
+                                            onClick={() => {
+                                                setActiveIntentCode(t.code);
+                                                setExplorerPreview(null);
+                                                setExplorerPreviewQuery(null);
+                                                setExplorerPreviewError(null);
+                                            }}
                                             className={
                                                 "rounded-full px-3 py-1 text-xs font-semibold transition-colors " +
                                                 (activeIntentCode === t.code
@@ -1258,8 +1287,13 @@ export default function AiAssistantDocsPage() {
                                                         className="flex flex-wrap items-center gap-1.5 text-sm"
                                                     >
                                                         <button
-                                                            onClick={() => handleChatFromPolicy(ex)}
-                                                            className="rounded-lg border border-gray-200 px-2.5 py-1 text-left text-gray-700 hover:bg-indigo-50 hover:text-indigo-700"
+                                                            onClick={() => void handleExplorePreview(t.code, ex)}
+                                                            className={
+                                                                "rounded-lg border px-2.5 py-1 text-left hover:bg-indigo-50 hover:text-indigo-700 " +
+                                                                (explorerPreviewQuery === ex
+                                                                    ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                                                    : "border-gray-200 text-gray-700")
+                                                            }
                                                         >
                                                             &quot;{ex}&quot;
                                                         </button>
@@ -1285,6 +1319,60 @@ export default function AiAssistantDocsPage() {
                                             질문을 선택하면 &quot;실제 채팅&quot; 탭으로 이동해 입력창에 채워집니다 —
                                             직접 전송을 눌러야 실제 AI 응답을 받습니다(사전 시뮬레이션 아님).
                                         </p>
+
+                                        {/* Story 1.44(FR35-D): 선택한 질문의 매칭 미리보기 — LLM 응답 생성 없음 */}
+                                        {explorerPreviewQuery && (
+                                            <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+                                                <p className="text-xs font-semibold text-indigo-900">
+                                                    🔍 &quot;{explorerPreviewQuery}&quot;은(는) 이렇게 처리될 예정이에요
+                                                </p>
+                                                {!owner && (
+                                                    <p className="mt-1 text-xs text-red-600">테넌트(owner)가 설정되지 않아 미리보기를 조회할 수 없습니다.</p>
+                                                )}
+                                                {loadingExplorerPreview && <p className="mt-1 text-xs text-gray-400">조회 중…</p>}
+                                                {explorerPreviewError && (
+                                                    <p className="mt-1 text-xs text-red-600">{explorerPreviewError}</p>
+                                                )}
+                                                {!loadingExplorerPreview && !explorerPreviewError && explorerPreview && (
+                                                    <div className="mt-2 space-y-2">
+                                                        {!explorerPreview.has_case && (
+                                                            <p className="text-xs text-gray-500">
+                                                                이 유형은 RAG 검색을 사용하지 않거나 매칭되는 지식베이스 문서가 없습니다.
+                                                            </p>
+                                                        )}
+                                                        {explorerPreview.has_case && (
+                                                            <>
+                                                                <p className="text-xs text-gray-600">관련 지식 문서 검색 결과</p>
+                                                                <ul className="space-y-1">
+                                                                    {explorerPreview.matched_documents.map((d, i) => (
+                                                                        <li key={`${d.doc_id}-${i}`} className="rounded-lg border border-white bg-white/70 p-2 text-xs">
+                                                                            📄 <span className="font-mono text-gray-500">{d.doc_id}</span>
+                                                                            {d.related_domain && ` · ${d.related_domain} 도메인`}
+                                                                            {" · 관련도 "}{Math.round(d.score * 100)}%
+                                                                            <p className="mt-1 text-gray-600">{d.excerpt}</p>
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                                {explorerPreview.hop_path.length > 0 && (
+                                                                    <p className="text-xs text-gray-600">
+                                                                        이어서 참고하는 화면/설정: {explorerPreview.hop_path.length}단계 연결됨
+                                                                    </p>
+                                                                )}
+                                                            </>
+                                                        )}
+                                                        <p className="text-xs text-indigo-400">
+                                                            ※ 이건 예측이며 실제 답변은 실제 대화에서 확인하세요(LLM 응답을 미리 생성하지 않습니다).
+                                                        </p>
+                                                        <button
+                                                            onClick={() => handleChatFromPolicy(explorerPreviewQuery)}
+                                                            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+                                                        >
+                                                            이대로 실제로 물어보기 →
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
 
                                         {/* Story 1.40(FR34-D): 지식베이스 기반 정적 사례 — 실시간 LLM 호출 없음 */}
                                         <div className="mt-4 border-t border-gray-50 pt-3">

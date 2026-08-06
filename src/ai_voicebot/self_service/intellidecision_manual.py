@@ -91,8 +91,19 @@ async def build_case_example_for_type(spec: Any, owner: str) -> TypeCaseExample:
     """
     if not getattr(spec, "rag_enabled", False) or not spec.trigger_examples:
         return TypeCaseExample(code=spec.code, has_case=False)
+    return await build_case_example_for_query(spec, owner, spec.trigger_examples[0])
 
-    example = spec.trigger_examples[0]
+
+async def build_case_example_for_query(spec: Any, owner: str, query: str) -> TypeCaseExample:
+    """`build_case_example_for_type`과 동일한 로직이되, 유형의 첫 번째 trigger_example 대신
+    임의의 질문(사용자가 선택한 질문 예시 포함)으로 조회한다(Story 1.44, FR35-D — 응대 유형
+    탐색기가 "이 질문을 고르면 이렇게 매칭될 것"을 미리 보여주기 위해 사용). 이 함수도 벡터
+    검색·지식 그래프 조회만 수행하며 LLM 응답 텍스트는 생성하지 않는다.
+    """
+    example = query.strip()
+    if not getattr(spec, "rag_enabled", False) or not example:
+        return TypeCaseExample(code=spec.code, has_case=False, trigger_example=example or None)
+
     rag_engine = get_self_service_rag_engine()
     if rag_engine is None:
         return TypeCaseExample(code=spec.code, has_case=False, trigger_example=example)

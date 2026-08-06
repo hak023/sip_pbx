@@ -123,6 +123,47 @@ class TestBuildCaseExampleForType:
         assert result.has_case is False
 
 
+class TestBuildCaseExampleForQuery:
+    """Story 1.44(FR35-D) — trigger_examples[0] 고정이 아니라 임의 질문으로 미리보기."""
+
+    @pytest.mark.asyncio
+    async def test_arbitrary_query_used_instead_of_first_trigger_example(self, monkeypatch):
+        seen_queries = []
+
+        class _FakeEngine:
+            async def search(self, query, *a, **kw):
+                seen_queries.append(query)
+                return _FakeSearchResult(
+                    documents=[_FakeDoc(id="doc-2", score=0.8, metadata={"related_domain": "chat-relay"})]
+                )
+
+        monkeypatch.setattr(manual, "get_self_service_rag_engine", lambda: _FakeEngine())
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.knowledge_graph.traverse_graph",
+            lambda source_type, source_id, max_hops, owner: [],
+        )
+
+        spec = _FakeSpec(code="A", rag_enabled=True, trigger_examples=["첫 예시", "두 번째 예시"])
+        result = await manual.build_case_example_for_query(spec, owner="9001", query="두 번째 예시")
+
+        assert seen_queries == ["두 번째 예시"]
+        assert result.trigger_example == "두 번째 예시"
+        assert result.has_case is True
+        assert result.matched_documents[0].doc_id == "doc-2"
+
+    @pytest.mark.asyncio
+    async def test_rag_disabled_type_returns_no_case(self, monkeypatch):
+        spec = _FakeSpec(code="D", rag_enabled=False, trigger_examples=["아니 그거 말고"])
+        result = await manual.build_case_example_for_query(spec, owner="9001", query="아니 그거 말고")
+        assert result.has_case is False
+
+    @pytest.mark.asyncio
+    async def test_blank_query_returns_no_case(self, monkeypatch):
+        spec = _FakeSpec(code="A", rag_enabled=True, trigger_examples=["뭘 할 수 있어?"])
+        result = await manual.build_case_example_for_query(spec, owner="9001", query="   ")
+        assert result.has_case is False
+
+
 class TestCollectHopPath:
     def test_deduplicates_and_caps_edges(self, monkeypatch):
         monkeypatch.setattr(

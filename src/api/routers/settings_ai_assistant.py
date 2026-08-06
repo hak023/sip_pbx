@@ -598,6 +598,61 @@ async def get_intellidecision_manual(
     )
 
 
+@router.get(
+    "/intellidecision-manual/preview", response_model=IntelliDecisionManualCaseOut,
+    summary="응대 유형 탐색기 — 선택한 질문 예시 1건에 대한 매칭 미리보기(Story 1.44, FR35-D)",
+)
+async def get_intellidecision_manual_preview(
+    owner: str = Query(..., description="테넌트 owner"),
+    code: str = Query(..., description="IntelliDecision 유형 코드(A~I)"),
+    query: str = Query(..., min_length=1, description="사용자가 선택한 질문 예시(trigger_examples 중 하나)"),
+) -> IntelliDecisionManualCaseOut:
+    """
+    "응대 유형 탐색기"에서 사용자가 질문 예시 하나를 고르면, 그 질문으로 실제 벡터 검색과 지식
+    그래프 조회를 수행해 매칭 문서·hop 경로를 미리 보여준다(Story 1.44). `/intellidecision-manual`
+    (Story 1.40)과 동일하게 **LLM 응답 텍스트는 생성하지 않는다** — `knowledge_base_simulate.py`
+    (Story 1.27/1.32, `ConversationAgent.process_utterance()` 호출로 실제 응답까지 생성)와 달리
+    이 엔드포인트는 그 방식을 의도적으로 재사용하지 않는다(응답 시뮬레이터 재도입 금지 원칙,
+    Story 1.39/1.40 계승).
+    """
+    from src.ai_voicebot.self_service import intellidecision_policy
+    from src.ai_voicebot.self_service.intellidecision_manual import build_case_example_for_query
+    from src.ai_voicebot.factory import get_ai_orchestrator
+    from src.ai_voicebot.langgraph.call_context import clear_call_context, set_call_context
+
+    spec = next((s for s in intellidecision_policy.list_intent_types() if s.code == code), None)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 유형 코드입니다: {code}")
+
+    orch = get_ai_orchestrator()
+    rag = getattr(orch, "rag", None)
+    set_call_context(
+        embedder=getattr(rag, "embedder", None) if rag else None,
+        vector_db=getattr(rag, "vector_db", None) if rag else None,
+    )
+    try:
+        c = await build_case_example_for_query(spec, owner, query)
+    finally:
+        clear_call_context()
+
+    return IntelliDecisionManualCaseOut(
+        code=c.code, has_case=c.has_case, trigger_example=c.trigger_example,
+        matched_documents=[
+            ManualCaseDocumentOut(
+                doc_id=d.doc_id, score=d.score, related_domain=d.related_domain, excerpt=d.excerpt,
+            )
+            for d in c.matched_documents
+        ],
+        hop_path=[
+            ManualHopEdgeOut(
+                hop=e.hop, edge_type=e.edge_type, source_type=e.source_type, source_id=e.source_id,
+                target_type=e.target_type, target_id=e.target_id,
+            )
+            for e in c.hop_path
+        ],
+    )
+
+
 # Story 1.37(FR34-C) — 문서별 hop 경로 조회 (신규 API, 최소 범위)
 class DocumentHopEdgeOut(BaseModel):
     hop: int
