@@ -20,6 +20,7 @@ const SECTIONS = [
             { label: "문서 업로드", href: "/settings/ai-assistant/docs#upload" },
             { label: "지식베이스 현황", href: "/settings/ai-assistant/docs#kb" },
             { label: "Tool/API 상세 카드", href: "/settings/ai-assistant/docs#kb" },
+            { label: "데이터 작성 가이드", href: "/ai-agent/knowledge-base/guide" },
         ],
     },
     {
