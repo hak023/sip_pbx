@@ -3,6 +3,7 @@
 import { apiJson } from "@/lib/api";
 import { getTenantOwner } from "@/lib/tenant";
 import { detectUploadFileKind, type UploadFileKind } from "@/lib/uploadFileKind";
+import { groupMatchedDocumentsByDomain } from "@/lib/groupMatchedDocumentsByDomain";
 import { useActiveSmsDockStore } from "@/store/useActiveSmsDockStore";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -1342,17 +1343,49 @@ export default function AiAssistantDocsPage() {
                                                         )}
                                                         {explorerPreview.has_case && (
                                                             <>
-                                                                <p className="text-xs text-gray-600">관련 지식 문서 검색 결과</p>
-                                                                <ul className="space-y-1">
-                                                                    {explorerPreview.matched_documents.map((d, i) => (
-                                                                        <li key={`${d.doc_id}-${i}`} className="rounded-lg border border-white bg-white/70 p-2 text-xs">
-                                                                            📄 <span className="font-mono text-gray-500">{d.doc_id}</span>
-                                                                            {d.related_domain && ` · ${d.related_domain} 도메인`}
-                                                                            {" · 관련도 "}{Math.round(d.score * 100)}%
-                                                                            <p className="mt-1 text-gray-600">{d.excerpt}</p>
-                                                                        </li>
-                                                                    ))}
-                                                                </ul>
+                                                                {(() => {
+                                                                    const grouped = groupMatchedDocumentsByDomain(explorerPreview.matched_documents);
+                                                                    if (grouped.isMultiDomain) {
+                                                                        return (
+                                                                            <>
+                                                                                <p className="text-xs text-gray-600">
+                                                                                    여러 영역({grouped.domainCount}개)을 동시에 참고했어요
+                                                                                </p>
+                                                                                <div className="space-y-2">
+                                                                                    {grouped.groups.map((g) => (
+                                                                                        <div key={g.domain} className="rounded-lg border border-white bg-white/50 p-2">
+                                                                                            <p className="text-xs font-semibold text-gray-500">{g.domain} 영역</p>
+                                                                                            <ul className="mt-1 space-y-1">
+                                                                                                {g.documents.map((d, i) => (
+                                                                                                    <li key={`${d.doc_id}-${i}`} className="rounded-lg bg-white/70 p-2 text-xs">
+                                                                                                        📄 <span className="font-mono text-gray-500">{d.doc_id}</span>
+                                                                                                        {" · 관련도 "}{Math.round(d.score * 100)}%
+                                                                                                        <p className="mt-1 text-gray-600">{d.excerpt}</p>
+                                                                                                    </li>
+                                                                                                ))}
+                                                                                            </ul>
+                                                                                        </div>
+                                                                                    ))}
+                                                                                </div>
+                                                                            </>
+                                                                        );
+                                                                    }
+                                                                    return (
+                                                                        <>
+                                                                            <p className="text-xs text-gray-600">관련 지식 문서 검색 결과</p>
+                                                                            <ul className="space-y-1">
+                                                                                {explorerPreview.matched_documents.map((d, i) => (
+                                                                                    <li key={`${d.doc_id}-${i}`} className="rounded-lg border border-white bg-white/70 p-2 text-xs">
+                                                                                        📄 <span className="font-mono text-gray-500">{d.doc_id}</span>
+                                                                                        {d.related_domain && ` · ${d.related_domain} 도메인`}
+                                                                                        {" · 관련도 "}{Math.round(d.score * 100)}%
+                                                                                        <p className="mt-1 text-gray-600">{d.excerpt}</p>
+                                                                                    </li>
+                                                                                ))}
+                                                                            </ul>
+                                                                        </>
+                                                                    );
+                                                                })()}
                                                                 {explorerPreview.hop_path.length > 0 && (
                                                                     <p className="text-xs text-gray-600">
                                                                         이어서 참고하는 화면/설정: {explorerPreview.hop_path.length}단계 연결됨
