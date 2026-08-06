@@ -1309,15 +1309,15 @@ stateDiagram-v2
 
 ### Story 매핑표
 
-| Story | 컴포넌트 변경 | 재사용 대상 |
-|---|---|---|
-| 1.41 | `page.tsx` 업로드 컨테이너 통합 + 파일 시그니처 판별 유틸(신규, 프론트 전용) | Story 1.26/1.30 API 무수정 |
-| 1.42 | 신규 가이드 페이지(`/ai-agent/knowledge-base/guide`, 정적 콘텐츠) | Story 1.31 분류 규칙 설명용 |
-| 1.43 | `/ai-agent` IA에 배지 컴포넌트 추가 | Story 1.36 |
-| 1.44 | 신규 `IntentExplorer` 컴포넌트(프론트), 백엔드 무수정 | `/intellidecision-policy`, `knowledge_base_simulate.py` |
-| 1.45 | `IntentExplorer`에 다중 도메인 카드 렌더링 분기 추가 | Story 1.33 `search_hybrid_multi_domain` |
-| 1.46 | 세션/카탈로그/KB 화면에 상호 링크 + hop 카드 UI 교체 | Story 1.32/1.38 |
-| 1.47 | 문서 전용, 코드 변경 없음 | - |
+| Story | 컴포넌트 변경                                                                | 재사용 대상                                             |
+| ----- | ---------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 1.41  | `page.tsx` 업로드 컨테이너 통합 + 파일 시그니처 판별 유틸(신규, 프론트 전용) | Story 1.26/1.30 API 무수정                              |
+| 1.42  | 신규 가이드 페이지(`/ai-agent/knowledge-base/guide`, 정적 콘텐츠)            | Story 1.31 분류 규칙 설명용                             |
+| 1.43  | `/ai-agent` IA에 배지 컴포넌트 추가                                          | Story 1.36                                              |
+| 1.44  | 신규 `IntentExplorer` 컴포넌트(프론트), 백엔드 무수정                        | `/intellidecision-policy`, `knowledge_base_simulate.py` |
+| 1.45  | `IntentExplorer`에 다중 도메인 카드 렌더링 분기 추가                         | Story 1.33 `search_hybrid_multi_domain`                 |
+| 1.46  | 세션/카탈로그/KB 화면에 상호 링크 + hop 카드 UI 교체                         | Story 1.32/1.38                                         |
+| 1.47  | 문서 전용, 코드 변경 없음                                                    | -                                                       |
 
 ---
 

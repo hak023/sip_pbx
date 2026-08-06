@@ -2,6 +2,7 @@
 
 import { apiJson } from "@/lib/api";
 import { getTenantOwner } from "@/lib/tenant";
+import { detectUploadFileKind, type UploadFileKind } from "@/lib/uploadFileKind";
 import { useActiveSmsDockStore } from "@/store/useActiveSmsDockStore";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -444,6 +445,9 @@ export default function AiAssistantDocsPage() {
     const [uploadResult, setUploadResult] = useState<KnowledgeDocumentUploadResponse | null>(null);
     // Story 1.30(FR33-A): 지식 업로드 탭 내부 소스 유형 토글(기본값: 테넌트 지식 문서)
     const [uploadSection, setUploadSection] = useState<UploadSection>("tenant");
+    // Story 1.41(FR35-A): 단일 드롭존 자동 판별 결과 안내 배너 + 판별 실패 시 폴백 선택 대기 파일
+    const [unifiedDetectMsg, setUnifiedDetectMsg] = useState<string | null>(null);
+    const [unifiedPendingFile, setUnifiedPendingFile] = useState<File | null>(null);
 
     // 설정 관리(내보내기) 상태 — Epic 2 Story 2.4
     const [exporting, setExporting] = useState(false);
@@ -748,6 +752,65 @@ export default function AiAssistantDocsPage() {
         }
         setUploading(false);
     }, [owner, uploadTitle, uploadDomainTags, uploadSourceType, uploadTextBody, uploadFile, loadKbDocuments]);
+
+    // Story 1.41(FR35-A): 파일 유형 판별 결과에 따라 "테넌트 지식 문서" 또는 "시스템 공통 설정"
+    // 폼에 자동으로 채워 넣는다. 기존 API/핸들러(handleFileSelected/handleUploadDocument)는
+    // 그대로 재사용하고, 이 함수는 라우팅만 담당한다(NFR8 — 데이터 모델 통합 아님).
+    const applyDetectedFile = useCallback(
+        (kind: UploadFileKind, file: File, sampleText: string) => {
+            const inferredTitle = file.name.replace(/\.[^.]+$/, "");
+            if (kind === "system_config") {
+                setUploadSection("system");
+                void handleFileSelected(file);
+                return;
+            }
+            if (kind === "openapi" || kind === "markdown") {
+                setUploadSection("tenant");
+                setUploadSourceType(kind);
+                setUploadTextBody(sampleText);
+                setUploadTitle((prev) => prev || inferredTitle);
+                return;
+            }
+            if (kind === "pdf") {
+                setUploadSection("tenant");
+                setUploadSourceType("pdf");
+                setUploadFile(file);
+                setUploadTitle((prev) => prev || inferredTitle);
+            }
+        },
+        [handleFileSelected]
+    );
+
+    // Story 1.41(FR35-A): 단일 드롭존 진입점 — 확장자/MIME/내용 시그니처로 자동 판별 후 라우팅.
+    // 판별 실패("unknown")면 자동 적용하지 않고 폴백 선택 UI(수동 유형 선택)를 노출한다(AC3).
+    const handleUnifiedFileDrop = useCallback(
+        async (file: File) => {
+            setUnifiedPendingFile(null);
+            setUnifiedDetectMsg(null);
+            const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+            const sampleText = isPdf ? "" : await file.text();
+            const { kind, reason } = detectUploadFileKind(file.name, sampleText, file.type);
+            setUnifiedDetectMsg(reason);
+            if (kind === "unknown") {
+                setUnifiedPendingFile(file);
+                return;
+            }
+            applyDetectedFile(kind, file, sampleText);
+        },
+        [applyDetectedFile]
+    );
+
+    // Story 1.41 AC3: 자동 판별 실패 시 사용자가 직접 유형을 선택하는 폴백
+    const handleManualKindChoice = useCallback(
+        async (kind: "system_config" | "openapi" | "markdown" | "pdf") => {
+            if (!unifiedPendingFile) return;
+            const file = unifiedPendingFile;
+            const sampleText = kind === "pdf" ? "" : await file.text();
+            setUnifiedPendingFile(null);
+            applyDetectedFile(kind, file, sampleText);
+        },
+        [unifiedPendingFile, applyDetectedFile]
+    );
 
     // 지식 문서 삭제(Story 1.26)
     // Story 1.37(FR34-C): 문서 hop 경로 펼침/접기(AC10 2단계 조회 패턴 재사용)
@@ -1595,6 +1658,60 @@ export default function AiAssistantDocsPage() {
             {/* ── 지식 업로드 탭 — Story 1.26/1.30, FR32-A/FR33-A/C(진입점 통합) ── */}
             {tab === "upload" && (
                 <div className="space-y-5">
+                    {/* Story 1.41(FR35-A): 단일 업로드 드롭존 — 파일 유형 자동 판별 후 아래 폼에 채워 넣는다 */}
+                    <div className="rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 p-5">
+                        <p className="text-sm font-medium text-indigo-900">파일을 올려주세요(자동으로 유형을 인식합니다)</p>
+                        <p className="mt-1 text-xs text-indigo-700">
+                            설정 파일(카탈로그·화면 안내 내보내기), 매뉴얼(마크다운/텍스트), PDF, OpenAPI
+                            스펙 중 무엇이든 하나의 창에 올리면 자동으로 알맞은 곳에 채워집니다.
+                        </p>
+                        <input
+                            type="file"
+                            onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) void handleUnifiedFileDrop(file);
+                                e.target.value = "";
+                            }}
+                            className="mt-3 block text-xs text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-100 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-indigo-700 hover:file:bg-indigo-200"
+                        />
+                        {unifiedDetectMsg && !unifiedPendingFile && (
+                            <p className="mt-2 text-xs text-indigo-800">✓ {unifiedDetectMsg} 아래 양식을 확인 후 업로드를 눌러주세요.</p>
+                        )}
+                        {unifiedPendingFile && (
+                            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                <p className="text-xs text-amber-800">
+                                    {unifiedDetectMsg} 유형을 직접 선택해주세요.
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => void handleManualKindChoice("system_config")}
+                                        className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                                    >
+                                        시스템 공통 설정(카탈로그/화면 안내)
+                                    </button>
+                                    <button
+                                        onClick={() => void handleManualKindChoice("openapi")}
+                                        className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                                    >
+                                        OpenAPI 스펙
+                                    </button>
+                                    <button
+                                        onClick={() => void handleManualKindChoice("markdown")}
+                                        className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                                    >
+                                        매뉴얼/텍스트 문서
+                                    </button>
+                                    <button
+                                        onClick={() => void handleManualKindChoice("pdf")}
+                                        className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                                    >
+                                        PDF 문서
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     {/* 소스 유형 세그먼트 — Story 1.30: 테넌트 지식 문서 vs 시스템 공통 설정/구성 */}
                     <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-sm">
                         {(["tenant", "system"] as UploadSection[]).map((s) => (
