@@ -55,6 +55,12 @@ def get_decision_log(
 def get_decision_log_sessions(
     owner: str = Query(..., description="테넌트 owner"),
     limit: int = Query(20, ge=1, le=200, description="최대 세션 수"),
+    related_domain: str | None = Query(
+        None, description="Story 1.46(FR35-F): 이 도메인이 매칭된 턴이 있는 세션만 필터링"
+    ),
+    doc_id: str | None = Query(
+        None, description="Story 1.46(FR35-F): 이 지식 문서(chunk) id가 매칭된 턴이 있는 세션만 필터링"
+    ),
 ) -> Dict[str, Any]:
     """owner의 판단 이력을 세션(채널별 그룹핑) 단위 요약으로 반환한다(Story 1.38, FR34-F).
 
@@ -62,9 +68,43 @@ def get_decision_log_sessions(
     기준으로 그룹핑한다(`self_service_decision_log_db.py::list_decision_log_sessions()`).
     턴 상세는 포함하지 않는다(AC10 1단계 로딩) — 특정 세션의 턴 전체는
     `GET /decision-log/sessions/{session_key}`로 별도 조회한다.
+
+    `related_domain`/`doc_id`가 주어지면(Story 1.46 지식베이스↔응대이력 교차 탐색), 세션 내
+    최소 한 턴의 RAG 매칭 결과(`self_service_rag_search` call_data_record 이벤트)가 그 조건과
+    일치하는 세션만 남긴다 — 신규 저장 로직 없이 기존 세션 상세 조회 경로를 재사용한다.
     """
-    items = list_decision_log_sessions(owner, limit=limit)
-    return {"items": items, "total": len(items)}
+    if not related_domain and not doc_id:
+        items = list_decision_log_sessions(owner, limit=limit)
+        return {"items": items, "total": len(items)}
+
+    # 필터링을 위해서는 세션별 턴 상세(call_id)가 필요하므로 더 넓게 가져와 판별 후 자른다.
+    candidates = list_decision_log_sessions(owner, limit=min(limit * 5, 200))
+    matched: List[Dict[str, Any]] = []
+    for summary in candidates:
+        detail = get_decision_log_session_detail(owner, summary["session_key"])
+        if detail is None:
+            continue
+        if _session_matches_filter(detail.get("turns", []), related_domain, doc_id):
+            matched.append(summary)
+        if len(matched) >= limit:
+            break
+    return {"items": matched, "total": len(matched)}
+
+
+def _session_matches_filter(
+    turns: List[Dict[str, Any]], related_domain: str | None, doc_id: str | None
+) -> bool:
+    """세션에 속한 턴 중 하나라도 주어진 related_domain/doc_id와 매칭되는 RAG 결과가 있으면 True."""
+    for turn in turns:
+        steps = _build_turn_steps(turn.get("call_id") or "")
+        rag = steps.get("rag")
+        if not rag:
+            continue
+        if related_domain and related_domain in (rag.get("related_domains") or []):
+            return True
+        if doc_id and doc_id in (rag.get("matched_doc_ids") or []):
+            return True
+    return False
 
 
 @router.get("/decision-log/sessions/{session_key}")

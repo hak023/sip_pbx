@@ -1,9 +1,9 @@
 "use client";
 
 import { apiJson } from "@/lib/api";
+import { groupMatchedDocumentsByDomain } from "@/lib/groupMatchedDocumentsByDomain";
 import { getTenantOwner } from "@/lib/tenant";
 import { detectUploadFileKind, type UploadFileKind } from "@/lib/uploadFileKind";
-import { groupMatchedDocumentsByDomain } from "@/lib/groupMatchedDocumentsByDomain";
 import { useActiveSmsDockStore } from "@/store/useActiveSmsDockStore";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -370,6 +370,64 @@ const DOMAIN_LABEL: Record<string, string> = {
     intro: "서비스 소개",
 };
 
+// Story 1.46(FR35-F): hop 경로 원시 문자열("--edge_type(hopN)-->")을 사람이 읽는 문구로 번역.
+interface HopEdgeLike {
+    hop: number;
+    edge_type: string;
+    source_type: string;
+    source_id: string;
+    target_type: string;
+    target_id: string;
+}
+
+const HOP_EDGE_LABEL: Record<string, string> = {
+    rendered_by: "이 화면에서 보여줘요",
+    writable: "여기서 값을 바꿀 수 있어요",
+    has_screen: "이 화면과 연결돼요",
+    relates_to: "서로 관련 있어요",
+};
+
+function humanizeHopNode(nodeType: string, id: string): string {
+    if (nodeType === "catalog_domain") return DOMAIN_LABEL[id] || id;
+    if (nodeType === "screen" || nodeType === "frontend_screen") return `화면(${id})`;
+    if (nodeType === "intent_type") return `유형 ${id}`;
+    if (nodeType === "document") return `문서(${id})`;
+    return id;
+}
+
+function HopPathTrail({ edges }: { edges: HopEdgeLike[] }) {
+    return (
+        <ul className="space-y-1">
+            {edges.map((e, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-500">{i + 1}단계</span>
+                    <span className="font-medium text-gray-700">{humanizeHopNode(e.source_type, e.source_id)}</span>
+                    <span className="text-gray-400">{HOP_EDGE_LABEL[e.edge_type] || "연결돼요"} →</span>
+                    <span className="font-medium text-indigo-700">{humanizeHopNode(e.target_type, e.target_id)}</span>
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+// Story 1.46(FR35-F): 세션 턴 카드의 "① 유형 ② RAG ③ hop ④ Tool ⑤ 응답" 번호 나열을
+// 한 줄 자연어 요약으로 번역(배지 자체는 상세 확인용으로 그대로 유지).
+function summarizeTurnPlain(
+    turn: { matched_type: string; steps: DecisionTurnSteps },
+    typeName: string | undefined
+): string {
+    const ragCount = turn.steps.rag ? (turn.steps.rag.matched_doc_ids || []).length : 0;
+    const typeLabel = turn.matched_type !== "unknown" && typeName ? `${turn.matched_type}(${typeName})` : "미확인 유형";
+    const elapsed = turn.steps.response_meta?.elapsed_sec;
+    const parts: string[] = [];
+    if (ragCount > 0) parts.push(`지식 ${ragCount}건을 참고해`);
+    if (turn.steps.tool_calls.length > 0) parts.push(`도구(${turn.steps.tool_calls.map((t) => t.tool).join(", ")})를 사용해`);
+    parts.push(`${typeLabel} 방식으로`);
+    parts.push(elapsed != null ? `${elapsed}초만에 답했어요` : "답했어요");
+    return "🔍 " + parts.join(" ");
+}
+
+
 // Story 1.30(FR33-A): "지식 업로드"·"설정 관리" 최상위 탭을 하나로 통합 — "manage"는
 // 더 이상 최상위 탭이 아니라 "upload" 탭 내부의 소스 유형 섹션(uploadSection="system")이다.
 // Story 1.39(FR34-E): 응답 시뮬레이터("simulate")를 삭제하고 실제 채팅 패널("chat")로 대체.
@@ -423,6 +481,8 @@ export default function AiAssistantDocsPage() {
     const [decisionSessions, setDecisionSessions] = useState<DecisionSessionSummary[]>([]);
     const [loadingDecisionSessions, setLoadingDecisionSessions] = useState(false);
     const [decisionSessionsError, setDecisionSessionsError] = useState<string | null>(null);
+    // Story 1.46(FR35-F): 지식베이스 항목에서 "이 항목이 쓰인 대화 보기" 링크로 들어왔을 때의 필터
+    const [sessionFilter, setSessionFilter] = useState<{ relatedDomain?: string; docId?: string; label: string } | null>(null);
     const [expandedSessionKey, setExpandedSessionKey] = useState<string | null>(null);
     const [sessionDetail, setSessionDetail] = useState<DecisionSessionDetail | null>(null);
     const [loadingSessionDetail, setLoadingSessionDetail] = useState(false);
@@ -646,12 +706,16 @@ export default function AiAssistantDocsPage() {
     );
 
     // 세션 목록 로드(Story 1.38, FR34-F, AC10 1단계 — 세션 요약만, 턴 상세는 펼칠 때 별도 조회)
+    // Story 1.46(FR35-F): sessionFilter가 설정되어 있으면 related_domain/doc_id 파라미터를 함께 보낸다.
     const loadDecisionSessions = useCallback(async () => {
         if (!owner) return;
         setLoadingDecisionSessions(true);
         setDecisionSessionsError(null);
+        const params = new URLSearchParams({ owner, limit: "20" });
+        if (sessionFilter?.relatedDomain) params.set("related_domain", sessionFilter.relatedDomain);
+        if (sessionFilter?.docId) params.set("doc_id", sessionFilter.docId);
         const res = await apiJson<{ items: DecisionSessionSummary[]; total: number }>(
-            `/api/self-service/decision-log/sessions?owner=${encodeURIComponent(owner)}&limit=20`
+            `/api/self-service/decision-log/sessions?${params.toString()}`
         );
         if (res.ok) {
             setDecisionSessions(res.data.items || []);
@@ -659,7 +723,19 @@ export default function AiAssistantDocsPage() {
             setDecisionSessionsError(res.message);
         }
         setLoadingDecisionSessions(false);
-    }, [owner]);
+    }, [owner, sessionFilter]);
+
+    // Story 1.46(FR35-F): qa/catalog/kb 항목의 "이 항목이 쓰인 대화 보기" 링크 핸들러
+    const handleViewSessionsFor = useCallback(
+        (filter: { relatedDomain?: string; docId?: string; label: string }) => {
+            setTab("policy");
+            setSessionFilter(filter);
+            setDecisionSessions([]);
+            setExpandedSessionKey(null);
+            setSessionDetail(null);
+        },
+        []
+    );
 
     // 세션 펼침/접기(AC10 2단계 — 펼칠 때만 턴 상세 조회)
     const handleToggleSession = useCallback(
@@ -1053,6 +1129,12 @@ export default function AiAssistantDocsPage() {
                                     <p className="mt-2 text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">
                                         {item.answer}
                                     </p>
+                                    <button
+                                        onClick={() => handleViewSessionsFor({ docId: item.id, label: item.question })}
+                                        className="mt-2 text-xs text-indigo-600 hover:underline"
+                                    >
+                                        최근 이 항목이 쓰인 대화 보기 →
+                                    </button>
                                 </div>
                             ))}
                         </main>
@@ -1114,6 +1196,12 @@ export default function AiAssistantDocsPage() {
                                         조회 필드: {entry.optional_fields.join(", ")}
                                     </p>
                                 )}
+                                <button
+                                    onClick={() => handleViewSessionsFor({ relatedDomain: entry.domain, label: DOMAIN_LABEL[entry.domain] || entry.domain })}
+                                    className="mt-2 text-xs text-indigo-600 hover:underline"
+                                >
+                                    최근 이 항목이 쓰인 대화 보기 →
+                                </button>
                             </div>
                         ))}
                     </div>
@@ -1437,19 +1525,7 @@ export default function AiAssistantDocsPage() {
                                                             ))}
                                                         </ul>
                                                         {c.hop_path.length > 0 && (
-                                                            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                                                                {c.hop_path.map((e, i) => (
-                                                                    <span key={i} className="inline-flex items-center gap-1">
-                                                                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
-                                                                            {e.source_type}:{e.source_id}
-                                                                        </span>
-                                                                        <span className="text-gray-400">--{e.edge_type}(hop{e.hop})--&gt;</span>
-                                                                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
-                                                                            {e.target_type}:{e.target_id}
-                                                                        </span>
-                                                                    </span>
-                                                                ))}
-                                                            </div>
+                                                            <HopPathTrail edges={c.hop_path} />
                                                         )}
                                                     </div>
                                                 );
@@ -1473,6 +1549,17 @@ export default function AiAssistantDocsPage() {
                             보여줍니다. 판단은 응답 전송 후 비동기로 기록되어 방금 나눈 대화가 즉시
                             보이지 않을 수 있습니다.
                         </p>
+                        {sessionFilter && (
+                            <div className="mb-3 flex items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-xs text-indigo-800">
+                                <span>&quot;{sessionFilter.label}&quot;이(가) 쓰인 대화만 보는 중</span>
+                                <button
+                                    onClick={() => setSessionFilter(null)}
+                                    className="ml-auto rounded bg-white px-2 py-0.5 text-indigo-600 shadow-sm hover:bg-indigo-100"
+                                >
+                                    필터 해제
+                                </button>
+                            </div>
+                        )}
                         {loadingDecisionSessions && <p className="text-sm text-gray-400">로딩 중…</p>}
                         {decisionSessionsError && (
                             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
@@ -1532,6 +1619,9 @@ export default function AiAssistantDocsPage() {
                                                                     <div className="rounded-lg border border-gray-100 bg-gray-50/60 p-3">
                                                                         <p className="text-xs text-gray-400">
                                                                             턴 {idx + 1} · {turn.created_at}
+                                                                        </p>
+                                                                        <p className="mt-1 text-sm font-medium text-gray-800">
+                                                                            {summarizeTurnPlain(turn, typeSpec?.name)}
                                                                         </p>
                                                                         <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
                                                                             <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-medium text-indigo-700">
@@ -1747,6 +1837,14 @@ export default function AiAssistantDocsPage() {
                                                 >
                                                     {expanded ? "hop 접기 ▲" : "hop 경로 ▼"}
                                                 </button>
+                                                {doc.domain_tags.length > 0 && (
+                                                    <button
+                                                        onClick={() => handleViewSessionsFor({ relatedDomain: doc.domain_tags[0], label: doc.title })}
+                                                        className="text-xs text-indigo-600 whitespace-nowrap hover:underline"
+                                                    >
+                                                        최근 쓰인 대화 보기 →
+                                                    </button>
+                                                )}
                                             </div>
                                             {expanded && (
                                                 <div className="border-t border-gray-50 px-4 pb-3 pt-2">
@@ -1755,15 +1853,7 @@ export default function AiAssistantDocsPage() {
                                                         <p className="text-xs text-gray-400">연결된 hop 경로가 없습니다(domain_tags가 비어있거나 지식 그래프에 등록되지 않음).</p>
                                                     )}
                                                     {!loadingDocHop && docHopPath && docHopPath.hop_path.length > 0 && (
-                                                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                                                            {docHopPath.hop_path.map((e, i) => (
-                                                                <span key={i} className="inline-flex items-center gap-1">
-                                                                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">{e.source_type}:{e.source_id}</span>
-                                                                    <span className="text-gray-400">--{e.edge_type}(hop{e.hop})--&gt;</span>
-                                                                    <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">{e.target_type}:{e.target_id}</span>
-                                                                </span>
-                                                            ))}
-                                                        </div>
+                                                        <HopPathTrail edges={docHopPath.hop_path} />
                                                     )}
                                                 </div>
                                             )}
