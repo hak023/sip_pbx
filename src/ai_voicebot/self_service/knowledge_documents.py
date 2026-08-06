@@ -74,8 +74,15 @@ def register_document(
     vector_db: Any,
     embedder: Any,
     uploaded_by: str = "",
+    base_url: str = "",
+    auth_header_name: str = "",
+    auth_header_value: str = "",
 ) -> Dict[str, Any]:
     """신규 문서를 업로드·색인하고 lifecycle 메타데이터를 저장한다.
+
+    base_url/auth_header_*(Story 1.35 재개, FR34-A): source_type="openapi"이고 base_url이
+    비어있으면 어대터가 스펙의 `servers[0].url`을 자동 추출해 사용한다(테넌트 직접
+    입력값이 우선). 이 값이 없으면 실행 엔진이 목적지를 모르므로 실행 자체가 불가능하다.
 
     Returns:
         {"ok": bool, "document_id": str, "indexed_chunks": int, "errors": [...]}
@@ -100,6 +107,10 @@ def register_document(
     if not pairs_with_meta:
         return {"ok": False, "error": "문서에서 색인 가능한 내용을 추출하지 못했습니다"}
 
+    resolved_base_url = base_url
+    if source_type == "openapi" and not resolved_base_url and hasattr(adapter, "extract_base_url"):
+        resolved_base_url = adapter.extract_base_url()
+
     chunk_doc_ids, errors = _index_pairs(
         pairs_with_meta=pairs_with_meta, owner=normalized_owner, vector_db=vector_db, embedder=embedder
     )
@@ -113,12 +124,26 @@ def register_document(
         source_type=source_type,
         chunk_doc_ids=chunk_doc_ids,
         uploaded_by=uploaded_by,
+        base_url=resolved_base_url,
+        auth_header_name=auth_header_name,
+        auth_header_value=auth_header_value,
     )
     if record is None:
         # DB 레코드 생성 실패 시 이미 색인된 청크를 롤백해 정합성을 지킨다.
         for chunk_id in chunk_doc_ids:
             delete_knowledge(vector_db, chunk_id)
         return {"ok": False, "error": "문서 메타데이터 저장 실패(색인은 롤백됨)"}
+
+    # Story 1.35 재개(FR34-A): 색인 과정에서 버려지던 엔드포인트 실행 메타를 영속화(best-effort,
+    # 실패해도 문서 등록 자체는 이미 성공했으므로 롤백하지 않음 — 실행 시점에 메타가 없으면
+    # "정보 없음"으로 처리되는 수준).
+    if source_type == "openapi":
+        endpoint_meta = [
+            item for item in pairs_with_meta
+            if item.get("_endpoint_path") and item.get("_method")
+        ]
+        if endpoint_meta:
+            db.save_document_endpoints(record["document_id"], endpoint_meta)
 
     logger.info(
         "knowledge_document_registered",

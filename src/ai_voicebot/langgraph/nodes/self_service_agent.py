@@ -763,6 +763,7 @@ async def self_service_agent_node(state: ConversationState) -> dict:
 
         schedule_rationale_capture(
             user_query=user_query, ai_response=response, owner=owner, call_id=call_id,
+            caller_number=caller_number,
         )
     except Exception as e:
         logger.warning("self_service_agent_rationale_schedule_failed", call_id=call_id, error=str(e))

@@ -55,10 +55,16 @@
        매뉴얼 RAG(ChromaDB, doc_type=self_service_manual)의 owner별 색인 현황(총 청크 수,
        도메인 분포, 소스 문서 수, 최근 색인 시각)을 읽기 전용으로 반환한다(Story 1.23, FR31-A).
        색인/검색 로직에는 어떤 영향도 주지 않는 순수 관측 엔드포인트다.
+
+  GET  /api/settings/ai-assistant/intellidecision-manual?owner=<owner>
+       유형(A~I) 각각에 대해 지식베이스 기반 정적 사례(트리거 예시 → 매칭 문서 → hop 경로)를
+       반환한다(Story 1.40, FR34-D). 임베딩 벡터 검색과 지식 그래프 조회만 사용하며 실시간
+       LLM 호출은 전혀 없다(응답 생성 없음). 매칭 문서가 없으면 has_case=false로 표시한다.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -163,6 +169,34 @@ class IntentTypeOut(BaseModel):
 
 class IntelliDecisionPolicyResponse(BaseModel):
     types: List[IntentTypeOut]
+
+
+class ManualCaseDocumentOut(BaseModel):
+    doc_id: str
+    score: float
+    related_domain: str
+    excerpt: str
+
+
+class ManualHopEdgeOut(BaseModel):
+    hop: int
+    edge_type: str
+    source_type: str
+    source_id: str
+    target_type: str
+    target_id: str
+
+
+class IntelliDecisionManualCaseOut(BaseModel):
+    code: str
+    has_case: bool
+    trigger_example: Optional[str] = None
+    matched_documents: List[ManualCaseDocumentOut] = []
+    hop_path: List[ManualHopEdgeOut] = []
+
+
+class IntelliDecisionManualResponse(BaseModel):
+    cases: List[IntelliDecisionManualCaseOut]
 
 
 class KnowledgeBaseDomainCount(BaseModel):
@@ -503,6 +537,131 @@ def get_intellidecision_policy() -> IntelliDecisionPolicyResponse:
         for spec in intellidecision_policy.list_intent_types()
     ]
     return IntelliDecisionPolicyResponse(types=types)
+
+
+@router.get(
+    "/intellidecision-manual", response_model=IntelliDecisionManualResponse,
+    summary="IntelliDecision 설명 매뉴얼(유형별 지식베이스 기반 정적 사례)",
+)
+async def get_intellidecision_manual(
+    owner: str = Query(..., description="테넌트 owner"),
+) -> IntelliDecisionManualResponse:
+    """
+    유형(A~I) 각각에 대해, 실제 업로드된 지식베이스를 임베딩 검색해 "이 질문 → 이 문서가
+    매칭 → 이 hop이 확장" 정적 사례를 반환한다(Story 1.40, FR34-D). 실시간 LLM 호출(응답
+    생성)은 전혀 발생하지 않는다 — 벡터 검색과 지식 그래프 조회만 사용한다. 매칭 문서가
+    없으면 `has_case=false`로 표시하고 임의로 사례를 지어내지 않는다(AC4).
+    """
+    from src.ai_voicebot.self_service import intellidecision_policy
+    from src.ai_voicebot.self_service.intellidecision_manual import build_case_example_for_type
+
+    # `get_self_service_rag_engine()`는 call_context(ContextVar, agent.py::process_utterance
+    # 진입 시에만 채워짐)에서 embedder/vector_db를 읽는다 — 이 엔드포인트는 실제 대화 턴 밖에서
+    # 호출되므로, 전역 AI Orchestrator의 인스턴스를 그대로 주입해 검색이 실제로 동작하게 한다
+    # (knowledge_base_simulate.py::_get_isolated_agent와 동일한 재사용 패턴, LLM 클라이언트는
+    # 필요 없으므로 주입하지 않는다).
+    from src.ai_voicebot.factory import get_ai_orchestrator
+    from src.ai_voicebot.langgraph.call_context import clear_call_context, set_call_context
+
+    orch = get_ai_orchestrator()
+    rag = getattr(orch, "rag", None)
+    set_call_context(
+        embedder=getattr(rag, "embedder", None) if rag else None,
+        vector_db=getattr(rag, "vector_db", None) if rag else None,
+    )
+    try:
+        specs = intellidecision_policy.list_intent_types()
+        cases = await asyncio.gather(*[build_case_example_for_type(spec, owner) for spec in specs])
+    finally:
+        clear_call_context()
+
+    return IntelliDecisionManualResponse(
+        cases=[
+            IntelliDecisionManualCaseOut(
+                code=c.code, has_case=c.has_case, trigger_example=c.trigger_example,
+                matched_documents=[
+                    ManualCaseDocumentOut(
+                        doc_id=d.doc_id, score=d.score, related_domain=d.related_domain, excerpt=d.excerpt,
+                    )
+                    for d in c.matched_documents
+                ],
+                hop_path=[
+                    ManualHopEdgeOut(
+                        hop=e.hop, edge_type=e.edge_type, source_type=e.source_type, source_id=e.source_id,
+                        target_type=e.target_type, target_id=e.target_id,
+                    )
+                    for e in c.hop_path
+                ],
+            )
+            for c in cases
+        ]
+    )
+
+
+# Story 1.37(FR34-C) — 문서별 hop 경로 조회 (신규 API, 최소 범위)
+class DocumentHopEdgeOut(BaseModel):
+    hop: int
+    edge_type: str
+    source_type: str
+    source_id: str
+    target_type: str
+    target_id: str
+
+
+class DocumentHopPathResponse(BaseModel):
+    document_id: str
+    domain_tags: List[str]
+    hop_path: List[DocumentHopEdgeOut]
+
+
+@router.get(
+    "/knowledge-base/documents/{document_id}/hop-path",
+    response_model=DocumentHopPathResponse,
+    summary="지식 문서의 지식 그래프 hop 경로(Story 1.37, FR34-C)",
+)
+def get_document_hop_path(
+    document_id: str,
+    owner: str = Query(..., description="테넌트 owner"),
+) -> DocumentHopPathResponse:
+    """업로드된 문서의 domain_tags를 시작점으로 knowledge_graph.traverse_graph()를 호출해
+    해당 문서가 어떤 도메인·화면·IntelliDecision 유형과 연결되는지 반환한다(Story 1.37, FR34-C).
+    LLM 호출 없음, 순수 그래프 조회 전용.
+    """
+    from src.common.knowledge_documents_db import get_document
+    from src.ai_voicebot.self_service.knowledge_graph import traverse_graph
+
+    doc = get_document(document_id, owner=owner)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없거나 owner가 일치하지 않습니다.")
+
+    domain_tags = doc.get("domain_tags") or []
+    edges: List[DocumentHopEdgeOut] = []
+    seen: set = set()
+    _MAX = 30
+    for domain in sorted({t for t in domain_tags if t}):
+        try:
+            raw = traverse_graph("catalog_domain", domain, max_hops=3, owner=owner)
+        except Exception as exc:
+            import logging; logging.getLogger(__name__).warning(
+                "knowledge_document_hop_path_failed domain=%s err=%s", domain, exc
+            )
+            continue
+        for e in raw:
+            key = (e["hop"], e["edge_type"], str(e["source_id"]), str(e["target_id"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append(DocumentHopEdgeOut(
+                hop=e["hop"], edge_type=e["edge_type"],
+                source_type=e["source_type"], source_id=str(e["source_id"]),
+                target_type=e["target_type"], target_id=str(e["target_id"]),
+            ))
+            if len(edges) >= _MAX:
+                break
+
+    return DocumentHopPathResponse(
+        document_id=document_id, domain_tags=domain_tags, hop_path=edges,
+    )
 
 
 @router.get(

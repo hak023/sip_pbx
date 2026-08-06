@@ -14,6 +14,8 @@ const MAIN_NAV = [
   { href: '/outbound', label: '발신 관리' },
   { href: '/booking', label: '예약 관리' },
   { href: '/chat', label: '채팅 관리' },
+  // Story 1.36(FR34-B): AI 에이전트 플랫폼 독립 최상위 메뉴
+  { href: '/ai-agent', label: 'AI 에이전트' },
 ] as const;
 
 type SettingsNavEntry =
@@ -33,6 +35,8 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { kind: 'link', href: '/settings/chat-relay', label: '채팅·SIP MESSAGE' },
   { kind: 'divider' },
   { kind: 'heading', label: '셀프서비스 AI 도우미' },
+  // Story 1.36(FR34-B): 새 진입점은 /ai-agent — 기존 링크 호환을 위해 유지
+  { kind: 'link', href: '/ai-agent', label: 'AI 에이전트 플랫폼' },
   { kind: 'link', href: '/settings/ai-assistant', label: 'AI 도우미 변경 이력' },
 ];
 
@@ -106,8 +110,8 @@ function SettingsDropdown() {
         type="button"
         onClick={() => setOpen(v => !v)}
         className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${settingsActive || open
-            ? 'bg-indigo-50 text-indigo-700'
-            : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+          ? 'bg-indigo-50 text-indigo-700'
+          : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
           }`}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -190,8 +194,8 @@ export function AppHeader() {
                     key={href}
                     href={href}
                     className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive
-                        ? 'bg-indigo-50 text-indigo-700'
-                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                      ? 'bg-indigo-50 text-indigo-700'
+                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                       }`}
                   >
                     {label}

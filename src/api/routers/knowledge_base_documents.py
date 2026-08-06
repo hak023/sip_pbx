@@ -7,11 +7,13 @@
 
 엔드포인트
 -----------
-  POST   /api/knowledge-base/documents              업로드(멀티파트: 메타데이터 + 파일/텍스트)
+  POST   /api/knowledge-base/documents              업로드(멀티파트: 메타데이터 + 파일/텍스트,
+                                                      openapi는 base_url/인증 헤더 포함 가능, Story 1.35)
   GET    /api/knowledge-base/documents               목록(owner/domain_tag/source_type 필터)
   GET    /api/knowledge-base/documents/{document_id} 단건 조회
   PUT    /api/knowledge-base/documents/{document_id} 메타데이터/본문 수정(재색인)
   DELETE /api/knowledge-base/documents/{document_id} 삭제(색인에서도 제거)
+  PATCH  /api/knowledge-base/documents/{document_id}/approve-methods 쓰기 메서드 승인(Story 1.34)
 """
 
 from __future__ import annotations
@@ -30,6 +32,10 @@ class KnowledgeDocumentItem(BaseModel):
     title: str
     domain_tags: List[str]
     source_type: str
+    approved_methods: List[str] = []
+    # Story 1.35 재개(FR34-A): base_url은 그대로 노출(실행 대상 확인용), 인증 값은 마스킹만 노출
+    base_url: str = ""
+    has_auth: bool = False
     version_no: int
     uploaded_by: str
     uploaded_at: str
@@ -68,6 +74,17 @@ class KnowledgeDocumentDeleteResponse(BaseModel):
     error: Optional[str] = None
 
 
+# Story 1.34(FR34-A) — 쓰기 메서드 승인 모델
+class ApproveMethodsRequest(BaseModel):
+    approved_methods: List[str]  # 승인할 쓰기 메서드 목록(GET은 자동 포함, POST/PUT/PATCH/DELETE만 허용)
+
+
+class ApproveMethodsResponse(BaseModel):
+    ok: bool
+    approved_methods: List[str] = []
+    error: Optional[str] = None
+
+
 def _knowledge_service():
     """전역 KnowledgeService 반환. 없으면 503 (settings_ai_assistant.py와 동일 패턴)."""
     try:
@@ -93,6 +110,9 @@ def _to_document_item(record: Dict[str, Any]) -> KnowledgeDocumentItem:
         title=record["title"],
         domain_tags=record["domain_tags"],
         source_type=record["source_type"],
+        approved_methods=record.get("approved_methods") or ["GET"],
+        base_url=record.get("base_url") or "",
+        has_auth=bool(record.get("auth_header_value")),
         version_no=record["version_no"],
         uploaded_by=record["uploaded_by"],
         uploaded_at=record["uploaded_at"],
@@ -111,6 +131,9 @@ async def upload_knowledge_document(
     source_type: str = Form(..., description="markdown | pdf | openapi"),
     text_body: Optional[str] = Form(None, description="markdown/openapi는 텍스트로 직접 입력 가능"),
     file: Optional[UploadFile] = File(None, description="pdf는 파일 업로드 필수"),
+    base_url: str = Form("", description="openapi 대상 시스템의 전체 기본 URL(비워두면 스펙 servers에서 자동 추출 시도)"),
+    auth_header_name: str = Form("", description="인증 헤더명(예: Authorization)"),
+    auth_header_value: str = Form("", description="인증 헤더 값(평문 저장되나 응답/로그에는 항상 마스킹)"),
 ) -> KnowledgeDocumentUploadResponse:
     ks = _knowledge_service()
     tags = [t.strip() for t in domain_tags.split(",") if t.strip()]
@@ -134,6 +157,9 @@ async def upload_knowledge_document(
         content=content,
         vector_db=ks.vector_db,
         embedder=ks.embedder,
+        base_url=base_url,
+        auth_header_name=auth_header_name,
+        auth_header_value=auth_header_value,
     )
     return KnowledgeDocumentUploadResponse(**result)
 
@@ -204,3 +230,28 @@ def delete_knowledge_document(document_id: str, owner: str = Query(...)) -> Know
         deleted_chunks=int(result.get("deleted_chunks") or 0),
         error=result.get("error"),
     )
+
+
+@router.patch(
+    "/documents/{document_id}/approve-methods",
+    response_model=ApproveMethodsResponse,
+    summary="쓰기 메서드 승인(Story 1.34, FR34-A)",
+)
+def approve_document_methods(
+    document_id: str,
+    payload: ApproveMethodsRequest,
+    owner: str = Query(...),
+) -> ApproveMethodsResponse:
+    """업로드된 OpenAPI 스펙의 엔드포인트 중 쓰기 메서드(POST/PUT/PATCH/DELETE)를 테넌트가 명시적으로 승인한다.
+
+    GET은 항상 능동 상태이며 이 API로 제거할 수 없다. 알 수 없는 메서드는 조용히 무시한다(NFR9 — 화이트리스트).
+    실제 API 호출 실행 엔진(Story 1.35)은 이 승인 목록이 있는 경우에만 쓰기 요청을 허용한다.
+    """
+    from src.common.knowledge_documents_db import update_approved_methods
+
+    result = update_approved_methods(
+        document_id=document_id, owner=owner, approved_methods=payload.approved_methods
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없거나 owner가 일치하지 않습니다.")
+    return ApproveMethodsResponse(ok=True, approved_methods=result.get("approved_methods") or ["GET"])

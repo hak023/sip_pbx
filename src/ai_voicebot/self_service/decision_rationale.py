@@ -72,6 +72,7 @@ async def _capture_and_log(
     ai_response: str,
     owner: str,
     call_id: str,
+    caller_number: str = "",
 ) -> tuple[str, str]:
     """실제 캡처 로직. 반드시 이 함수 내에서 모든 예외를 흡수해야 한다.
 
@@ -108,6 +109,7 @@ async def _capture_and_log(
         record_decision_rationale(
             owner=owner,
             call_id=call_id,
+            caller_number=caller_number,
             matched_type=matched_type,
             reasoning_summary=reasoning_summary,
         )
@@ -140,6 +142,7 @@ def schedule_rationale_capture(
     ai_response: str,
     owner: str,
     call_id: str,
+    caller_number: str = "",
 ) -> Optional[asyncio.Task]:
     """판단 근거 캡처를 비동기 백그라운드 태스크로 예약한다(호출부는 절대 await하지 않는다).
 
@@ -152,6 +155,7 @@ def schedule_rationale_capture(
         task = asyncio.create_task(
             _capture_and_log(
                 user_query=user_query, ai_response=ai_response, owner=owner, call_id=call_id,
+                caller_number=caller_number,
             )
         )
         return task

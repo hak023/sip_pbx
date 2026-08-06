@@ -28,10 +28,22 @@ def temp_db(tmp_path, monkeypatch):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             owner TEXT NOT NULL,
             call_id TEXT NOT NULL DEFAULT '',
+            caller_number TEXT NOT NULL DEFAULT '',
             matched_type TEXT NOT NULL DEFAULT 'unknown',
             reasoning_summary TEXT NOT NULL DEFAULT '',
             related_domain TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        )
+        """
+    )
+    # Story 1.38: 채널(음성/채팅) 판별용 — decision_log.call_id가 여기 있으면 채팅으로 간주.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            call_id TEXT NOT NULL DEFAULT ''
         )
         """
     )
@@ -142,6 +154,102 @@ class TestBuildClassificationPrompt:
         assert "채팅 자동응답 꺼줘" in prompt
         assert "네, 껐습니다." in prompt
         assert "A:" in prompt and "I:" in prompt  # 유형 목록이 포함되어야 함
+
+
+class TestDecisionLogSessionGrouping:
+    """Story 1.38(FR34-F): 채널별 세션 그룹핑 — 음성=call_id, 채팅=caller_number+시간 윈도우."""
+
+    def test_voice_calls_group_by_call_id(self, temp_db):
+        from src.common.self_service_decision_log_db import list_decision_log_sessions
+
+        # 동일 call_id(음성 통화, chat_messages에 없음) 2턴 = 세션 1개.
+        record_decision_rationale(owner="9001", call_id="voice-call-1", caller_number="01011112222", matched_type="A")
+        record_decision_rationale(owner="9001", call_id="voice-call-1", caller_number="01011112222", matched_type="E")
+
+        sessions = list_decision_log_sessions("9001", limit=10)
+        assert len(sessions) == 1
+        assert sessions[0]["channel"] == "voice"
+        assert sessions[0]["turn_count"] == 2
+        assert sessions[0]["type_sequence"] == ["A", "E"]
+        assert sessions[0]["final_type"] == "E"
+
+    def test_chat_messages_with_different_call_ids_group_by_caller_and_window(self, temp_db):
+        from src.common.self_service_decision_log_db import list_decision_log_sessions
+        from src.booking.database import get_db
+
+        # 채팅 메시지는 트랜잭션마다 call_id가 다르다 — chat_messages에 두 call_id 모두 등록.
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO chat_messages (thread_id, owner, call_id) VALUES (?, ?, ?)",
+                ("9001|sms|9001", "9001", "chat-msg-1"),
+            )
+            conn.execute(
+                "INSERT INTO chat_messages (thread_id, owner, call_id) VALUES (?, ?, ?)",
+                ("9001|sms|9001", "9001", "chat-msg-2"),
+            )
+
+        record_decision_rationale(owner="9001", call_id="chat-msg-1", caller_number="9001", matched_type="A")
+        record_decision_rationale(owner="9001", call_id="chat-msg-2", caller_number="9001", matched_type="C")
+
+        sessions = list_decision_log_sessions("9001", limit=10)
+        assert len(sessions) == 1
+        assert sessions[0]["channel"] == "chat"
+        assert sessions[0]["turn_count"] == 2
+        assert sessions[0]["type_sequence"] == ["A", "C"]
+
+    def test_chat_messages_outside_window_split_into_separate_sessions(self, temp_db):
+        from src.common.self_service_decision_log_db import list_decision_log_sessions
+        from src.booking.database import get_db
+
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO chat_messages (thread_id, owner, call_id) VALUES (?, ?, ?)",
+                ("9001|sms|9001", "9001", "chat-old"),
+            )
+            conn.execute(
+                "INSERT INTO chat_messages (thread_id, owner, call_id) VALUES (?, ?, ?)",
+                ("9001|sms|9001", "9001", "chat-new"),
+            )
+            conn.execute(
+                """
+                INSERT INTO self_service_decision_log
+                    (owner, call_id, caller_number, matched_type, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("9001", "chat-old", "9001", "A", "2026-08-01 10:00:00"),
+            )
+            conn.execute(
+                """
+                INSERT INTO self_service_decision_log
+                    (owner, call_id, caller_number, matched_type, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("9001", "chat-new", "9001", "C", "2026-08-01 11:00:00"),  # 60분 뒤(기본 30분 초과)
+            )
+
+        sessions = list_decision_log_sessions("9001", limit=10)
+        assert len(sessions) == 2
+        assert {s["turn_count"] for s in sessions} == {1}
+
+    def test_session_detail_returns_full_turns(self, temp_db):
+        from src.common.self_service_decision_log_db import (
+            get_decision_log_session_detail,
+            list_decision_log_sessions,
+        )
+
+        record_decision_rationale(owner="9001", call_id="voice-call-2", caller_number="01011112222", matched_type="A")
+        record_decision_rationale(owner="9001", call_id="voice-call-2", caller_number="01011112222", matched_type="E")
+
+        sessions = list_decision_log_sessions("9001", limit=10)
+        detail = get_decision_log_session_detail("9001", sessions[0]["session_key"])
+        assert detail is not None
+        assert len(detail["turns"]) == 2
+        assert detail["turns"][0]["matched_type"] == "A"
+
+    def test_session_detail_returns_none_for_unknown_key(self, temp_db):
+        from src.common.self_service_decision_log_db import get_decision_log_session_detail
+
+        assert get_decision_log_session_detail("9001", "voice:no-such-session") is None
 
 
 class TestScheduleRationaleCaptureNeverBlocks:

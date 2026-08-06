@@ -324,10 +324,13 @@ CREATE INDEX IF NOT EXISTS idx_self_service_catalog_config_active ON self_servic
 
 -- IntelliDecision 판단 근거 투명성 로그 (Story 1.21, FR30 — 순수 관측 전용, 판단 로직에 관여하지 않음)
 -- 응답 전송 후 비동기 백그라운드로 채워지므로 changed_at 대비 약간(0.7~1초) 늦게 기록될 수 있다.
+-- caller_number(Story 1.38, FR34-F): 채팅/SIP MESSAGE는 call_id가 트랜잭션마다 새로 발급되어
+-- 세션 그룹핑 키로 쓸 수 없으므로, (owner, caller_number)+시간 윈도우 기반 세션 그룹핑을 위해 추가.
 CREATE TABLE IF NOT EXISTS self_service_decision_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     owner               TEXT    NOT NULL,
     call_id             TEXT    NOT NULL DEFAULT '',
+    caller_number       TEXT    NOT NULL DEFAULT '',
     matched_type        TEXT    NOT NULL DEFAULT 'unknown',
     reasoning_summary   TEXT    NOT NULL DEFAULT '',
     related_domain      TEXT    NOT NULL DEFAULT '',
@@ -348,13 +351,53 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     domain_tags_json     TEXT    NOT NULL DEFAULT '[]',
     source_type          TEXT    NOT NULL,
     chunk_doc_ids_json   TEXT    NOT NULL DEFAULT '[]',
-    version_no           INTEGER NOT NULL DEFAULT 1,
+    -- Story 1.34(FR34-A): GET은 기본 능동, 쓰기(숀/덕/팩치/삭제)는 테넌트에서 명시적으로 승인한 메서드만. JSON으로 저장(e.g. ["POST","DELETE"]).
+    approved_methods_json TEXT    NOT NULL DEFAULT '["GET"]',    -- Story 1.35 재개(FR34-A, 2026-08-06): 임의 외부 시스템 실행을 위해 반드시 필요한 목적지와 인증
+    -- 정보. 인증 값은 평문 저장하되 API 응답/로그에는 항상 마스킹해서만 노출(OWASP).
+    base_url             TEXT    NOT NULL DEFAULT '',
+    auth_header_name     TEXT    NOT NULL DEFAULT '',
+    auth_header_value    TEXT    NOT NULL DEFAULT '',    version_no           INTEGER NOT NULL DEFAULT 1,
     is_active            INTEGER NOT NULL DEFAULT 1,
     uploaded_by          TEXT    NOT NULL DEFAULT '',
     uploaded_at          TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at           TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_owner ON knowledge_documents(owner, is_active);
+
+-- Story 1.35 재개(FR34-A, 2026-08-06): 업로드된 OpenAPI 스펙의 개별 엔드포인트 실행 메타를
+-- 영속화한다(이전에는 어댑터가 계산해도 색인 과정에서 버려졌음). 실행 시점에 document_id+
+-- method+endpoint_path로 조회해 실행 파라미터 스키마를 복원한다.
+CREATE TABLE IF NOT EXISTS knowledge_document_endpoints (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id       TEXT    NOT NULL,
+    method            TEXT    NOT NULL,
+    endpoint_path     TEXT    NOT NULL,
+    parameters_json   TEXT    NOT NULL DEFAULT '[]',
+    request_body_json TEXT,
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_document_endpoints_doc ON knowledge_document_endpoints(document_id, method, endpoint_path);
+
+-- Story 1.34(FR34-A): 외부 API Tool 실행 이력 + undo 스냅샷 (Undo 스파이크 결론:
+-- Story 1.17의 "old_value 재적용" 패턴은 자체 서비스 API에는 적합하지만 임의 외부 API에는
+-- 적용 불가 — 외부 API의 "이전 상태"가 DB에 없으므로 실행 전 GET 스냅샷이 필요하다.
+-- pre_state_json: 실행 직전 GET으로 조회한 리소스 상태(JSON), 되돌리기 실패 시 관리자 안내용.
+-- 실제 실행 엔진은 Story 1.35에서 구현, 이 테이블은 Story 1.34 스파이크로 설계만 확정.)
+CREATE TABLE IF NOT EXISTS tool_execution_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner            TEXT    NOT NULL,
+    document_id      TEXT    NOT NULL,
+    method           TEXT    NOT NULL,
+    endpoint_path    TEXT    NOT NULL DEFAULT '',
+    request_json     TEXT    NOT NULL DEFAULT '{}',
+    pre_state_json   TEXT    NOT NULL DEFAULT 'null',
+    response_status  INTEGER,
+    response_json    TEXT,
+    undo_attempted   INTEGER NOT NULL DEFAULT 0,
+    undo_ok          INTEGER,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_tool_execution_log_owner ON tool_execution_log(owner, created_at DESC);
 """
 
 
@@ -377,6 +420,16 @@ _MIGRATIONS = [
     # 별도 감사 로그 테이블 없이 버전 이력 테이블 자체가 감사 로그를 겸한다.
     "ALTER TABLE self_service_catalog_config ADD COLUMN activated_at TEXT DEFAULT NULL",
     "ALTER TABLE self_service_catalog_config ADD COLUMN activated_by TEXT NOT NULL DEFAULT ''",
+    # Story 1.38(FR34-F): 채널별 세션 그룹핑을 위한 발신자 번호(캡처 당시 미기록 상태였던 기존 행은 빈 문자열로 남음)
+    "ALTER TABLE self_service_decision_log ADD COLUMN caller_number TEXT NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_self_service_decision_log_caller ON self_service_decision_log(owner, caller_number, created_at)",
+    # Story 1.34(FR34-A): 쓰기 메서드 승인 상태. GET은 기본 능동, POST/PUT/PATCH/DELETE는 테넌트가 명시적으로 승인해야 활성화.
+    # 기존 문서 행은 마이그레이션으로 '[\"GET\"]' 기본값이 부여되고, 신규 업로드는 DDL 기본값으로 생성됨.
+    "ALTER TABLE knowledge_documents ADD COLUMN approved_methods_json TEXT NOT NULL DEFAULT '[\"GET\"]'",
+    # Story 1.35 재개(FR34-A, 2026-08-06): 임의 외부 시스템 실행을 위한 목적지/인증 정보.
+    "ALTER TABLE knowledge_documents ADD COLUMN base_url TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE knowledge_documents ADD COLUMN auth_header_name TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE knowledge_documents ADD COLUMN auth_header_value TEXT NOT NULL DEFAULT ''",
 ]
 
 

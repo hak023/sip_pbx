@@ -26,11 +26,28 @@ def temp_db(tmp_path, monkeypatch):
             domain_tags_json     TEXT    NOT NULL DEFAULT '[]',
             source_type          TEXT    NOT NULL,
             chunk_doc_ids_json   TEXT    NOT NULL DEFAULT '[]',
+            approved_methods_json TEXT   NOT NULL DEFAULT '["GET"]',
+            base_url             TEXT    NOT NULL DEFAULT '',
+            auth_header_name     TEXT    NOT NULL DEFAULT '',
+            auth_header_value    TEXT    NOT NULL DEFAULT '',
             version_no           INTEGER NOT NULL DEFAULT 1,
             is_active            INTEGER NOT NULL DEFAULT 1,
             uploaded_by          TEXT    NOT NULL DEFAULT '',
             uploaded_at          TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             updated_at           TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_document_endpoints (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id       TEXT    NOT NULL,
+            method            TEXT    NOT NULL,
+            endpoint_path     TEXT    NOT NULL,
+            parameters_json   TEXT    NOT NULL DEFAULT '[]',
+            request_body_json TEXT,
+            created_at        TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
         )
         """
     )
@@ -133,3 +150,77 @@ class TestDeactivateDocument:
 
     def test_deactivate_nonexistent_returns_false(self, temp_db):
         assert docs_db.deactivate_document("nonexistent", owner="9001") is False
+
+
+class TestBaseUrlAndAuthPersistence:
+    """Story 1.35 재개(FR34-A): base_url/인증 정보 저장 검증."""
+
+    def test_create_with_base_url_persists(self, temp_db):
+        record = docs_db.create_document(
+            owner="9001", title="x", domain_tags=[], source_type="openapi", chunk_doc_ids=[],
+            base_url="https://api.example.com", auth_header_name="Authorization", auth_header_value="Bearer tok",
+        )
+        assert record is not None
+        assert record["base_url"] == "https://api.example.com"
+        assert record["auth_header_value"] == "Bearer tok"
+
+    def test_create_without_base_url_defaults_empty(self, temp_db):
+        record = docs_db.create_document(owner="9001", title="x", domain_tags=[], source_type="markdown", chunk_doc_ids=[])
+        assert record["base_url"] == ""
+        assert record["auth_header_value"] == ""
+
+
+class TestEndpointMetaPersistence:
+    """Story 1.35 재개(FR34-A): 엔드포인트 실행 메타 영속화 검증."""
+
+    def test_save_and_list_endpoints(self, temp_db):
+        doc = docs_db.create_document(owner="9001", title="x", domain_tags=[], source_type="openapi", chunk_doc_ids=[])
+        doc_id = doc["document_id"]
+        endpoints = [
+            {"_method": "GET", "_endpoint_path": "/orders", "_parameters": [{"name": "limit"}], "_request_body": None},
+            {"_method": "POST", "_endpoint_path": "/orders", "_parameters": [], "_request_body": {"type": "object"}},
+        ]
+        ok = docs_db.save_document_endpoints(doc_id, endpoints)
+        assert ok is True
+        listed = docs_db.list_document_endpoints(doc_id)
+        assert len(listed) == 2
+        assert listed[0]["method"] == "GET"
+        assert listed[1]["method"] == "POST"
+        assert listed[0]["parameters"] == [{"name": "limit"}]
+        assert listed[1]["request_body"] == {"type": "object"}
+
+    def test_get_specific_endpoint(self, temp_db):
+        doc = docs_db.create_document(owner="9001", title="x", domain_tags=[], source_type="openapi", chunk_doc_ids=[])
+        docs_db.save_document_endpoints(doc["document_id"], [
+            {"_method": "DELETE", "_endpoint_path": "/orders/{id}", "_parameters": [], "_request_body": None},
+        ])
+        ep = docs_db.get_document_endpoint(doc["document_id"], method="DELETE", endpoint_path="/orders/{id}")
+        assert ep is not None
+        assert ep["method"] == "DELETE"
+
+    def test_empty_endpoints_saves_nothing(self, temp_db):
+        doc = docs_db.create_document(owner="9001", title="x", domain_tags=[], source_type="openapi", chunk_doc_ids=[])
+        ok = docs_db.save_document_endpoints(doc["document_id"], [])
+        assert ok is False  # empty list → False 반환, 저장 없음
+
+
+class TestOpenApiSpecAdapterExtractBaseUrl:
+    """Story 1.35 재개: servers[0].url 자동 추출 검증."""
+
+    def test_extracts_from_servers_json(self):
+        from src.ai_voicebot.self_service.document_adapters import OpenApiSpecAdapter
+        import json
+
+        spec = {"openapi": "3.0.0", "info": {"title": "x", "version": "1"},
+                "servers": [{"url": "https://api.example.com/v1"}], "paths": {}}
+        adapter = OpenApiSpecAdapter(json.dumps(spec))
+        assert adapter.extract_base_url() == "https://api.example.com/v1"
+
+    def test_returns_empty_when_no_servers(self):
+        from src.ai_voicebot.self_service.document_adapters import OpenApiSpecAdapter
+        import json
+
+        spec = {"openapi": "3.0.0", "paths": {}}
+        adapter = OpenApiSpecAdapter(json.dumps(spec))
+        assert adapter.extract_base_url() == ""
+

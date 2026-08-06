@@ -2,6 +2,7 @@
 
 import { apiJson } from "@/lib/api";
 import { getTenantOwner } from "@/lib/tenant";
+import { useActiveSmsDockStore } from "@/store/useActiveSmsDockStore";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -73,15 +74,16 @@ interface IntelliDecisionPolicyResponse {
     types: IntentTypeOut[];
 }
 
-// 응답 시뮬레이터(Story 1.27, FR32-B) — 실제 LLM 응답 기반 사전 검증
-interface SimulateMatchedDocument {
+// IntelliDecision 설명 매뉴얼(Story 1.40, FR34-D) — LLM 호출 없이 KB 벡터 검색+지식 그래프
+// 조회만으로 산출한 유형별 정적 사례. 시뮬레이션이 아니다.
+interface ManualCaseDocument {
     doc_id: string;
     score: number;
     related_domain: string;
+    excerpt: string;
 }
 
-// Story 1.32(FR33-D) — IntelliDecision 유형×응답 시뮬레이터 통합 UX의 hop 경로 시각화
-interface SimulateHopEdge {
+interface ManualHopEdge {
     hop: number;
     edge_type: string;
     source_type: string;
@@ -90,34 +92,49 @@ interface SimulateHopEdge {
     target_id: string;
 }
 
-interface SimulateResponse {
-    response: string;
-    matched_documents: SimulateMatchedDocument[];
-    intellidecision_type: string;
-    reasoning_summary: string;
-    hop_path: SimulateHopEdge[];
-    elapsed_sec: number;
+interface IntelliDecisionManualCase {
+    code: string;
+    has_case: boolean;
+    trigger_example: string | null;
+    matched_documents: ManualCaseDocument[];
+    hop_path: ManualHopEdge[];
 }
 
-// 시뮬레이터 허뢸 대화 턴 1건(질문+응답, Story 1.32 AC5 멀티턴)
-interface SimulateTurn extends SimulateResponse {
-    query: string;
+// 최근 판단 이력 → 세션 단위 순서도(Story 1.38, FR34-F) — 시뮬레이션 데이터 미사용,
+// self_service_decision_log/call_data_record에 실제 기록된 값만 사용한다(NFR10).
+interface DecisionSessionSummary {
+    session_key: string;
+    channel: "voice" | "chat";
+    caller_number: string;
+    turn_count: number;
+    type_sequence: string[];
+    final_type: string;
+    first_turn_at: string | null;
+    last_turn_at: string | null;
 }
 
-// 판단 근거 투명성(Story 1.21/1.22, FR30) — 원본 발화 전문은 포함되지 않고 요약만 내려온다.
-interface DecisionLogItem {
+interface DecisionTurnSteps {
+    rag: { matched_doc_ids?: string[]; scores?: number[]; related_domains?: string[] } | null;
+    hybrid_rag: { hybrid_doc_count?: number; merged_total?: number } | null;
+    screen_guidance: { has_screen_guidance?: boolean } | null;
+    tool_calls: { tool?: string; result_preview?: string | null }[];
+    response_meta: { elapsed_sec?: number; response_len?: number } | null;
+}
+
+interface DecisionTurn {
     id: number;
     owner: string;
     call_id: string;
+    caller_number: string;
     matched_type: string;
     reasoning_summary: string;
     related_domain: string;
     created_at: string;
+    steps: DecisionTurnSteps;
 }
 
-interface DecisionLogResponse {
-    items: DecisionLogItem[];
-    total: number;
+interface DecisionSessionDetail extends DecisionSessionSummary {
+    turns: DecisionTurn[];
 }
 
 // 지식베이스 인벤토리 투명성(Story 1.23, FR31-A)
@@ -184,11 +201,28 @@ interface KnowledgeDocumentItem {
     title: string;
     domain_tags: string[];
     source_type: string;
+    approved_methods?: string[];
     version_no: number;
     uploaded_by: string;
     uploaded_at: string;
     updated_at: string;
     chunk_count: number;
+}
+
+// Story 1.37(FR34-C): 문서별 hop 경로
+interface DocumentHopEdge {
+    hop: number;
+    edge_type: string;
+    source_type: string;
+    source_id: string;
+    target_type: string;
+    target_id: string;
+}
+
+interface DocumentHopPathResponse {
+    document_id: string;
+    domain_tags: string[];
+    hop_path: DocumentHopEdge[];
 }
 
 interface KnowledgeDocumentListResponse {
@@ -336,7 +370,8 @@ const DOMAIN_LABEL: Record<string, string> = {
 
 // Story 1.30(FR33-A): "지식 업로드"·"설정 관리" 최상위 탭을 하나로 통합 — "manage"는
 // 더 이상 최상위 탭이 아니라 "upload" 탭 내부의 소스 유형 섹션(uploadSection="system")이다.
-type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "upload" | "simulate";
+// Story 1.39(FR34-E): 응답 시뮬레이터("simulate")를 삭제하고 실제 채팅 패널("chat")로 대체.
+type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "upload" | "chat";
 // 지식 업로드 탭 내부 소스 유형 — ①테넌트 지식 문서(Story 1.26) ②시스템 공통 설정/구성(Epic 2)
 type UploadSection = "tenant" | "system";
 
@@ -372,10 +407,19 @@ export default function AiAssistantDocsPage() {
     // Story 1.32(FR33-D): 유형 A~I 탭 선택 상태("list" 보기에서만 사용, 빈 문자열=미선택)
     const [activeIntentCode, setActiveIntentCode] = useState<string>("");
 
-    // 최근 판단 이력(Story 1.21/1.22, FR30) 상태
-    const [decisionLog, setDecisionLog] = useState<DecisionLogItem[]>([]);
-    const [loadingDecisionLog, setLoadingDecisionLog] = useState(false);
-    const [decisionLogError, setDecisionLogError] = useState<string | null>(null);
+    // IntelliDecision 설명 매뉴얼(Story 1.40, FR34-D) 상태 — LLM 미호출, KB 기반 정적 사례
+    const [manualCases, setManualCases] = useState<IntelliDecisionManualCase[]>([]);
+    const [loadingManualCases, setLoadingManualCases] = useState(false);
+    const [manualCasesError, setManualCasesError] = useState<string | null>(null);
+
+    // 최근 판단 이력 → 세션 단위 순서도(Story 1.38, FR34-F) 상태
+    const [decisionSessions, setDecisionSessions] = useState<DecisionSessionSummary[]>([]);
+    const [loadingDecisionSessions, setLoadingDecisionSessions] = useState(false);
+    const [decisionSessionsError, setDecisionSessionsError] = useState<string | null>(null);
+    const [expandedSessionKey, setExpandedSessionKey] = useState<string | null>(null);
+    const [sessionDetail, setSessionDetail] = useState<DecisionSessionDetail | null>(null);
+    const [loadingSessionDetail, setLoadingSessionDetail] = useState(false);
+    const [sessionDetailError, setSessionDetailError] = useState<string | null>(null);
 
     // 지식베이스 인벤토리 투명성(Story 1.23, FR31-A) 상태
     const [kbInventory, setKbInventory] = useState<KnowledgeBaseInventoryResponse | null>(null);
@@ -386,6 +430,11 @@ export default function AiAssistantDocsPage() {
     const [kbDocuments, setKbDocuments] = useState<KnowledgeDocumentItem[]>([]);
     const [loadingKbDocuments, setLoadingKbDocuments] = useState(false);
     const [kbDocumentsError, setKbDocumentsError] = useState<string | null>(null);
+
+    // Story 1.37(FR34-C): 문서별 hop 경로 펼침 상태
+    const [expandedDocHopKey, setExpandedDocHopKey] = useState<string | null>(null);
+    const [docHopPath, setDocHopPath] = useState<DocumentHopPathResponse | null>(null);
+    const [loadingDocHop, setLoadingDocHop] = useState(false);
     const [uploadTitle, setUploadTitle] = useState("");
     const [uploadDomainTags, setUploadDomainTags] = useState("");
     const [uploadSourceType, setUploadSourceType] = useState<"markdown" | "pdf" | "openapi">("markdown");
@@ -395,12 +444,6 @@ export default function AiAssistantDocsPage() {
     const [uploadResult, setUploadResult] = useState<KnowledgeDocumentUploadResponse | null>(null);
     // Story 1.30(FR33-A): 지식 업로드 탭 내부 소스 유형 토글(기본값: 테넌트 지식 문서)
     const [uploadSection, setUploadSection] = useState<UploadSection>("tenant");
-
-    // 응답 시뮬레이터(Story 1.27/1.32) — 멀티턴 대화 히스토리로 누적 표시(AC5)
-    const [simulateQuery, setSimulateQuery] = useState("");
-    const [simulating, setSimulating] = useState(false);
-    const [simulateTurns, setSimulateTurns] = useState<SimulateTurn[]>([]);
-    const [simulateError, setSimulateError] = useState<string | null>(null);
 
     // 설정 관리(내보내기) 상태 — Epic 2 Story 2.4
     const [exporting, setExporting] = useState(false);
@@ -481,6 +524,22 @@ export default function AiAssistantDocsPage() {
         }
         setLoadingPolicy(false);
     }, []);
+
+    // IntelliDecision 설명 매뉴얼 로드(Story 1.40, FR34-D) — LLM 미호출, KB 벡터 검색+그래프 조회만
+    const loadManualCases = useCallback(async () => {
+        if (!owner) return;
+        setLoadingManualCases(true);
+        setManualCasesError(null);
+        const res = await apiJson<{ cases: IntelliDecisionManualCase[] }>(
+            `/api/settings/ai-assistant/intellidecision-manual?owner=${encodeURIComponent(owner)}`
+        );
+        if (res.ok) {
+            setManualCases(res.data.cases || []);
+        } else {
+            setManualCasesError(res.message);
+        }
+        setLoadingManualCases(false);
+    }, [owner]);
 
     // 버전 이력 로드(카탈로그·화면 안내 각각) — Epic 2 Story 2.5
     const loadVersions = useCallback(async () => {
@@ -576,21 +635,49 @@ export default function AiAssistantDocsPage() {
         [loadVersions]
     );
 
-    // 최근 판단 이력 로드(Story 1.21/1.22, FR30)
-    const loadDecisionLog = useCallback(async () => {
+    // 세션 목록 로드(Story 1.38, FR34-F, AC10 1단계 — 세션 요약만, 턴 상세는 펼칠 때 별도 조회)
+    const loadDecisionSessions = useCallback(async () => {
         if (!owner) return;
-        setLoadingDecisionLog(true);
-        setDecisionLogError(null);
-        const res = await apiJson<DecisionLogResponse>(
-            `/api/self-service/decision-log?owner=${encodeURIComponent(owner)}&limit=20`
+        setLoadingDecisionSessions(true);
+        setDecisionSessionsError(null);
+        const res = await apiJson<{ items: DecisionSessionSummary[]; total: number }>(
+            `/api/self-service/decision-log/sessions?owner=${encodeURIComponent(owner)}&limit=20`
         );
         if (res.ok) {
-            setDecisionLog(res.data.items || []);
+            setDecisionSessions(res.data.items || []);
         } else {
-            setDecisionLogError(res.message);
+            setDecisionSessionsError(res.message);
         }
-        setLoadingDecisionLog(false);
+        setLoadingDecisionSessions(false);
     }, [owner]);
+
+    // 세션 펼침/접기(AC10 2단계 — 펼칠 때만 턴 상세 조회)
+    const handleToggleSession = useCallback(
+        async (sessionKey: string) => {
+            if (expandedSessionKey === sessionKey) {
+                setExpandedSessionKey(null);
+                setSessionDetail(null);
+                return;
+            }
+            setExpandedSessionKey(sessionKey);
+            setSessionDetail(null);
+            setSessionDetailError(null);
+            if (!owner) return;
+            setLoadingSessionDetail(true);
+            const res = await apiJson<{ found: boolean; session?: DecisionSessionDetail }>(
+                `/api/self-service/decision-log/sessions/${encodeURIComponent(sessionKey)}?owner=${encodeURIComponent(owner)}`
+            );
+            if (res.ok && res.data.found && res.data.session) {
+                setSessionDetail(res.data.session);
+            } else if (res.ok) {
+                setSessionDetailError("세션을 찾을 수 없습니다.");
+            } else {
+                setSessionDetailError(res.message);
+            }
+            setLoadingSessionDetail(false);
+        },
+        [owner, expandedSessionKey]
+    );
 
     // 지식베이스 인벤토리 로드(Story 1.23, FR31-A) — 순수 관측 API, 응대 로직에 영향 없음
     const loadKbInventory = useCallback(async () => {
@@ -663,6 +750,29 @@ export default function AiAssistantDocsPage() {
     }, [owner, uploadTitle, uploadDomainTags, uploadSourceType, uploadTextBody, uploadFile, loadKbDocuments]);
 
     // 지식 문서 삭제(Story 1.26)
+    // Story 1.37(FR34-C): 문서 hop 경로 펼침/접기(AC10 2단계 조회 패턴 재사용)
+    const handleToggleDocHop = useCallback(
+        async (documentId: string) => {
+            if (expandedDocHopKey === documentId) {
+                setExpandedDocHopKey(null);
+                setDocHopPath(null);
+                return;
+            }
+            setExpandedDocHopKey(documentId);
+            setDocHopPath(null);
+            if (!owner) return;
+            setLoadingDocHop(true);
+            const res = await apiJson<DocumentHopPathResponse>(
+                `/api/settings/ai-assistant/knowledge-base/documents/${encodeURIComponent(documentId)}/hop-path?owner=${encodeURIComponent(owner)}`
+            );
+            if (res.ok) {
+                setDocHopPath(res.data);
+            }
+            setLoadingDocHop(false);
+        },
+        [owner, expandedDocHopKey]
+    );
+
     const handleDeleteDocument = useCallback(
         async (documentId: string) => {
             if (!owner) return;
@@ -677,50 +787,37 @@ export default function AiAssistantDocsPage() {
         [owner, loadKbDocuments]
     );
 
-    // 응답 시뮬레이터 실행(Story 1.27/1.32) — 실 서비스 세션 무영향, 실 LLM 호출로 지연 발생(AC4).
-    // 결과는 덮어쓰지 않고 turns 리스트에 누적해 멀티턴 대화처럼 계속 이어갈 수 있게 한다(AC5).
-    const handleSimulate = useCallback(
-        async (queryOverride?: string) => {
-            const query = (queryOverride ?? simulateQuery).trim();
-            if (!owner || !query) return;
-            setSimulating(true);
-            setSimulateError(null);
-            const res = await apiJson<SimulateResponse>("/api/knowledge-base/simulate", {
-                method: "POST",
-                body: { owner, query },
-            });
-            if (res.ok) {
-                setSimulateTurns((prev) => [...prev, { query, ...res.data }]);
-                setSimulateQuery("");
-            } else {
-                setSimulateError(res.message);
-            }
-            setSimulating(false);
-        },
-        [owner, simulateQuery]
-    );
+    // Story 1.39(FR34-E): IntelliDecision 정책 탭 → 실제 채팅 탭 바로가기(예시 발화를 채팅
+    // 입력창에 채워주기만 함 — 실제 전송은 사용자가 직접 눌러야 함, 자동 발송하지 않는다).
+    const handleChatFromPolicy = useCallback((example: string) => {
+        setTab("chat");
+        if (owner) {
+            useActiveSmsDockStore.getState().openThreadFromCall({ owner, peer: owner });
+        }
+        useActiveSmsDockStore.getState().setDraftText(example);
+    }, [owner]);
 
-    // IntelliDecision 정책 탭 → 시뮬레이터 바로가기(AC5)
-    const handleSimulateFromPolicy = useCallback(
-        (example: string) => {
-            setSimulateQuery(example);
-            setTab("simulate");
-            void handleSimulate(example);
-        },
-        [handleSimulate]
-    );
+    // Story 1.39(FR34-E): "실제 채팅" 탭 진입 시 GlobalSmsDock(평소 수신 시에만 열리는 패널)을
+    // 자기 자신(owner==peer, NFR10) 스레드로 강제 활성화한다.
+    useEffect(() => {
+        if (tab !== "chat" || !owner) return;
+        useActiveSmsDockStore.getState().openThreadFromCall({ owner, peer: owner });
+    }, [tab, owner]);
 
     useEffect(() => {
         if (tab === "qa" && owner && items.length === 0) void loadQa();
         if (tab === "catalog" && catalog.length === 0) void loadCatalog();
         if (tab === "screen" && screens.length === 0) void loadScreens();
         if (tab === "policy" && intentTypes.length === 0) void loadPolicy();
-        if (tab === "policy" && owner && decisionLog.length === 0) void loadDecisionLog();
+        if (tab === "policy" && owner && manualCases.length === 0) void loadManualCases();
+        if (tab === "policy" && owner && decisionSessions.length === 0) void loadDecisionSessions();
         if (tab === "kb" && owner && !kbInventory) void loadKbInventory();
+        // Story 1.37(FR34-C): kb 탭에서도 업로드 문서 목록을 로드(상세 카드용)
+        if (tab === "kb" && owner && kbDocuments.length === 0 && !loadingKbDocuments) void loadKbDocuments();
         if (tab === "upload" && uploadSection === "tenant" && owner) void loadKbDocuments();
         if (tab === "upload" && uploadSection === "system") void loadVersions();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tab, owner, items.length, catalog.length, screens.length, intentTypes.length, decisionLog.length, kbInventory, loadQa, loadCatalog, loadScreens, loadPolicy, loadDecisionLog, loadKbInventory, loadKbDocuments]);
+    }, [tab, owner, items.length, catalog.length, screens.length, intentTypes.length, manualCases.length, decisionSessions.length, kbInventory, kbDocuments.length, loadingKbDocuments, loadQa, loadCatalog, loadScreens, loadPolicy, loadManualCases, loadDecisionSessions, loadKbInventory, loadKbDocuments]);
 
     // 설정 다운로드 — Epic 2 Story 2.4
     // 백엔드는 JSON 본문만 반환하므로, 브라우저에서 Blob으로 감싸 파일 다운로드를 트리거한다.
@@ -769,7 +866,7 @@ export default function AiAssistantDocsPage() {
 
             {/* 탭 */}
             <div className="flex gap-1 border-b border-gray-200 mb-6">
-                {(["qa", "catalog", "screen", "policy", "kb", "upload", "simulate"] as Tab[]).map((t) => (
+                {(["qa", "catalog", "screen", "policy", "kb", "upload", "chat"] as Tab[]).map((t) => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -792,7 +889,7 @@ export default function AiAssistantDocsPage() {
                                             ? "지식베이스 현황"
                                             : t === "upload"
                                                 ? "지식 업로드"
-                                                : "응답 시뮬레이터"}
+                                                : "실제 채팅"}
                     </button>
                 ))}
             </div>
@@ -1098,7 +1195,7 @@ export default function AiAssistantDocsPage() {
                                                         className="flex flex-wrap items-center gap-1.5 text-sm"
                                                     >
                                                         <button
-                                                            onClick={() => handleSimulateFromPolicy(ex)}
+                                                            onClick={() => handleChatFromPolicy(ex)}
                                                             className="rounded-lg border border-gray-200 px-2.5 py-1 text-left text-gray-700 hover:bg-indigo-50 hover:text-indigo-700"
                                                         >
                                                             &quot;{ex}&quot;
@@ -1122,9 +1219,58 @@ export default function AiAssistantDocsPage() {
                                             </ul>
                                         )}
                                         <p className="mt-3 text-xs text-gray-400">
-                                            질문을 선택하면 &quot;응답 시뮬레이터&quot; 탭에서 판정 유형·hop 경로·
-                                            RAG 매칭 근거·실제 응답이 이어서 표시됩니다.
+                                            질문을 선택하면 &quot;실제 채팅&quot; 탭으로 이동해 입력창에 채워집니다 —
+                                            직접 전송을 눌러야 실제 AI 응답을 받습니다(사전 시뮬레이션 아님).
                                         </p>
+
+                                        {/* Story 1.40(FR34-D): 지식베이스 기반 정적 사례 — 실시간 LLM 호출 없음 */}
+                                        <div className="mt-4 border-t border-gray-50 pt-3">
+                                            <p className="mb-2 text-xs font-semibold text-gray-500">
+                                                지식베이스 사례(LLM 미호출, 벡터 검색·지식 그래프 조회만 사용)
+                                            </p>
+                                            {loadingManualCases && <p className="text-xs text-gray-400">로딩 중…</p>}
+                                            {manualCasesError && (
+                                                <p className="text-xs text-red-600">{manualCasesError}</p>
+                                            )}
+                                            {!loadingManualCases && !manualCasesError && (() => {
+                                                const c = manualCases.find((m) => m.code === t.code);
+                                                if (!c || !c.has_case) {
+                                                    return <p className="text-xs text-gray-400">아직 사례가 없습니다.</p>;
+                                                }
+                                                return (
+                                                    <div className="space-y-2">
+                                                        <p className="text-xs text-gray-500">
+                                                            예시 &quot;{c.trigger_example}&quot; → 매칭된 지식베이스 문서
+                                                        </p>
+                                                        <ul className="space-y-1.5">
+                                                            {c.matched_documents.map((d, i) => (
+                                                                <li key={`${d.doc_id}-${i}`} className="rounded-lg border border-gray-100 bg-gray-50/60 p-2 text-xs">
+                                                                    <span className="font-mono text-gray-500">{d.doc_id}</span>
+                                                                    {" · 유사도 "}{d.score}
+                                                                    {d.related_domain && ` · ${d.related_domain}`}
+                                                                    <p className="mt-1 text-gray-600">{d.excerpt}</p>
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                        {c.hop_path.length > 0 && (
+                                                            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                                                                {c.hop_path.map((e, i) => (
+                                                                    <span key={i} className="inline-flex items-center gap-1">
+                                                                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
+                                                                            {e.source_type}:{e.source_id}
+                                                                        </span>
+                                                                        <span className="text-gray-400">--{e.edge_type}(hop{e.hop})--&gt;</span>
+                                                                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
+                                                                            {e.target_type}:{e.target_id}
+                                                                        </span>
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
                                     </div>
                                 ))}
                             {!loadingPolicy && intentTypes.length === 0 && !policyError && (
@@ -1133,58 +1279,127 @@ export default function AiAssistantDocsPage() {
                         </div>
                     )}
 
-                    {/* ── 최근 판단 이력(Story 1.21/1.22, FR30 — IntelliDecision 판단 근거 투명성) ── */}
+                    {/* ── 최근 판단 이력 → 세션 단위 순서도(Story 1.38, FR34-F) ── */}
                     <div className="mt-8 border-t border-gray-100 pt-6">
                         <h3 className="mb-1 text-sm font-semibold text-gray-800">최근 판단 이력</h3>
                         <p className="mb-4 text-xs text-gray-500">
-                            AI가 최근 대화에서 위 유형 중 어떤 것으로 판단해 응대했는지 보여줍니다.
-                            판단은 응답 전송 이후 비동기로 기록되므로 방금 나눈 대화가 즉시 보이지
-                            않을 수 있습니다. 원본 발화 전문은 표시되지 않고 근거 요약만 제공됩니다.
+                            시뮬레이션이 아니라 실제로 주고받은 대화만 사용합니다. 통화는 통화 1건 =
+                            세션 1개, 채팅/SIP MESSAGE는 같은 상대·시간 간격(30분 이내)의 메시지를
+                            하나의 세션으로 묶어, 그 안에서 유형(A~I)이 턴마다 어떻게 옮겨갔는지
+                            보여줍니다. 판단은 응답 전송 후 비동기로 기록되어 방금 나눈 대화가 즉시
+                            보이지 않을 수 있습니다.
                         </p>
-                        {loadingDecisionLog && <p className="text-sm text-gray-400">로딩 중…</p>}
-                        {decisionLogError && (
+                        {loadingDecisionSessions && <p className="text-sm text-gray-400">로딩 중…</p>}
+                        {decisionSessionsError && (
                             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-                                {decisionLogError}
+                                {decisionSessionsError}
                             </div>
                         )}
-                        {!loadingDecisionLog && !decisionLogError && decisionLog.length === 0 && (
+                        {!loadingDecisionSessions && !decisionSessionsError && decisionSessions.length === 0 && (
                             <p className="text-sm text-gray-400">아직 기록된 판단 이력이 없습니다.</p>
                         )}
-                        {!loadingDecisionLog && decisionLog.length > 0 && (
-                            <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white shadow-sm">
-                                <table className="w-full text-left text-sm">
-                                    <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                                        <tr>
-                                            <th className="px-4 py-2">시각</th>
-                                            <th className="px-4 py-2">유형</th>
-                                            <th className="px-4 py-2">근거 요약</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-100">
-                                        {decisionLog.map((item) => {
-                                            const typeSpec = intentTypes.find((t) => t.code === item.matched_type);
-                                            return (
-                                                <tr key={item.id}>
-                                                    <td className="whitespace-nowrap px-4 py-2 text-gray-500">
-                                                        {item.created_at}
-                                                    </td>
-                                                    <td className="whitespace-nowrap px-4 py-2">
-                                                        <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                                                            {item.matched_type !== "unknown"
-                                                                ? `${item.matched_type} · ${typeSpec?.name ?? ""}`
-                                                                : "미확인"}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-4 py-2 text-gray-700">
-                                                        {item.reasoning_summary || "-"}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
+                        <div className="space-y-2">
+                            {decisionSessions.map((sess) => {
+                                const expanded = expandedSessionKey === sess.session_key;
+                                return (
+                                    <div key={sess.session_key} className="rounded-xl border border-gray-100 bg-white shadow-sm">
+                                        <button
+                                            onClick={() => void handleToggleSession(sess.session_key)}
+                                            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                                        >
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
+                                                    {sess.channel === "voice" ? "통화" : "채팅"}
+                                                </span>
+                                                <span className="text-sm text-gray-700">
+                                                    {sess.turn_count}턴 · {sess.type_sequence.join(" → ")}
+                                                </span>
+                                                <span className="text-xs text-gray-400">
+                                                    {sess.first_turn_at} ~ {sess.last_turn_at}
+                                                </span>
+                                            </div>
+                                            <span className="text-xs text-indigo-600">{expanded ? "접기 ▲" : "펼치기 ▼"}</span>
+                                        </button>
+
+                                        {expanded && (
+                                            <div className="border-t border-gray-100 p-4">
+                                                {loadingSessionDetail && <p className="text-sm text-gray-400">턴 상세 로딩 중…</p>}
+                                                {sessionDetailError && (
+                                                    <p className="text-sm text-red-600">{sessionDetailError}</p>
+                                                )}
+                                                {!loadingSessionDetail && sessionDetail && (
+                                                    <div className="space-y-3">
+                                                        {sessionDetail.turns.map((turn, idx) => {
+                                                            const prevType = idx > 0 ? sessionDetail.turns[idx - 1].matched_type : null;
+                                                            const typeChanged = prevType !== null && prevType !== turn.matched_type;
+                                                            const typeSpec = intentTypes.find((t) => t.code === turn.matched_type);
+                                                            return (
+                                                                <div key={turn.id}>
+                                                                    {idx > 0 && (
+                                                                        <div
+                                                                            className={
+                                                                                "my-1 flex items-center gap-2 text-xs " +
+                                                                                (typeChanged ? "font-semibold text-amber-600" : "text-gray-300")
+                                                                            }
+                                                                        >
+                                                                            <span>{typeChanged ? "▼ 유형 전환" : "│ 유형 유지"}</span>
+                                                                        </div>
+                                                                    )}
+                                                                    <div className="rounded-lg border border-gray-100 bg-gray-50/60 p-3">
+                                                                        <p className="text-xs text-gray-400">
+                                                                            턴 {idx + 1} · {turn.created_at}
+                                                                        </p>
+                                                                        <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+                                                                            <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-medium text-indigo-700">
+                                                                                ① 유형: {turn.matched_type !== "unknown"
+                                                                                    ? `${turn.matched_type} · ${typeSpec?.name ?? ""}`
+                                                                                    : "미확인"}
+                                                                            </span>
+                                                                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
+                                                                                ② RAG:{" "}
+                                                                                {turn.steps.rag
+                                                                                    ? `${(turn.steps.rag.matched_doc_ids || []).length}건 매칭` +
+                                                                                    (turn.steps.hybrid_rag
+                                                                                        ? ` (하이브리드 ${turn.steps.hybrid_rag.merged_total ?? "-"}건 병합)`
+                                                                                        : "")
+                                                                                    : "정보 없음"}
+                                                                            </span>
+                                                                            <span className="rounded bg-sky-50 px-1.5 py-0.5 text-sky-700">
+                                                                                ③ 화면안내/hop:{" "}
+                                                                                {turn.steps.screen_guidance
+                                                                                    ? turn.steps.screen_guidance.has_screen_guidance
+                                                                                        ? "있음"
+                                                                                        : "없음"
+                                                                                    : "정보 없음"}
+                                                                            </span>
+                                                                            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
+                                                                                ④ Tool:{" "}
+                                                                                {turn.steps.tool_calls.length > 0
+                                                                                    ? turn.steps.tool_calls.map((t) => t.tool).join(", ")
+                                                                                    : "미사용"}
+                                                                            </span>
+                                                                            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
+                                                                                ⑤ 응답:{" "}
+                                                                                {turn.steps.response_meta
+                                                                                    ? `${turn.steps.response_meta.elapsed_sec ?? "-"}초`
+                                                                                    : "정보 없음"}
+                                                                            </span>
+                                                                        </div>
+                                                                        {turn.reasoning_summary && (
+                                                                            <p className="mt-2 text-xs text-gray-500">{turn.reasoning_summary}</p>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
             )}
@@ -1313,6 +1528,65 @@ export default function AiAssistantDocsPage() {
                                     )}
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {/* Story 1.37(FR34-C): 업로드 문서별 상세 카드 + hop 경로 — 지식베이스 구성 투명성 */}
+                    {kbDocuments.length > 0 && (
+                        <div className="mt-6 border-t border-gray-100 pt-5">
+                            <h3 className="mb-3 text-sm font-semibold text-gray-800">
+                                업로드 문서별 상세 카드
+                            </h3>
+                            <div className="space-y-2">
+                                {kbDocuments.map((doc) => {
+                                    const expanded = expandedDocHopKey === doc.document_id;
+                                    return (
+                                        <div key={doc.document_id} className="rounded-xl border border-gray-100 bg-white shadow-sm">
+                                            <div className="flex items-center justify-between gap-3 px-4 py-3">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                                                        {doc.source_type}
+                                                    </span>
+                                                    <span className="text-sm font-medium text-gray-800">{doc.title}</span>
+                                                    {doc.domain_tags.map((t) => (
+                                                        <span key={t} className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-600">{t}</span>
+                                                    ))}
+                                                    {(doc.approved_methods || []).filter(m => m !== "GET").length > 0 && (
+                                                        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                                                            쓰기 승인: {(doc.approved_methods || []).filter(m => m !== "GET").join("/")}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <button
+                                                    onClick={() => void handleToggleDocHop(doc.document_id)}
+                                                    className="text-xs text-indigo-600 whitespace-nowrap"
+                                                >
+                                                    {expanded ? "hop 접기 ▲" : "hop 경로 ▼"}
+                                                </button>
+                                            </div>
+                                            {expanded && (
+                                                <div className="border-t border-gray-50 px-4 pb-3 pt-2">
+                                                    {loadingDocHop && <p className="text-xs text-gray-400">로딩 중…</p>}
+                                                    {!loadingDocHop && docHopPath && docHopPath.hop_path.length === 0 && (
+                                                        <p className="text-xs text-gray-400">연결된 hop 경로가 없습니다(domain_tags가 비어있거나 지식 그래프에 등록되지 않음).</p>
+                                                    )}
+                                                    {!loadingDocHop && docHopPath && docHopPath.hop_path.length > 0 && (
+                                                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                                                            {docHopPath.hop_path.map((e, i) => (
+                                                                <span key={i} className="inline-flex items-center gap-1">
+                                                                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">{e.source_type}:{e.source_id}</span>
+                                                                    <span className="text-gray-400">--{e.edge_type}(hop{e.hop})--&gt;</span>
+                                                                    <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">{e.target_type}:{e.target_id}</span>
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -1652,110 +1926,27 @@ export default function AiAssistantDocsPage() {
                 </div>
             )}
 
-            {/* ── 응답 시뮬레이터 탭 — Story 1.27/1.32, FR32-B/FR33-D(실 서비스 세션 무영향, 실 LLM 호출, 멀티턴) ── */}
-            {tab === "simulate" && (
+            {/* ── 실제 채팅 탭 — Story 1.39, FR34-E(응답 시뮬레이터 폐지, 실제 chat-relay 파이프라인 재사용) ── */}
+            {tab === "chat" && (
                 <div className="space-y-5">
                     <p className="text-xs text-gray-500">
-                        예시 질문을 입력하면 실제 통화/채팅 세션에 영향을 주지 않고, 매칭된 지식
-                        문서·AI 의사결정 유형·hop 경로·실제 응답을 미리 확인할 수 있습니다. 실제
-                        LLM을 호출하므로 시간이 걸릴 수 있습니다(NFR8). 결과 확인 후에도 아래에
-                        새 질문을 계속 입력해 대화를 이어갈 수 있습니다(AC5).
+                        사전 시뮬레이션이 아니라, 왼쪽 하단에 열린 채팅 패널로 실제 나 자신(테넌트
+                        내선)에게 문자를 보내 실제 AI 응답을 받아볼 수 있습니다(NFR10 — 실제
+                        chat-relay/self_service_agent 경로를 그대로 사용). 주고받은 대화는 다른
+                        SIP MESSAGE와 동일하게 기록되어, &quot;최근 판단 이력&quot;에도 그대로
+                        반영됩니다.
                     </p>
-
-                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-3">
-                        <div>
-                            <label className="block text-xs text-gray-500 mb-1">예시 발화</label>
-                            <textarea
-                                value={simulateQuery}
-                                onChange={(e) => setSimulateQuery(e.target.value)}
-                                rows={3}
-                                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                placeholder="예: 착신 규칙을 바꾸고 싶어요"
-                            />
-                        </div>
-                        <button
-                            onClick={() => void handleSimulate()}
-                            disabled={simulating || !owner || !simulateQuery.trim()}
-                            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-                        >
-                            {simulating ? "실행 중… (실제 LLM 호출로 시간이 걸릴 수 있습니다)" : "시뮬레이션 실행"}
-                        </button>
-                        {simulateError && (
-                            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-                                {simulateError}
-                            </div>
+                    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-2">
+                        <p className="text-sm text-gray-700">
+                            화면 왼쪽 아래에 채팅 패널이 열려 있는지 확인하세요. 닫혀 있거나 최소화
+                            되어 있다면 다시 이 탭을 클릭하면 자동으로 열립니다.
+                        </p>
+                        {!owner && (
+                            <p className="text-sm text-red-600">
+                                테넌트(owner)가 설정되지 않아 채팅 패널을 열 수 없습니다.
+                            </p>
                         )}
                     </div>
-
-                    {/* Story 1.32 AC5: 대화 턴 리스트(최신 턴이 아래) — 매 턴마다 ①~④를 함께 기록 */}
-                    {simulateTurns.map((turn, turnIndex) => (
-                        <div key={turnIndex} className="space-y-3 rounded-2xl border border-gray-200 p-4">
-                            <p className="text-sm font-medium text-gray-800">
-                                턴 {turnIndex + 1} · &quot;{turn.query}&quot;
-                            </p>
-                            <p className="text-xs text-gray-400">
-                                소요 시간: {turn.elapsed_sec.toFixed(2)}초(실측, 캐시 아님)
-                            </p>
-
-                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
-                                    ① 매칭된 지식 문서
-                                </h3>
-                                {turn.matched_documents.length === 0 ? (
-                                    <p className="text-sm text-gray-400">매칭된 문서가 없습니다.</p>
-                                ) : (
-                                    <ul className="space-y-1 text-sm">
-                                        {turn.matched_documents.map((d, i) => (
-                                            <li key={`${d.doc_id}-${i}`} className="text-gray-700">
-                                                <span className="font-mono text-xs text-gray-500">{d.doc_id}</span>
-                                                {" · 유사도 "}
-                                                {d.score.toFixed(3)}
-                                                {d.related_domain && ` · ${d.related_domain}`}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </div>
-
-                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-                                <h3 className="mb-2 text-sm font-semibold text-gray-800">
-                                    ② IntelliDecision 판정 · hop 경로
-                                </h3>
-                                <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                                    {turn.intellidecision_type !== "unknown"
-                                        ? `${turn.intellidecision_type} · ${intentTypes.find((t) => t.code === turn.intellidecision_type)?.name ?? ""}`
-                                        : "미확인"}
-                                </span>
-                                <p className="mt-2 text-sm text-gray-600">{turn.reasoning_summary || "-"}</p>
-                                {turn.hop_path.length > 0 ? (
-                                    <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-                                        {turn.hop_path.map((e, i) => (
-                                            <span key={i} className="inline-flex items-center gap-1">
-                                                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
-                                                    {e.source_type}:{e.source_id}
-                                                </span>
-                                                <span className="text-gray-400">
-                                                    --{e.edge_type}(hop{e.hop})--&gt;
-                                                </span>
-                                                <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
-                                                    {e.target_type}:{e.target_id}
-                                                </span>
-                                            </span>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <p className="mt-2 text-xs text-gray-400">
-                                        지식 그래프 hop 경로가 없습니다(매칭된 문서에 관련 도메인 정보가 없음).
-                                    </p>
-                                )}
-                            </div>
-
-                            <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-                                <h3 className="mb-2 text-sm font-semibold text-gray-800">③ 실제 응답</h3>
-                                <p className="whitespace-pre-wrap text-sm text-gray-800">{turn.response}</p>
-                            </div>
-                        </div>
-                    ))}
                 </div>
             )}
         </div>

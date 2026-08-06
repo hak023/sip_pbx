@@ -1,8 +1,7 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement Architecture
 
 **작성일**: 2026-07-14
-**버전**: 0.26 (2026-08-05 갱신 — Story 1.38 세션 그룹핑 키 수정: call_id 단일 기준 → 채널별(음성 call_id / 채팅 owner+caller_number+시간 윈도우))
-프롬프트 산문 자동 렌더링(Story 1.19))
+**버전**: 0.28 (2026-08-06 갱신 — Epic 4(FR35) 계획 반영: 업로드 완전 통합/응대 유형 탐색기/IntelliDecision 상태전이 다이어그램/교차 탐색 등)
 **상태**: Epic 1(Story 1.1~1.19) 구현·실서버 검증 완료 + Epic 2(Story 2.1~2.8) 구현·실서버 검증 완료 + Story 1.23~1.25 구현 완료, 도메인 비종속 지식베이스 플랫폼(Story 1.26~1.29)는 설계만 반영(Draft)
 **관련 문서**:
 - [self-service-ai-assistant-prd.md](../product/self-service-ai-assistant-prd.md) — 본 아키텍처의 입력 PRD (FR1-11, NFR1-4, CR1-4, Epic 1 Story 1.1-1.9)
@@ -60,8 +59,9 @@
 | Story 1.33 구현 완료                                                                 | 2026-08-05 | 0.22    | Task 1에서 `self_service_agent.py`가 유형 판정 전 단일 `rag_engine.search()` 호출만 함을 코드로 재확인(Story 1.24 IV 선례와 동일 패턴). 신규 `hybrid_rag.py`(`looks_like_broad_help_query()` 휴리스틱 + `search_hybrid_multi_domain()` — 카탈로그 도메인별 ChromaDB 직접 조회를 `asyncio.gather`로 병렬 실행)를 기존 RAG 검색과 병렬로 추가 실행하도록 배선, 결과는 기존 `rag_documents`에 병합되어 프롬프트/화면안내/trace/Story 1.32 hop_path 경로를 그대로 재사용(AC3 자동 충족, 코드 수정 불필요). `intellidecision_policy.py` 유형 C `rag_strategy_hint`를 `hybrid_multi_domain`으로 갱신(AC1) | Copilot (BMAD Dev 역할)       |
 | Epic 3(FR34) 계획 증분 — 도메인 비종속 AI 에이전트 플랫폼 전환                       | 2026-08-05 | 0.23    | 사용자가 시장 리서치([MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md](../design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md)) 기반으로 개발 방향 재편 요청 → 신규 §"Epic 3: 도메인 비종속 AI 에이전트 플랫폼 전환 방향"(아래) 추가(PRD FR34), Story 1.34(실행 안전 설계 스파이크)~1.39(시뮬레이터 통합 재검토) 설계 방향만 문서화 — 구현은 각 Story 착수 시 진행                                                                                                                                                                                                             | Copilot (BMAD Architect 역할) |
 | Epic 3(FR34) 방향 수정 — 시뮬레이터 폐지·실제 채팅 패널·판단 이력 실제화             | 2026-08-05 | 0.24    | 사용자가 3가지 추가 요청 제시(① IntelliDecision 탭 시뮬레이션 폐지→KB 기반 설명 매뉴얼, ② 응답 시뮬레이터 완전 삭제→기존 `GlobalSmsDock` 상시 노출로 실제 채팅 패널 신설, ③ "최근 판단 이력"을 실제 대화 기반 순서도로 고도화) → PRD FR34-D/E/F 재작성 + NFR10 추가(v1.6), 본 문서 설계 원칙 4 재작성, IA 다이어그램·Story 설계 표 갱신(Story 1.38/1.39 재정의 + 1.40 신설), Story 1.38/1.39 파일 재작성 및 1.40 신규 생성 예정                                                                                                                                                                     | Copilot (BMAD Architect 역할) |
-| Story 1.38 범위 재정의 — 단일 턴 flowchart → call_id 세션 단위 유형 전환 순서도       | 2026-08-05 | 0.25    | 사용자가 "한 건의 질의/응답만 보여주면 의미 없다 — 여러 턴을 주고받으며 유형이 옮겨가는 과정 자체가 IntelliDecision 핵심"이라고 지적 → Story 1.38을 "단일 턴 flowchart"에서 "동일 call_id 세션 내 여러 턴이 유형 간 이동하는 흐름 전체"로 전면 재정의(AC 8개로 재작성, 세션 목록/상세 2단계 API 설계 추가), 본 문서 설계 원칙 (c)와 Story 표 1.38 행 동기화                                                                                                                                                                                                    | Copilot (BMAD Architect 역할) |
-| Story 1.38 세션 그룹핑 키 정정 — call_id 단일 기준 → 채널별 그룹핑                    | 2026-08-05 | 0.26    | 사용자가 "call_id 그룹핑은 통화 기준엔 맞지만, 문자(SIP MESSAGE)는 call_id가 트랜잭션마다 발급되지 않냐"고 지적 → `sip_endpoint.py` 코드 확인 결과 정확한 지적(MESSAGE 1건마다 신규 call_id 발급, 실제 채팅 이력은 `chat_service.py`의 `thread_id`+`owner`로 그룹핑) → 세션 그룹핑 키를 채널별로 분리(음성=call_id, 채팅=owner+caller_number+시간 윈도우)하도록 재정의, `self_service_decision_log`에 caller_number 컬럼 신규 추가 필요성 명시, Story 1.38 AC/Task 전면 수정                                                                                                          | Copilot (BMAD Architect 역할) |
+| Story 1.38 범위 재정의 — 단일 턴 flowchart → call_id 세션 단위 유형 전환 순서도      | 2026-08-05 | 0.25    | 사용자가 "한 건의 질의/응답만 보여주면 의미 없다 — 여러 턴을 주고받으며 유형이 옮겨가는 과정 자체가 IntelliDecision 핵심"이라고 지적 → Story 1.38을 "단일 턴 flowchart"에서 "동일 call_id 세션 내 여러 턴이 유형 간 이동하는 흐름 전체"로 전면 재정의(AC 8개로 재작성, 세션 목록/상세 2단계 API 설계 추가), 본 문서 설계 원칙 (c)와 Story 표 1.38 행 동기화                                                                                                                                                                                                                                         | Copilot (BMAD Architect 역할) |
+| Story 1.38 세션 그룹핑 키 정정 — call_id 단일 기준 → 채널별 그룹핑                   | 2026-08-05 | 0.26    | 사용자가 "call_id 그룹핑은 통화 기준엔 맞지만, 문자(SIP MESSAGE)는 call_id가 트랜잭션마다 발급되지 않냐"고 지적 → `sip_endpoint.py` 코드 확인 결과 정확한 지적(MESSAGE 1건마다 신규 call_id 발급, 실제 채팅 이력은 `chat_service.py`의 `thread_id`+`owner`로 그룹핑) → 세션 그룹핑 키를 채널별로 분리(음성=call_id, 채팅=owner+caller_number+시간 윈도우)하도록 재정의, `self_service_decision_log`에 caller_number 컬럼 신규 추가 필요성 명시, Story 1.38 AC/Task 전면 수정                                                                                                                        | Copilot (BMAD Architect 역할) |
+| Story 1.35 재개 — base_url/인증정보 캡처 공백 발견 및 설계                           | 2026-08-06 | 0.27    | 사용자가 "다른 시스템도 다뤄야 하는데 fullpath 등 데이터를 업로드로 받아 반영되게 고려되어 있는지" 점검 요청 → 코드 확인 결과 `dynamic_api_tool.py`가 `base_url`을 요구하지만 저장 경로가 전혀 없고, `OpenApiSpecAdapter`가 `servers` 필드를 파싱하지 않으며, 엔드포인트 실행 메타가 색인 중 버려지는 치명적 공백 발견 → 신규 §"Story 1.35 재개" 추가(`knowledge_documents`에 base_url/인증 컬럼, 신규 `knowledge_document_endpoints` 테이블, `build_execution_context()` 설계)                                                                                                                     | Copilot (BMAD Architect 역할) |
 
 ---
 
@@ -711,17 +711,53 @@ graph TD
 
 ### Story별 설계 방향 요약
 
-| Story | 목표                                          | 핵심 컴포넌트(신규/변경)                                                                                                        | 재사용                                                                    |
-| ----- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 1.34  | 실행 안전 설계 스파이크(코드 변경 최소)       | `tool_execution_policy.py`(가칭) — 화이트리스트 승인 상태 저장, undo 스냅샷 규칙                                                | Epic 2 화이트리스트 원칙, Story 1.17 Undo 패턴                            |
-| 1.35  | 업로드 OpenAPI → 실제 실행 Tool 연결          | `document_adapters.py::OpenApiSpecAdapter` 확장(엔드포인트 메타 보존), 신규 `dynamic_api_tool.py`(HTTP 호출 실행기)             | LangGraph Tool-calling 3단계 폴백(`booking_gemini_fc.py`)                 |
-| 1.36  | Frontend IA 재편                              | 신규 최상위 라우트, 탭→섹션 재배치(컴포넌트 로직 대부분 재사용)                                                                 | Story 1.30 세그먼트 UI 패턴                                               |
-| 1.37  | 지식베이스 API/Tool 상세 카드                 | Tool 상세 카드 컴포넌트(엔드포인트·writable·hop 경로 인라인)                                                                    | Story 1.23/1.31 현황 API, Story 1.28 `traverse_graph()`                   |
+| Story | 목표                                                                         | 핵심 컴포넌트(신규/변경)                                                                                                                                                             | 재사용                                                                                                             |
+| ----- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| 1.34  | 실행 안전 설계 스파이크(코드 변경 최소)                                      | `tool_execution_policy.py`(가칭) — 화이트리스트 승인 상태 저장, undo 스냅샷 규칙                                                                                                     | Epic 2 화이트리스트 원칙, Story 1.17 Undo 패턴                                                                     |
+| 1.35  | 업로드 OpenAPI → 실제 실행 Tool 연결                                         | `document_adapters.py::OpenApiSpecAdapter` 확장(엔드포인트 메타 보존), 신규 `dynamic_api_tool.py`(HTTP 호출 실행기)                                                                  | LangGraph Tool-calling 3단계 폴백(`booking_gemini_fc.py`)                                                          |
+| 1.36  | Frontend IA 재편                                                             | 신규 최상위 라우트, 탭→섹션 재배치(컴포넌트 로직 대부분 재사용)                                                                                                                      | Story 1.30 세그먼트 UI 패턴                                                                                        |
+| 1.37  | 지식베이스 API/Tool 상세 카드                                                | Tool 상세 카드 컴포넌트(엔드포인트·writable·hop 경로 인라인)                                                                                                                         | Story 1.23/1.31 현황 API, Story 1.28 `traverse_graph()`                                                            |
 | 1.38  | 최근 판단 이력 → 세션 단위 유형 전환 순서도 고도화(채널별 그룹핑 키, 멀티턴) | `self_service_decision_log`에 caller_number 컬럼 추가 + 채널별 세션 그룹핑(음성=call_id, 채팅=owner+caller_number+시간 윈도우) + 세션 목록/상세 API + 턴 간 유형 전환 엣지 flowchart | Story 1.21/1.22 판단 이력 API, Story 1.24 정책 메타데이터, Story 1.28 hop, `chat_service.py` thread_id 그룹핑 패턴 |
-| 1.39  | 응답 시뮬레이터 폐지 + 실제 채팅 패널 신설    | `GlobalSmsDock` 상시 활성화/노출 코드, 자기 테넌트 번호로 전송 가능하도록 UI 보완                                               | `frontend/app/chat/page.tsx` 전송 로직, 기존 chat-relay 파이프라인        |
-| 1.40  | IntelliDecision 설명 매뉴얼 전환              | "AI 의사결정 로직" 탭의 시뮬레이션 트리거를 정적 사례 설명으로 교체                                                             | Story 1.18/1.32 정책 API+A~I 하위 탭, Story 1.31 KB 자동 구성             |
+| 1.39  | 응답 시뮬레이터 폐지 + 실제 채팅 패널 신설                                   | `GlobalSmsDock` 상시 활성화/노출 코드, 자기 테넌트 번호로 전송 가능하도록 UI 보완                                                                                                    | `frontend/app/chat/page.tsx` 전송 로직, 기존 chat-relay 파이프라인                                                 |
+| 1.40  | IntelliDecision 설명 매뉴얼 전환                                             | "AI 의사결정 로직" 탭의 시뮬레이션 트리거를 정적 사례 설명으로 교체                                                                                                                  | Story 1.18/1.32 정책 API+A~I 하위 탭, Story 1.31 KB 자동 구성                                                      |
 
-## RAG·IntelliDecision 고도화: 도메인 비종속 지식베이스 플랫폼 (Story 1.26~1.29)
+### Story 1.35 재개(2026-08-06) — base_url/인증정보 캡처 공백 발견 및 설계
+
+Story 1.35 1차 구현(승인 검사→GET 스냅샷→HTTP 실행→로그 기록)은 완료됐으나, 사용자가 "이 시스템
+자체만 다루던 걸 이제 임의의 다른 시스템도 다뤄야 하는데, 그 시스템의 전체 경로(fullpath)를
+업로드로 받아 반영하도록 고려되어 있는지" 점검을 요청해 코드를 재확인한 결과 **치명적 공백**을
+발견했다:
+
+1. `dynamic_api_tool.py::execute_api_endpoint()`가 `base_url`을 필수 파라미터로 요구하지만,
+   업로드 API(`POST /api/knowledge-base/documents`)에는 base_url을 받는 필드가 없고
+   `knowledge_documents` 테이블에도 저장 컬럼이 없다.
+2. `OpenApiSpecAdapter`가 OpenAPI 스펙의 `servers` 필드를 전혀 파싱하지 않는다.
+3. 인증 정보(API 키/토큰)를 받거나 저장하는 경로가 없다.
+4. Story 1.35에서 어댑터에 추가한 엔드포인트 실행 메타(`_endpoint_path`/`_method`/`_parameters`/
+   `_request_body`)가 `knowledge_documents.py::_index_pairs()`에서 question/answer만 추출하는
+   과정 중 버려진다 — 실행 시점에 재구성할 방법이 없었다.
+5. `execute_api_endpoint()`를 실제로 호출하는 프로덕션 코드 경로(LangGraph Tool)가 아직 없다
+   (단위테스트 모킹에서만 호출됨).
+
+**설계 결정**:
+
+- `knowledge_documents` 테이블에 `base_url TEXT`, `auth_header_name TEXT`, `auth_header_value TEXT`
+  컬럼 추가(마이그레이션). 인증 값은 평문으로 저장하되(별도 비밀 관리 인프라가 이 저장소에 없음
+  — 기존 Google OAuth 토큰 저장 방식과 동일 수준), API 응답·로그에는 항상 마스킹 처리한다(OWASP,
+  `dynamic_api_tool.py::_redact_headers()` 기존 패턴 재사용).
+- `OpenApiSpecAdapter`가 스펙의 `servers[0].url`을 자동 추출해 업로드 시 base_url 기본값으로
+  제안하되, 업로드 폼에서 테넌트가 직접 override 가능하게 한다(스펙에 servers가 없거나 사설 IP인
+  경우 대비).
+- 신규 테이블 `knowledge_document_endpoints`(document_id, method, endpoint_path, parameters_json,
+  request_body_json) — Story 1.35에서 어댑터가 이미 만들어둔 메타를 실제로 영속화해, 실행 시점에
+  document_id+method+endpoint_path로 조회 가능하게 한다.
+- `dynamic_api_tool.py`에 문서 조회 헬퍼(`build_execution_context(document_id, owner)` 가칭)를
+  추가해 base_url/인증/엔드포인트 메타를 한 번에 조립하도록 한다 — LangGraph Tool 생성 시
+  이 헬퍼만 호출하면 되도록 설계.
+- LangGraph Tool 연결(`self_service_agent.py`)은 이번 재개 범위에 포함하지 않는다(여전히 실사용
+  수요 확인 후 별도 착수 — 우선은 "실행에 필요한 데이터가 실제로 저장·조회되는지"부터 해결).
+
+
 
 > 시장·연구 리서치는 [SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md](../design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md)(v2.3)를 참고. 이 절은 **Story 1.26(지식 문서 CRUD+업로드)** 착수를 위한 상세 아키텍처 설계다 — 컴포넌트 구조, 데이터 모델, API 계약, 시퀀스 다이어그램을 코드 작성 전에 확정한다.
 
@@ -1210,6 +1246,78 @@ sip-pbx/frontend/app/settings/
 **Existing Security Tests**: 없음(범위 밖).
 **New Security Test Requirements**: 화이트/제외 목록 우회 시도(프롬프트 인젝션 유사 입력)가 실제 변경으로 이어지지 않는지 테스트(PRD Story 1.8 IV2).
 **Penetration Testing**: 범위 밖(별도 트랙).
+
+---
+
+## Epic 4 Component Architecture: 플랫폼 성숙화 · UX 투명성 전면 개편 (FR35, Story 1.41~1.47)
+
+> 상세 배경·현황 진단·UI 미리보기는 계획 리포트 참고:
+> [2026-08-06_epic4_platform_maturation_and_ux_transparency_planning.md](../reports/2026-08/2026-08-06_epic4_platform_maturation_and_ux_transparency_planning.md)
+
+### IntelliDecision 상태 전이(유형 판정→처리→복구) 다이어그램
+
+```mermaid
+stateDiagram-v2
+    [*] --> 발화수신
+    발화수신 --> 유형판정: classify(발화, RAG후보, 이전 유형)
+
+    state 유형판정 {
+        [*] --> A_탐색성
+        [*] --> B_실행요청
+        [*] --> C_포괄도움
+        [*] --> D_정정
+        [*] --> E_Undo
+        [*] --> F_모호성해소
+        [*] --> G_통계조회
+        [*] --> H_비활성유도
+        [*] --> I_반복확인
+    }
+
+    유형판정 --> RAG검색: rag_enabled=true(A/C/G 등)
+    유형판정 --> Tool호출: requires_tool=true(B/E 등)
+    유형판정 --> 화면안내hop: writable 도메인 관련(2-hop 그래프)
+    유형판정 --> 즉시응답: rag_enabled=false & requires_tool=false(F/H/I)
+
+    RAG검색 --> 응답생성
+    Tool호출 --> Tool성공: 화이트리스트 통과
+    Tool호출 --> Tool실패: not_writable/거부/빈 candidate
+    Tool실패 --> F_모호성해소: 재질문으로 폴백
+    Tool성공 --> 응답생성
+    화면안내hop --> 응답생성
+    즉시응답 --> 응답생성
+
+    응답생성 --> 다음턴대기
+    다음턴대기 --> 유형판정: 사용자 후속 발화(유형 유지 또는 전환)
+    다음턴대기 --> [*]: 세션 종료(30분 무응답 등)
+```
+
+### 설계 방향
+
+- **FR35-A(업로드 통합)**: `catalog`/`screen`/`kb` 업로드 폼을 단일 드롭존으로 통합, 파일 시그니처
+  (확장자/MIME/`openapi:`·`swagger:` 키 존재 여부)로 내부 어댑터를 자동 라우팅. 백엔드 API·DB
+  스키마(`self_service_catalog_config` vs `knowledge_documents`)는 변경 없음(NFR8 유지) — 프론트
+  엔드 컨테이너 재배치와 판별 로직만 신규.
+- **FR35-D(응대 유형 탐색기)**: 신규 프론트엔드 컴포넌트(가칭 `IntentExplorer`)가 기존
+  `GET /intellidecision-policy`(trigger_examples/rag_enabled/requires_tool)와
+  `knowledge_base_simulate.py`(Story 1.32, 실제 벡터 검색+hop 수집, LLM 미호출)를 그대로
+  재사용한다. 신규 백엔드 로직은 최소화(기존 엔드포인트 응답 형식 무변경). "이대로 실제로
+  물어보기" 버튼은 `useActiveSmsDockStore.openThreadFromCall()`(Story 1.39)을 그대로 호출해
+  실제 채팅 패널로 전환 — 신규 상태 관리 코드 불필요.
+- **FR35-F(교차 탐색)**: Story 1.38 `list_decision_log_sessions()`/`get_decision_log_session_detail()`에
+  `related_domain`/`doc_id` 선택적 필터 파라미터만 추가해 재사용(신규 테이블·쿼리 로직 최소화).
+  hop 원시 문자열 렌더링은 Story 1.32 그래프 시각화 컴포넌트의 카드 스타일로 교체.
+
+### Story 매핑표
+
+| Story | 컴포넌트 변경 | 재사용 대상 |
+|---|---|---|
+| 1.41 | `page.tsx` 업로드 컨테이너 통합 + 파일 시그니처 판별 유틸(신규, 프론트 전용) | Story 1.26/1.30 API 무수정 |
+| 1.42 | 신규 가이드 페이지(`/ai-agent/knowledge-base/guide`, 정적 콘텐츠) | Story 1.31 분류 규칙 설명용 |
+| 1.43 | `/ai-agent` IA에 배지 컴포넌트 추가 | Story 1.36 |
+| 1.44 | 신규 `IntentExplorer` 컴포넌트(프론트), 백엔드 무수정 | `/intellidecision-policy`, `knowledge_base_simulate.py` |
+| 1.45 | `IntentExplorer`에 다중 도메인 카드 렌더링 분기 추가 | Story 1.33 `search_hybrid_multi_domain` |
+| 1.46 | 세션/카탈로그/KB 화면에 상호 링크 + hop 카드 UI 교체 | Story 1.32/1.38 |
+| 1.47 | 문서 전용, 코드 변경 없음 | - |
 
 ---
 

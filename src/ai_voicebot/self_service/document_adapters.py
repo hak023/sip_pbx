@@ -72,6 +72,20 @@ class OpenApiSpecAdapter:
     def load_pairs(self, path: Optional[Path] = None) -> List[Tuple[str, str]]:
         return [(it["question"], it["answer"]) for it in self.load_pairs_with_meta(path)]
 
+    def extract_base_url(self) -> str:
+        """스펙의 `servers[0].url`을 추출한다(Story 1.35 재개, FR34-A). 없으면 빈 문자열.
+
+        업로드 시 base_url 입력 필드의 기본값 제안용 — 테넌트가 직접 override 가능해야 한다
+        (사설 IP·미기재 스펙 대비, 강제 사용 아님).
+        """
+        spec = self._parse_spec()
+        servers = spec.get("servers") or []
+        if isinstance(servers, list) and servers:
+            first = servers[0]
+            if isinstance(first, dict):
+                return str(first.get("url") or "")
+        return ""
+
     def load_pairs_with_meta(self, path: Optional[Path] = None) -> List[Dict[str, str]]:
         spec = self._parse_spec()
         paths = spec.get("paths") or {}
@@ -106,6 +120,11 @@ class OpenApiSpecAdapter:
                         "answer": answer,
                         "section_title": self._title,
                         "related_domain": "",
+                        # Story 1.35(FR34-A): 실행 메타데이터 보존 — 동적 Tool 생성 시 재사용
+                        "_endpoint_path": endpoint_path,
+                        "_method": method.upper(),
+                        "_parameters": parameters,
+                        "_request_body": operation.get("requestBody"),
                     }
                 )
         if not items:
