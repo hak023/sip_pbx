@@ -18,9 +18,16 @@ from typing import Any, Optional
 import structlog
 
 from src.ai_voicebot.langgraph.call_context import get_embedder, get_vector_db
+from src.ai_voicebot.self_service.knowledge_documents import KNOWLEDGE_DOCUMENT_DOC_TYPE
 from src.ai_voicebot.self_service.manual_indexer import SELF_SERVICE_MANUAL_DOC_TYPE
 
 logger = structlog.get_logger(__name__)
+
+# (2026-08-07) 이 학이자 self_service_manual만 검색 대상으로 삼아, Story 1.26로
+# 업로드한 문서(doc_type=knowledge_document)가 색인은 되지만 실제 대화 RAG 검색에는
+# 절대 잡히지 않는 치명적 버그가 있었다(사용자 보고: "업로드한 게 도우미
+# 지식베이스에서 검색되지 않는다"). 두 doc_type 모두를 허용리스트에 포함해야 한다.
+_SELF_SERVICE_KB_DOC_TYPES = [SELF_SERVICE_MANUAL_DOC_TYPE, KNOWLEDGE_DOCUMENT_DOC_TYPE]
 
 _self_service_rag_engine: Optional[Any] = None
 _cached_embedder_id: Optional[int] = None
@@ -56,13 +63,13 @@ def get_self_service_rag_engine() -> Optional[Any]:
         top_k=5,
         similarity_threshold=0.35,
         reranking_enabled=False,
-        doc_type_allowlist=[SELF_SERVICE_MANUAL_DOC_TYPE],
+        doc_type_allowlist=_SELF_SERVICE_KB_DOC_TYPES,
     )
     _cached_embedder_id = id(embedder)
     _cached_vector_db_id = id(vector_db)
     logger.info(
         "self_service_rag_engine_created",
-        doc_type_allowlist=SELF_SERVICE_MANUAL_DOC_TYPE,
+        doc_type_allowlist=_SELF_SERVICE_KB_DOC_TYPES,
     )
     return _self_service_rag_engine
 

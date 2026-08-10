@@ -232,6 +232,72 @@ def deactivate_document(document_id: str, *, owner: str) -> bool:
         return False
 
 
+def deactivate_all_documents(owner: str) -> int:
+    """owner의 활성 문서 전체를 소프트 삭제한다(Story 1.52, 지식베이스 전체 초기화용). Deprecated:
+    `purge_all_documents()`가 endpoint/실행 이력까지 포함해 완전히 지우므로 새 코드는 그쪽을 쓸 것."""
+    if not _DB_AVAILABLE:
+        return 0
+    get_db = _get_db()
+    if get_db is None:
+        return 0
+
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                "UPDATE knowledge_documents SET is_active = 0,"
+                " updated_at = datetime('now','localtime')"
+                " WHERE owner = ? AND is_active = 1",
+                (owner,),
+            )
+        return cur.rowcount
+    except Exception as exc:
+        logger.warning("knowledge_documents_deactivate_all_failed owner=%s err=%s", owner, exc)
+        return 0
+
+
+def purge_all_documents(owner: str) -> Dict[str, int]:
+    """owner의 문서를 완전히 하드 삭제한다(Story 1.52 버그 수정 — "전체 삭제"가 실제로는 문서를
+    비활성화만 하고 `knowledge_document_endpoints`(REST-API 엔드포인트 메타)/`tool_execution_log`
+    (승인·실행·Undo 이력)은 전혀 지우지 않아 원격 시스템 실행 설정 잔재가 그대로 남아있던 문제를
+    해소한다 — 사용자가 "REST-API 실행 설정까지 테넌트별로 완전히 초기화되어야 한다"고 명확히
+    요구했으므로, 이 경로는 소프트 삭제가 아니라 실제로 행을 지운다.
+
+    Returns:
+        {"deleted_documents": int, "deleted_endpoints": int, "deleted_execution_logs": int}
+    """
+    result = {"deleted_documents": 0, "deleted_endpoints": 0, "deleted_execution_logs": 0}
+    if not _DB_AVAILABLE:
+        return result
+    get_db = _get_db()
+    if get_db is None:
+        return result
+
+    try:
+        with get_db() as conn:
+            doc_ids = [
+                row["document_id"]
+                for row in conn.execute(
+                    "SELECT document_id FROM knowledge_documents WHERE owner = ?", (owner,)
+                ).fetchall()
+            ]
+            if doc_ids:
+                placeholders = ",".join("?" * len(doc_ids))
+                cur_ep = conn.execute(
+                    f"DELETE FROM knowledge_document_endpoints WHERE document_id IN ({placeholders})",
+                    doc_ids,
+                )
+                result["deleted_endpoints"] = cur_ep.rowcount
+            cur_log = conn.execute("DELETE FROM tool_execution_log WHERE owner = ?", (owner,))
+            result["deleted_execution_logs"] = cur_log.rowcount
+            cur_doc = conn.execute("DELETE FROM knowledge_documents WHERE owner = ?", (owner,))
+            result["deleted_documents"] = cur_doc.rowcount
+    except Exception as exc:
+        logger.warning("knowledge_documents_purge_all_failed owner=%s err=%s", owner, exc)
+    return result
+
+
+
+
 # ---------------------------------------------------------------------------
 # Story 1.34 (FR34-A) — 쓰기 메서드 승인 관리
 # GET은 기본 능동(승인 불필요), POST/PUT/PATCH/DELETE는 테넌트가 명시적으로 승인해야 활성화.

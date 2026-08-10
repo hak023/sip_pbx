@@ -227,7 +227,7 @@ def _format_onboarding_section(items) -> str:
     return f"다음 초기 설정이 아직 완료되지 않았습니다. 첫 인사 뒤 자연스럽게 안내하세요:\n{lines}"
 
 
-def _format_screen_guidance(documents) -> str:
+def _format_screen_guidance(documents, owner: str = "") -> str:
     """RAG 검색 결과 문서의 related_domain 메타데이터로 Screen Graph를 조회해
     화면 안내 문구를 조립한다(Story 1.11 — GraphRAG Local Search 패턴 재현:
     매뉴얼 RAG → related_domain → 화면 1-hop 확장).
@@ -244,7 +244,7 @@ def _format_screen_guidance(documents) -> str:
 
         sections = []
         for domain in domains_seen:
-            guidance = describe_screen_for_conversation(domain)
+            guidance = describe_screen_for_conversation(domain, owner)
             if guidance:
                 # Story 1.18(축 B): 화면 안내(1-hop)에 이어 "이 도메인에서 실제로 어떤
                 # IntelliDecision 유형이 성립 가능한가"(2-hop, writable 기반)를 명시적으로
@@ -297,7 +297,7 @@ _STATIC_CAPABILITY_FALLBACK = (
 )
 
 
-def _format_capability_section() -> str:
+def _format_capability_section(owner: str = "") -> str:
     """설정 카탈로그(실시간)+Tool 기반 능력(정적 매핑)을 조합해 유형 C(도움 요청) 응답용
     능력 목록 텍스트를 동적으로 조립한다(Story 1.17).
 
@@ -315,13 +315,13 @@ def _format_capability_section() -> str:
       되돌아간다(회귀 방지 안전망).
     """
     try:
-        domains = settings_catalog.list_domains()
+        domains = settings_catalog.list_domains(owner)
         if not domains:
             return _STATIC_CAPABILITY_FALLBACK
 
         queryable_labels = [_DOMAIN_LABELS.get(d, d) for d in domains]
         writable_labels = [
-            _DOMAIN_LABELS.get(d, d) for d in domains if settings_catalog.domain_writable_fields(d)
+            _DOMAIN_LABELS.get(d, d) for d in domains if settings_catalog.domain_writable_fields(d, owner)
         ]
 
         lines = [
@@ -340,8 +340,26 @@ def _format_capability_section() -> str:
         return _STATIC_CAPABILITY_FALLBACK
 
 
-def _try_bind_self_service_tools(llm_client, call_id: str):
-    """가능하면 SELF_SERVICE_TOOLS를 bind한 LLM을 반환한다. 실패/미지원 시 None
+def _self_service_tools_for_owner(owner: str) -> list:
+    """정적 SELF_SERVICE_TOOLS + owner가 업로드한 승인된 동적 REST-API Tool을 합친 목록(Story 1.48).
+
+    동적 Tool 빌드가 실패해도(문서 없음/DB 오류) 정적 Tool 목록은 항상 그대로 반환한다 —
+    Story 1.48은 확장이지 기존 흐름 대체가 아니다(회귀 방지).
+    """
+    from src.ai_voicebot.self_service.tools import SELF_SERVICE_TOOLS
+
+    tools = list(SELF_SERVICE_TOOLS)
+    try:
+        from src.ai_voicebot.self_service.dynamic_api_tool import build_dynamic_tools_for_owner
+
+        tools.extend(build_dynamic_tools_for_owner(owner))
+    except Exception as e:
+        logger.warning("self_service_agent_dynamic_tools_build_failed", owner=owner, error=str(e))
+    return tools
+
+
+def _try_bind_self_service_tools(llm_client, call_id: str, owner: str):
+    """가능하면 SELF_SERVICE_TOOLS(+동적 REST-API Tool)를 bind한 LLM을 반환한다. 실패/미지원 시 None
     (현재 `LLMClient`는 LangChain 모델을 노출하지 않아 항상 None — Gemini 네이티브 FC로 폴백된다)."""
     try:
         import langchain_core.messages  # noqa: F401
@@ -352,28 +370,27 @@ def _try_bind_self_service_tools(llm_client, call_id: str):
     if raw_llm is None:
         return None
     try:
-        from src.ai_voicebot.self_service.tools import SELF_SERVICE_TOOLS
-        return raw_llm.bind_tools(SELF_SERVICE_TOOLS)
+        return raw_llm.bind_tools(_self_service_tools_for_owner(owner))
     except Exception as e:
         logger.warning("self_service_agent_bind_tools_failed", call_id=call_id, error=str(e))
         return None
 
 
-def _try_build_self_service_gemini_fc(llm_client, call_id: str):
+def _try_build_self_service_gemini_fc(llm_client, call_id: str, owner: str):
     """Gemini 네이티브 function-calling 모델 생성 시도(booking_gemini_fc.py 재사용).
 
     실제 `LLMClient`가 LangChain `BaseChatModel`을 노출하지 않으므로(bind_tools 불가),
     이 경로가 실제로 Tool-calling이 동작하는 유일한 방법이다(2026-07-24 Story 6.2부터
-    `google-genai` 기준 `_GenAIToolModel`을 반환).
+    `google-genai` 기준 `_GenAIToolModel`을 반환). Story 1.48부터 owner의 승인된 동적
+    REST-API Tool도 함께 바인딩된다.
     """
     try:
         from src.ai_voicebot.langgraph.booking_gemini_fc import (
             _langchain_tools_to_glm_tool,
             build_booking_generative_model,
         )
-        from src.ai_voicebot.self_service.tools import SELF_SERVICE_TOOLS
 
-        glm_tool = _langchain_tools_to_glm_tool(SELF_SERVICE_TOOLS)
+        glm_tool = _langchain_tools_to_glm_tool(_self_service_tools_for_owner(owner))
         return build_booking_generative_model(llm_client, glm_tool)
     except Exception as e:
         logger.warning("self_service_agent_gemini_fc_init_failed", call_id=call_id, error=str(e))
@@ -386,13 +403,11 @@ def _try_build_self_service_gemini_fc(llm_client, call_id: str):
 _CALL_ID_INJECTED_TOOLS = {"update_self_service_setting", "_update_self_service_setting"}
 
 
-async def _execute_self_service_tool(tool_name: str, args: dict) -> str:
-    """도구 이름으로 SELF_SERVICE_TOOLS에서 찾아 비동기 실행한다."""
+async def _execute_self_service_tool(tool_name: str, args: dict, owner: str) -> str:
+    """도구 이름으로 SELF_SERVICE_TOOLS(+owner의 동적 REST-API Tool, Story 1.48)에서 찾아 비동기 실행한다."""
     import json as _json
 
-    from src.ai_voicebot.self_service.tools import SELF_SERVICE_TOOLS
-
-    for t in SELF_SERVICE_TOOLS:
+    for t in _self_service_tools_for_owner(owner):
         name = getattr(t, "name", None) or getattr(t, "__name__", "")
         if name != tool_name:
             continue
@@ -533,7 +548,7 @@ async def _run_self_service_tool_loop(
                     call_id, "self_service", "self_service_tool_start",
                     tool=tool_name, arg_keys=list(tool_args.keys()), round_idx=round_idx,
                 )
-            tool_result = await _execute_self_service_tool(tool_name, tool_args)
+            tool_result = await _execute_self_service_tool(tool_name, tool_args, owner)
             if call_id:
                 log_call_data(
                     call_id, "self_service", "self_service_tool_done",
@@ -690,7 +705,7 @@ async def self_service_agent_node(state: ConversationState) -> dict:
     )
 
     # ── Screen Graph(Story 1.11): 매뉴얼 RAG의 related_domain → 화면 안내 1-hop 확장 ──
-    screen_guidance_section = _format_screen_guidance(rag_documents)
+    screen_guidance_section = _format_screen_guidance(rag_documents, owner)
     has_screen_guidance = screen_guidance_section != _NO_SCREEN_GUIDANCE_PLACEHOLDER
     logger.info(
         "self_service_agent_screen_graph_hit",
@@ -707,16 +722,16 @@ async def self_service_agent_node(state: ConversationState) -> dict:
         fallback_message=RESPONSE_UNKNOWN_NEEDS_FOLLOWUP,
         onboarding_section=onboarding_section,
         screen_guidance_section=screen_guidance_section,
-        capability_section=_format_capability_section(),
+        capability_section=_format_capability_section(owner),
     )
 
     # ── Tool-calling 시도: 1) LangChain bind_tools → 2) Gemini 네이티브 FC → 3) 프롬프트 폴백 ──
     # (2026-07-15 QA 자동 테스트에서 실제 LLMClient는 1번 경로가 항상 실패함을 확인 —
     #  모듈 docstring 및 각 함수 docstring 참고)
-    llm_with_tools = _try_bind_self_service_tools(llm_client, call_id)
+    llm_with_tools = _try_bind_self_service_tools(llm_client, call_id, owner)
     gen_model = None
     if llm_with_tools is None:
-        gen_model = _try_build_self_service_gemini_fc(llm_client, call_id)
+        gen_model = _try_build_self_service_gemini_fc(llm_client, call_id, owner)
 
     # [2026-07-15] Tool-calling 루프의 멀티턴 대화 기억(직전 턴까지의 LangChain 메시지 히스토리).
     # 이게 없으면 "확인 발화 → 긍정 응답 → 실행"처럼 2턴 이상 필요한 쓰기 흐름(Story 1.8)이

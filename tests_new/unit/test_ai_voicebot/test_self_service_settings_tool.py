@@ -116,9 +116,14 @@ class TestTryBindSelfServiceTools:
         class _FakeLLM:
             pass
 
-        assert _try_bind_self_service_tools(_FakeLLM(), "call-1") is None
+        assert _try_bind_self_service_tools(_FakeLLM(), "call-1", "9001") is None
 
-    def test_bind_tools_success_returns_bound_llm(self):
+    def test_bind_tools_success_returns_bound_llm(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.dynamic_api_tool.build_dynamic_tools_for_owner",
+            lambda owner: [],
+        )
+
         class _FakeRawLLM:
             def bind_tools(self, tools):
                 return "BOUND"
@@ -126,9 +131,14 @@ class TestTryBindSelfServiceTools:
         class _FakeLLM:
             _chat_model = _FakeRawLLM()
 
-        assert _try_bind_self_service_tools(_FakeLLM(), "call-1") == "BOUND"
+        assert _try_bind_self_service_tools(_FakeLLM(), "call-1", "9001") == "BOUND"
 
-    def test_bind_tools_exception_returns_none(self):
+    def test_bind_tools_exception_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.dynamic_api_tool.build_dynamic_tools_for_owner",
+            lambda owner: [],
+        )
+
         class _FakeRawLLM:
             def bind_tools(self, tools):
                 raise RuntimeError("no fc support")
@@ -136,14 +146,19 @@ class TestTryBindSelfServiceTools:
         class _FakeLLM:
             _chat_model = _FakeRawLLM()
 
-        assert _try_bind_self_service_tools(_FakeLLM(), "call-1") is None
+        assert _try_bind_self_service_tools(_FakeLLM(), "call-1", "9001") is None
 
 
 class TestTryBuildSelfServiceGeminiFc:
     """실제 LLMClient(google-genai 기반, Story 6.1/6.2)를 위한 Gemini 네이티브 FC 폴백 생성 검증
     (2026-07-15 QA 자동 테스트에서 발견된 bind_tools 미동작 버그의 실제 수정 경로)."""
 
-    def test_builds_model_with_tool_from_llm_client(self):
+    def test_builds_model_with_tool_from_llm_client(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.dynamic_api_tool.build_dynamic_tools_for_owner",
+            lambda owner: [],
+        )
+
         class _FakeClient:
             pass
 
@@ -151,27 +166,41 @@ class TestTryBuildSelfServiceGeminiFc:
             _client = _FakeClient()
             model_name = "gemini-2.5-flash"
 
-        result = _try_build_self_service_gemini_fc(_FakeLLMClient(), "call-1")
+        result = _try_build_self_service_gemini_fc(_FakeLLMClient(), "call-1", "9001")
         assert result is not None
         assert result.client is _FakeLLMClient._client
         assert result.model_name == "gemini-2.5-flash"
         assert len(result.tool.function_declarations) == len(SELF_SERVICE_TOOLS)
 
-    def test_missing_model_attribute_returns_none(self):
+    def test_missing_model_attribute_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.dynamic_api_tool.build_dynamic_tools_for_owner",
+            lambda owner: [],
+        )
+
         class _FakeLLMClient:
             pass
 
-        assert _try_build_self_service_gemini_fc(_FakeLLMClient(), "call-1") is None
+        assert _try_build_self_service_gemini_fc(_FakeLLMClient(), "call-1", "9001") is None
 
 
 class TestExecuteSelfServiceTool:
     @pytest.mark.asyncio
-    async def test_unknown_tool_returns_error(self):
-        result = json.loads(await _execute_self_service_tool("no_such_tool", {}))
+    async def test_unknown_tool_returns_error(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.dynamic_api_tool.build_dynamic_tools_for_owner",
+            lambda owner: [],
+        )
+        result = json.loads(await _execute_self_service_tool("no_such_tool", {}, "1003"))
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_known_tool_executes(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.ai_voicebot.self_service.dynamic_api_tool.build_dynamic_tools_for_owner",
+            lambda owner: [],
+        )
+
         async def fake_checklist(owner):
             return []
 
@@ -180,7 +209,7 @@ class TestExecuteSelfServiceTool:
             fake_checklist,
         )
         tool_name = getattr(SELF_SERVICE_TOOLS[0], "name", None) or getattr(SELF_SERVICE_TOOLS[0], "__name__", "")
-        result = await _execute_self_service_tool(tool_name, {"owner": "1003"})
+        result = await _execute_self_service_tool(tool_name, {"owner": "1003"}, "1003")
         parsed = json.loads(result)
         assert "incomplete_count" in parsed
 
@@ -203,7 +232,7 @@ class TestRunSelfServiceToolLoop:
                     )
                 return AIMessage(content="현재 페르소나는 이렇습니다.")
 
-        async def fake_execute(tool_name_arg, args):
+        async def fake_execute(tool_name_arg, args, owner_arg=None):
             return json.dumps({"name": "이탈리안 비스트로"}, ensure_ascii=False)
 
         monkeypatch.setattr(
@@ -241,7 +270,7 @@ class TestRunSelfServiceToolLoop:
 
         captured_args = {}
 
-        async def fake_execute(tool_name_arg, args):
+        async def fake_execute(tool_name_arg, args, owner_arg=None):
             captured_args.update(args)
             return json.dumps({"ok": True}, ensure_ascii=False)
 
@@ -265,7 +294,7 @@ class TestRunSelfServiceToolLoop:
             async def ainvoke(self, messages):
                 return AIMessage(content="", tool_calls=[{"name": "x", "args": {}, "id": "c1"}])
 
-        async def fake_execute(tool_name_arg, args):
+        async def fake_execute(tool_name_arg, args, owner_arg=None):
             return json.dumps({"ok": True})
 
         monkeypatch.setattr(
@@ -307,7 +336,7 @@ class TestRunSelfServiceToolLoop:
         def fake_candidate_text(resp):
             return "" if len(call_sequence) == 1 else "현재 페르소나는 이렇습니다."
 
-        async def fake_execute(tool_name_arg, args):
+        async def fake_execute(tool_name_arg, args, owner_arg=None):
             return json.dumps({"name": "이탈리안 비스트로"}, ensure_ascii=False)
 
         monkeypatch.setattr(

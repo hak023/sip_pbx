@@ -17,6 +17,7 @@ from typing import Any, List
 import structlog
 
 from src.ai_voicebot.self_service import settings_catalog
+from src.ai_voicebot.self_service.knowledge_documents import KNOWLEDGE_DOCUMENT_DOC_TYPE
 from src.ai_voicebot.self_service.manual_indexer import SELF_SERVICE_MANUAL_DOC_TYPE
 from src.common.sip_owner import normalize_owner_username
 
@@ -50,10 +51,10 @@ async def search_hybrid_multi_domain(
 
     if vector_db is None or embedder is None:
         return []
-    domains = settings_catalog.list_domains()
+    normalized_owner = normalize_owner_username(owner) or owner
+    domains = settings_catalog.list_domains(normalized_owner)
     if not domains:
         return []
-    normalized_owner = normalize_owner_username(owner) or owner
 
     try:
         query_embedding = embedder.embed_text(query) if hasattr(embedder, "embed_text") else None
@@ -64,10 +65,12 @@ async def search_hybrid_multi_domain(
         return []
 
     async def _query_domain(domain: str) -> List[Any]:
+        # (2026-08-07) self_service_manual만 검색해 Story 1.26 업로드 문서(knowledge_document)가
+        # 하이브리드 검색에서도 누락되던 문제를 rag.py와 동일하게 수정 — 두 doc_type 모두 조회.
         where = {
             "$and": [
                 {"owner": normalized_owner},
-                {"doc_type": SELF_SERVICE_MANUAL_DOC_TYPE},
+                {"doc_type": {"$in": [SELF_SERVICE_MANUAL_DOC_TYPE, KNOWLEDGE_DOCUMENT_DOC_TYPE]}},
                 {"related_domain": domain},
             ]
         }

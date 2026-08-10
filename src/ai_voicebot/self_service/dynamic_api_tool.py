@@ -280,3 +280,171 @@ def _mark_undo(log_id: int, ok: Optional[bool]) -> None:
             )
     except Exception as exc:
         logger.warning("dynamic_api_undo_mark_failed id=%d err=%s", log_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Story 1.48 — LangChain Tool 래핑(self_service_agent.py의 Tool-calling 루프에 연결)
+# self_service/tools.py::_make_tool 패턴을 그대로 복제한다(langchain_core 미설치 환경에서도
+# import가 깨지지 않도록 원본 함수를 그대로 반환).
+# ---------------------------------------------------------------------------
+
+try:
+    from langchain_core.tools import tool as _langchain_tool
+    _LANGCHAIN_AVAILABLE = True
+except ImportError:
+    _LANGCHAIN_AVAILABLE = False
+    _langchain_tool = None  # type: ignore
+
+
+def _make_tool(fn):
+    if _LANGCHAIN_AVAILABLE and _langchain_tool is not None:
+        return _langchain_tool(fn)
+    return fn
+
+
+async def find_last_undoable_document_id(owner: str) -> Optional[str]:
+    """owner의 되돌리지 않은 최근 쓰기 실행 이력에서 document_id를 찾는다(문서 무관 조회).
+
+    `undo_last_execution()`은 document_id를 알아야 호출 가능한데, 사용자는 "방금 한 거
+    취소해줘"처럼 document_id를 말하지 않으므로 이 헬퍼로 먼저 대상을 특정한다.
+    """
+    try:
+        from src.booking.database import get_db
+
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT document_id FROM tool_execution_log"
+                " WHERE owner = ? AND method != 'GET' AND undo_attempted = 0"
+                " ORDER BY created_at DESC LIMIT 1",
+                (owner,),
+            ).fetchone()
+    except Exception as exc:
+        logger.warning("dynamic_api_find_undoable_failed owner=%s err=%s", owner, exc)
+        return None
+    return dict(row)["document_id"] if row is not None else None
+
+
+def _sanitize_tool_name(document_id: str, method: str, endpoint_path: str) -> str:
+    import re as _re
+
+    slug = _re.sub(r"[^a-zA-Z0-9]+", "_", endpoint_path).strip("_").lower() or "root"
+    doc_short = _re.sub(r"[^a-zA-Z0-9]", "", document_id)[:8]
+    return f"api_{doc_short}_{method.lower()}_{slug}"[:60]
+
+
+def _build_dynamic_tool_doc(title: str, method: str, endpoint_path: str, parameters: List[Dict[str, Any]]) -> str:
+    lines = [
+        f"업로드된 외부 시스템 문서 '{title}'의 {method} {endpoint_path} 엔드포인트를 실제로 호출합니다.",
+    ]
+    if parameters:
+        lines.append("파라미터:")
+        for p in parameters:
+            if not isinstance(p, dict):
+                continue
+            lines.append(
+                f"- {p.get('name', '?')} ({'필수' if p.get('required') else '선택'}, "
+                f"{p.get('in', 'query')}): {p.get('description', '')}"
+            )
+    lines.append(
+        "Args: owner(테넌트 ID, 자동 채움 — 무시하고 절대 임의로 채우지 말 것), "
+        "params(경로·쿼리 파라미터를 담은 dict, 없으면 생략 가능), "
+        "body(요청 본문 dict, 쓰기 메서드에만 필요, 없으면 생략 가능)"
+    )
+    lines.append("Returns: JSON 문자열 {ok, status, data, error}")
+    return "\n".join(lines)
+
+
+def _make_dynamic_tool_fn(document_id: str, method: str, endpoint_path: str):
+    """document_id/method/endpoint_path를 클로저로 고정한 실행 함수를 만든다(late-binding 방지)."""
+
+    async def _dyn_tool_fn(
+        owner: str,
+        params: Optional[Dict[str, Any]] = None,
+        body: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        ctx = build_execution_context(document_id, owner=owner)
+        if ctx is None:
+            return json.dumps(
+                {"ok": False, "error": "이 문서의 실행 정보(base_url)를 찾을 수 없습니다. 지식 업로드 화면에서 base_url을 설정해 주세요."},
+                ensure_ascii=False,
+            )
+        call_params = dict(params or {})
+        resolved_path = endpoint_path
+        for key in list(call_params.keys()):
+            placeholder = "{" + key + "}"
+            if placeholder in resolved_path:
+                resolved_path = resolved_path.replace(placeholder, str(call_params.pop(key)))
+        result = await execute_api_endpoint(
+            base_url=ctx["base_url"], endpoint_path=resolved_path, method=method,
+            headers=ctx["headers"], params=call_params or None, json_body=body or None,
+            approved_methods=ctx["approved_methods"], document_id=document_id, owner=owner,
+        )
+        return json.dumps(result, ensure_ascii=False)
+
+    return _dyn_tool_fn
+
+
+def build_dynamic_tools_for_owner(owner: str) -> List[Any]:
+    """owner가 업로드한 OpenAPI 문서의 승인된 메서드를 LangChain Tool 목록으로 만든다.
+
+    GET은 승인 없이 항상 포함되고(기본 능동), 쓰기 메서드는 `approved_methods_json`에
+    있는 경우만 Tool로 노출된다(미승인 메서드는 아예 LLM에게 보이지 않음 — NFR9 화이트리스트).
+    문서가 없거나 DB 조회에 실패하면 빈 리스트를 반환한다(정적 SELF_SERVICE_TOOLS 흐름에는
+    영향 없음).
+    """
+    try:
+        from src.common.knowledge_documents_db import list_document_endpoints, list_documents
+    except ImportError:
+        return []
+
+    try:
+        docs = list_documents(owner=owner, source_type="openapi")
+    except Exception as exc:
+        logger.warning("dynamic_api_tools_list_documents_failed owner=%s err=%s", owner, exc)
+        return []
+
+    tools: List[Any] = []
+    for doc in docs:
+        document_id = doc.get("document_id")
+        if not document_id:
+            continue
+        approved = {m.upper() for m in (doc.get("approved_methods") or ["GET"])}
+        try:
+            endpoints = list_document_endpoints(document_id)
+        except Exception as exc:
+            logger.warning("dynamic_api_tools_list_endpoints_failed document_id=%s err=%s", document_id, exc)
+            continue
+        for ep in endpoints:
+            method = str(ep.get("method") or "").upper()
+            endpoint_path = str(ep.get("endpoint_path") or "")
+            if not method or not endpoint_path:
+                continue
+            if method != "GET" and method not in approved:
+                continue  # 미승인 쓰기 메서드는 Tool 목록에서 아예 제외
+            fn = _make_dynamic_tool_fn(document_id, method, endpoint_path)
+            fn.__name__ = _sanitize_tool_name(document_id, method, endpoint_path)
+            fn.__doc__ = _build_dynamic_tool_doc(
+                str(doc.get("title") or ""), method, endpoint_path, ep.get("parameters") or [],
+            )
+            tools.append(_make_tool(fn))
+
+    if docs:
+        async def _undo_last_dynamic_api_change(owner: str) -> str:
+            """방금 실행한 외부 시스템 REST-API 변경을 이전 상태로 되돌립니다.
+
+            Args:
+                owner: 테넌트 ID(자동 채움)
+
+            Returns:
+                JSON 문자열 {ok, message/error}
+            """
+            document_id = await find_last_undoable_document_id(owner)
+            if not document_id:
+                return json.dumps({"ok": False, "error": "되돌릴 실행 이력이 없습니다."}, ensure_ascii=False)
+            result = await undo_last_execution(owner=owner, document_id=document_id)
+            return json.dumps(result, ensure_ascii=False)
+
+        tools.append(_make_tool(_undo_last_dynamic_api_change))
+
+    return tools
+

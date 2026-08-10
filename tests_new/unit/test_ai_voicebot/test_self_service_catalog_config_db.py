@@ -21,6 +21,7 @@ def temp_db(tmp_path, monkeypatch):
         CREATE TABLE IF NOT EXISTS self_service_catalog_config (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             config_kind  TEXT    NOT NULL,
+            owner        TEXT    NOT NULL DEFAULT '',
             version_no   INTEGER NOT NULL,
             config_json  TEXT    NOT NULL DEFAULT '{}',
             is_active    INTEGER NOT NULL DEFAULT 0,
@@ -29,7 +30,7 @@ def temp_db(tmp_path, monkeypatch):
             created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             activated_at TEXT    DEFAULT NULL,
             activated_by TEXT    NOT NULL DEFAULT '',
-            UNIQUE(config_kind, version_no)
+            UNIQUE(config_kind, owner, version_no)
         )
         """
     )

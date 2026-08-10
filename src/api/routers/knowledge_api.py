@@ -2,6 +2,13 @@
 프론트 호환: GET/POST /api/knowledge, DELETE /api/knowledge/{doc_id}
 
 Chroma/임베딩 미구성 시 503과 안내 메시지.
+
+⚠️ 지식베이스 분리 (2026-08-07): 이 API는 "고객 지식 베이스"(통화·문자 응대용 페르소나/
+인사말/FAQ, doc_type='knowledge' 등) 전용이다. "도우미 지식 베이스"(AI 도우미 셀프서비스
+매뉴얼/업로드 문서, doc_type in ASSISTANT_KB_DOC_TYPES)는 같은 ChromaDB 'knowledge'
+컬렉션을 공유하지만 doc_type 메타데이터로 구분되는 별개 기능이므로, doc_type을 명시적으로
+지정하지 않는 한 목록/카운트에서 항상 제외한다. 도우미 지식 베이스 조회는
+/api/knowledge-base/documents, /api/settings/ai-assistant/knowledge-base/inventory를 사용할 것.
 """
 
 from __future__ import annotations
@@ -12,6 +19,10 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["knowledge-api"])
+
+# "도우미 지식 베이스"(AI 도우미 셀프서비스) 전용 doc_type — 고객 지식 베이스 목록/통계에서
+# doc_type이 명시되지 않으면 기본적으로 제외한다(manual_indexer.py/knowledge_documents.py 참고).
+ASSISTANT_KB_DOC_TYPES = frozenset({"self_service_manual", "knowledge_document"})
 
 
 class KnowledgeCreateBody(BaseModel):
@@ -76,9 +87,14 @@ async def knowledge_list(
     items: List[Dict[str, Any]] = []
     for it in raw:
         md = dict(it.get("metadata") or {})
+        item_doc_type = str(md.get("doc_type", "")).strip()
         if owner_f and str(md.get("owner", "")).strip() != owner_f:
             continue
-        if dt_f and str(md.get("doc_type", "")).strip() != dt_f:
+        if dt_f:
+            if item_doc_type != dt_f:
+                continue
+        elif item_doc_type in ASSISTANT_KB_DOC_TYPES:
+            # doc_type 미지정 조회는 "고객 지식 베이스"만 대상 — 도우미 지식 베이스는 별도 API로 조회.
             continue
         if src_f and str(md.get("source", "")).strip() != src_f:
             continue

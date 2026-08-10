@@ -195,6 +195,19 @@ def schedule_socket_emit(event: str, payload: Dict[str, Any], **emit_kwargs: Any
     _schedule_emit_on_ws_loop(_do_emit())
 
 
+def schedule_coroutine(coro: Any) -> bool:
+    """임의의 코루틴을 WS 이벤트 루프에서 fire-and-forget 실행(동기 코드·타 스레드에서 호출 가능).
+
+    2026-08-07: SIP MESSAGE 수신 단말이 REGISTER되어 있지 않을 때, 셀프서비스 AI 자동응답
+    (``schedule_sip_message_ai_reply``)처럼 원래 async 컨텍스트에서만 예약되던 코루틴을
+    동기 메서드(``send_chat_sip_message``)에서도 실행할 수 있게 한다.
+    """
+    if _ws_loop is None:
+        return False
+    _schedule_emit_on_ws_loop(coro)
+    return True
+
+
 async def _emit_on_ws_loop(event: str, payload: Dict[str, Any], **emit_kwargs: Any) -> None:
     """현재 코루틴이 WS 루프이면 직접 emit, 아니면 WS 루프에 위임."""
     if not _sio:

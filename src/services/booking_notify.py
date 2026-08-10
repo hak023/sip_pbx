@@ -57,7 +57,11 @@ def _deliver_booking_text(
             from src.services.chat_sip_delivery import deliver_chat_sip_message
 
             sip_from = resolve_sip_from_for_outbound(owner) or owner or "pbx"
-            return deliver_chat_sip_message(sip_from, to_phone, body, suppress_ai_loop=True)
+            # 예약 알림은 시스템(booking 서비스)이 생성한 발신이라 owner가 실제 SIP 단말로
+            # REGISTER되어 있을 필요가 없다(2026-08-06).
+            return deliver_chat_sip_message(
+                sip_from, to_phone, body, suppress_ai_loop=True, sender_registration_required=False
+            )
         except Exception as e:
             logger.warning("booking_notify_chat_api_failed", error=str(e))
             return {"success": False, "message": str(e)}

@@ -209,6 +209,9 @@ async def schedule_sip_message_ai_reply(
             full_body,
             suppress_ai_loop=True,
             wait_for_final_response=False,
+            # AI가 서버 내부에서 생성한 응답이라 발신 측(tenant)이 실제 SIP 단말로
+            # REGISTER되어 있을 필요가 없다(2026-08-06, 발신 등록 검사는 물리 단말 전용).
+            sender_registration_required=False,
         )
         ok = bool(sip_r.get("success"))
         _code = str(sip_r.get("code") or "")

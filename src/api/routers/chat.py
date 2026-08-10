@@ -181,7 +181,12 @@ async def send_message(req: ChatSendRequest) -> ChatSendResponse:
             detail="수신 번호와 메시지 본문이 필요합니다.",
         )
 
-    sip_r = deliver_chat_sip_message(sip_from, to_phone, body)
+    sip_r = deliver_chat_sip_message(
+        sip_from, to_phone, body,
+        # 웹사이트(운영 콘솔·셀프서비스 GlobalSmsDock) 자체 발신은 물리 SIP 단말이 아니라
+        # 이미 로그인 인증된 owner 세션이 발신자이므로 REGISTER 검사가 불필요하다(2026-08-06).
+        sender_registration_required=False,
+    )
     ok = bool(sip_r.get("success"))
     code = str(sip_r.get("code") or "")
     detail = str(sip_r.get("message") or "")
@@ -235,7 +240,10 @@ async def retry_message(
     to_phone = str(row.get("to_phone") or "")
     sip_from = resolve_sip_from_for_outbound(owner)
 
-    sip_r = deliver_chat_sip_message(sip_from, to_phone, body)
+    sip_r = deliver_chat_sip_message(
+        sip_from, to_phone, body,
+        sender_registration_required=False,
+    )
     ok = bool(sip_r.get("success"))
     code = str(sip_r.get("code") or "")
     detail = str(sip_r.get("message") or "")

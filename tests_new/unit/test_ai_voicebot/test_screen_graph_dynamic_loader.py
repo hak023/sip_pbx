@@ -17,25 +17,25 @@ from src.ai_voicebot.self_service import screen_graph
 
 @pytest.fixture(autouse=True)
 def _reset_effective_screens_cache():
-    """모듈 전역 캐시(`_effective_screens_cache*`)가 테스트 간 오염되지 않도록 초기화."""
-    screen_graph._effective_screens_cache = None
-    screen_graph._effective_screens_cache_source_id = None
+    """모듈 전역 캐시(`_effective_screens_cache*`)가 테스트 간 오염되지 않도록 초기화(owner별 dict, NFR11)."""
+    screen_graph._effective_screens_cache = {}
+    screen_graph._effective_screens_cache_source_id = {}
     yield
-    screen_graph._effective_screens_cache = None
-    screen_graph._effective_screens_cache_source_id = None
+    screen_graph._effective_screens_cache = {}
+    screen_graph._effective_screens_cache_source_id = {}
 
 
 class TestEffectiveScreensFallback:
     def test_no_active_db_config_falls_back_to_static_registry(self, monkeypatch):
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: None)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": None)
         assert screen_graph.list_all_screens() == list(screen_graph._SCREEN_REGISTRY.values())
 
     def test_empty_screens_dict_falls_back_to_static_registry(self, monkeypatch):
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: {"screens": {}})
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": {"screens": {}})
         assert screen_graph.list_all_screens() == list(screen_graph._SCREEN_REGISTRY.values())
 
     def test_malformed_config_missing_screens_key_falls_back(self, monkeypatch):
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: {"oops": True})
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": {"oops": True})
         assert screen_graph.list_all_screens() == list(screen_graph._SCREEN_REGISTRY.values())
 
 
@@ -54,7 +54,7 @@ class TestEffectiveScreensDynamicOverride:
                 },
             },
         }
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: dynamic_config)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": dynamic_config)
 
         screens = screen_graph.list_all_screens()
         assert len(screens) == 1
@@ -76,7 +76,7 @@ class TestEffectiveScreensDynamicOverride:
                 },
             },
         }
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: dynamic_config)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": dynamic_config)
 
         text = screen_graph.describe_screen_for_conversation("ai-escalation")
         assert "동적으로 바뀐 안내 문구" in text
@@ -85,7 +85,7 @@ class TestEffectiveScreensDynamicOverride:
     def test_domain_absent_from_dynamic_config_returns_none(self, monkeypatch):
         monkeypatch.setattr(
             catalog_config_loader, "get_cached_config",
-            lambda kind: {"screens": {"chat-relay": {"route": "/x", "title": "t", "description": "d", "nav_hint": "n"}}},
+            lambda kind, owner="": {"screens": {"chat-relay": {"route": "/x", "title": "t", "description": "d", "nav_hint": "n"}}},
         )
         assert screen_graph.get_screen_for_domain("ai-escalation") is None
 
@@ -95,7 +95,7 @@ class TestEffectiveScreensDynamicOverride:
             "screens": {"chat-relay": {"route": "/x", "title": "t", "description": "d", "nav_hint": "n", "fields": []}},
         }
 
-        def fake_get_cached_config(kind):
+        def fake_get_cached_config(kind, owner=""):
             call_count["n"] += 1
             return dynamic_config
 

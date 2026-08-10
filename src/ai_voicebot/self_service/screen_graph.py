@@ -174,8 +174,8 @@ _register_screen(
 # 하드코딩 폴백으로만 유지된다. Screen Graph는 실행 가능한 콜러블이 전혀 없는 순수 데이터
 # (route/title/description/nav_hint/fields)이므로 settings_catalog.py와 달리 함수 화이트리스트가
 # 불필요하다 — DB 값을 그대로 `ScreenEntry`/`UiFieldSpec`로 역직렬화하기만 하면 안전하다.
-_effective_screens_cache: Optional[Dict[str, ScreenEntry]] = None
-_effective_screens_cache_source_id: Optional[int] = None
+_effective_screens_cache: Dict[str, Dict[str, ScreenEntry]] = {}
+_effective_screens_cache_source_id: Dict[str, int] = {}
 
 
 def _build_dynamic_screens(raw_config: Dict[str, Any]) -> Dict[str, ScreenEntry]:
@@ -211,38 +211,41 @@ def _build_dynamic_screens(raw_config: Dict[str, Any]) -> Dict[str, ScreenEntry]
     return built
 
 
-def _get_effective_screens() -> Dict[str, ScreenEntry]:
+def _get_effective_screens(owner: str = "") -> Dict[str, ScreenEntry]:
     """실제로 사용할 Screen Graph 레지스트리를 반환한다 — DB 활성 버전 우선, 없거나 불가 시 폴백.
 
-    `settings_catalog.py::_get_effective_catalog()`와 동일한 `id()` 기반 캐시 재사용 원칙(NFR6).
+    owner를 지정하면 해당 테넌트 전용 커스텀 버전을 우선 사용하고, 없으면 전역 기본값(owner='')로
+    폴백한다(NFR11, 2026-08-07). `settings_catalog.py::_get_effective_catalog()`와 동일한
+    `id()` 기반 캐시 재사용 원칙(NFR6), owner별로 캐시를 분리한다.
     """
-    global _effective_screens_cache, _effective_screens_cache_source_id
+    normalized_owner = (owner or "").strip()
 
-    raw_config = catalog_config_loader.get_cached_config(catalog_config_loader.SCREEN_GRAPH_KIND)
+    raw_config = catalog_config_loader.get_cached_config(catalog_config_loader.SCREEN_GRAPH_KIND, normalized_owner)
     if raw_config is None:
         return _SCREEN_REGISTRY  # DB에 활성 버전 없음 → 하드코딩 폴백
 
-    if _effective_screens_cache is not None and _effective_screens_cache_source_id == id(raw_config):
-        return _effective_screens_cache
+    cached_id = _effective_screens_cache_source_id.get(normalized_owner)
+    if normalized_owner in _effective_screens_cache and cached_id == id(raw_config):
+        return _effective_screens_cache[normalized_owner]
 
     built = _build_dynamic_screens(raw_config)
     if not built:
         logger.warning("screen_graph_dynamic_build_empty_fallback_to_static")
         return _SCREEN_REGISTRY
 
-    _effective_screens_cache = built
-    _effective_screens_cache_source_id = id(raw_config)
+    _effective_screens_cache[normalized_owner] = built
+    _effective_screens_cache_source_id[normalized_owner] = id(raw_config)
     return built
 
 
-def get_screen_for_domain(domain: str) -> Optional[ScreenEntry]:
+def get_screen_for_domain(domain: str, owner: str = "") -> Optional[ScreenEntry]:
     """도메인명으로 화면 정보를 조회한다. 미등록 도메인이면 None(화면 안내 생략 신호)."""
-    return _get_effective_screens().get(domain)
+    return _get_effective_screens(owner).get(domain)
 
 
-def list_all_screens() -> List[ScreenEntry]:
+def list_all_screens(owner: str = "") -> List[ScreenEntry]:
     """등록된 화면 정보 전체 목록(프론트엔드 열람용, Story 1.12)."""
-    return list(_get_effective_screens().values())
+    return list(_get_effective_screens(owner).values())
 
 
 def export_static_snapshot() -> Dict[str, Any]:
@@ -274,13 +277,13 @@ def export_static_snapshot() -> Dict[str, Any]:
     return {"screens": screens}
 
 
-def describe_screen_for_conversation(domain: str) -> str:
+def describe_screen_for_conversation(domain: str, owner: str = "") -> str:
     """대화체 화면 안내 문구를 생성한다(best-effort, 예외 없이 항상 문자열 반환).
 
     화면 정보가 없으면 빈 문자열을 반환한다 — 호출부가 이를 "화면 안내 생략" 신호로 사용한다.
     """
     try:
-        entry = get_screen_for_domain(domain)
+        entry = get_screen_for_domain(domain, owner)
         if entry is None:
             return ""
 

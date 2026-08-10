@@ -149,14 +149,14 @@ register_node_type("procedure_step", "다단계 절차 단위(예약, 실제 데
 # 엣지 타입 등록 — 기존 2종(Story 1.18) + 신규 3종(Story 1.28, AC2)
 # ---------------------------------------------------------------------------
 def _resolve_rendered_by(domain: Any, _owner: Optional[str]) -> List[Tuple[str, Any, Any]]:
-    screen = get_screen_for_domain(str(domain))
+    screen = get_screen_for_domain(str(domain), _owner or "")
     if screen is None:
         return []
     return [("frontend_screen", screen.route, screen)]
 
 
 def _resolve_writable(domain: Any, _owner: Optional[str]) -> List[Tuple[str, Any, Any]]:
-    writable = bool(settings_catalog.domain_writable_fields(str(domain)))
+    writable = bool(settings_catalog.domain_writable_fields(str(domain), _owner or ""))
     specs = intellidecision_policy.applicable_types_for_domain(str(domain), writable=writable)
     return [("intent_type", spec.code, {"spec": spec, "writable": writable}) for spec in specs]
 

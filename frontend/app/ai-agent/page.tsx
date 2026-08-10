@@ -12,7 +12,7 @@ import Link from "next/link";
 const SECTIONS = [
     {
         id: "knowledge",
-        label: "지식베이스",
+        label: "지식베이스(AI 도우미)",
         description: "문서 업로드·현황·자동 구성·Tool/API 상세",
         href: "/ai-agent/knowledge",
         icon: "📚",
@@ -55,6 +55,12 @@ export default function AiAgentPage() {
                 <p className="mt-2 text-gray-500">
                     도메인 비종속 AI 에이전트 플랫폼 — 지식베이스 구성·응대 투명성·시스템 설정을 한 곳에서
                     관리합니다.
+                </p>
+                <p className="mt-1 text-xs text-gray-400">
+                    ※ 여기서 다루는 지식베이스는 셀프서비스 AI 도우미(설정 변경·질문 응답) 전용입니다.
+                    실시간 통화 응대용 지식(페르소나·인사말·잡담 등)은{" "}
+                    <Link href="/knowledge" className="underline">AI 응대 지식(페르소나)</Link> 메뉴에서
+                    별도로 관리합니다.
                 </p>
             </div>
 

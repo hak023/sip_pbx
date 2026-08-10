@@ -17,25 +17,25 @@ from src.ai_voicebot.self_service import catalog_config_loader
 
 @pytest.fixture(autouse=True)
 def _reset_effective_catalog_cache():
-    """모듈 전역 캐시(`_effective_catalog_cache*`)가 테스트 간 오염되지 않도록 초기화."""
-    catalog._effective_catalog_cache = None
-    catalog._effective_catalog_cache_source_id = None
+    """모듈 전역 캐시(`_effective_catalog_cache*`)가 테스트 간 오염되지 않도록 초기화(owner별 dict, NFR11)."""
+    catalog._effective_catalog_cache = {}
+    catalog._effective_catalog_cache_source_id = {}
     yield
-    catalog._effective_catalog_cache = None
-    catalog._effective_catalog_cache_source_id = None
+    catalog._effective_catalog_cache = {}
+    catalog._effective_catalog_cache_source_id = {}
 
 
 class TestEffectiveCatalogFallback:
     def test_no_active_db_config_falls_back_to_static_catalog(self, monkeypatch):
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: None)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": None)
         assert catalog.list_domains() == list(catalog._CATALOG.keys())
 
     def test_empty_domains_dict_falls_back_to_static_catalog(self, monkeypatch):
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: {"domains": {}})
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": {"domains": {}})
         assert catalog.list_domains() == list(catalog._CATALOG.keys())
 
     def test_malformed_config_missing_domains_key_falls_back(self, monkeypatch):
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: {"oops": True})
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": {"oops": True})
         assert catalog.list_domains() == list(catalog._CATALOG.keys())
 
 
@@ -53,7 +53,7 @@ class TestEffectiveCatalogDynamicOverride:
                 },
             },
         }
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: dynamic_config)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": dynamic_config)
 
         assert catalog.list_domains() == ["persona"]
         schema = catalog.get_domain_schema("persona")
@@ -71,7 +71,7 @@ class TestEffectiveCatalogDynamicOverride:
                 },
             },
         }
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: dynamic_config)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": dynamic_config)
         monkeypatch.setattr(
             "src.services.chat_relay_service.get_chat_relay_settings",
             lambda owner: {"owner": owner, "message_ai_reply_enabled": 1},
@@ -87,7 +87,7 @@ class TestEffectiveCatalogDynamicOverride:
                 "evil": {"get_fn_ref": "os.system", "schema": {}, "destructive": False},
             },
         }
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: dynamic_config)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": dynamic_config)
 
         domains = catalog.list_domains()
         assert "persona" in domains
@@ -103,7 +103,7 @@ class TestEffectiveCatalogDynamicOverride:
                 },
             },
         }
-        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind: dynamic_config)
+        monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda kind, owner="": dynamic_config)
 
         assert "persona" in catalog.list_domains()
         assert catalog.domain_writable_fields("persona") is None  # update_fn=None → 쓰기 불가 취급
@@ -112,7 +112,7 @@ class TestEffectiveCatalogDynamicOverride:
         call_count = {"n": 0}
         dynamic_config = {"domains": {"persona": {"get_fn_ref": "get_persona", "schema": {}, "destructive": False}}}
 
-        def fake_get_cached_config(kind):
+        def fake_get_cached_config(kind, owner=""):
             call_count["n"] += 1
             return dynamic_config  # 동일 객체를 매번 반환(로더 자체 캐시를 흉내)
 

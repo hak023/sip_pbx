@@ -74,6 +74,16 @@ class KnowledgeDocumentDeleteResponse(BaseModel):
     error: Optional[str] = None
 
 
+class KnowledgeBaseResetResponse(BaseModel):
+    ok: bool
+    deleted_chunks: int = 0
+    deleted_documents: int = 0
+    deleted_endpoints: int = 0
+    deleted_execution_logs: int = 0
+    deleted_catalog_versions: int = 0
+    error: Optional[str] = None
+
+
 # Story 1.34(FR34-A) — 쓰기 메서드 승인 모델
 class ApproveMethodsRequest(BaseModel):
     approved_methods: List[str]  # 승인할 쓰기 메서드 목록(GET은 자동 포함, POST/PUT/PATCH/DELETE만 허용)
@@ -124,7 +134,7 @@ def _to_document_item(record: Dict[str, Any]) -> KnowledgeDocumentItem:
 @router.post(
     "/documents", response_model=KnowledgeDocumentUploadResponse, summary="지식 문서 업로드",
 )
-async def upload_knowledge_document(
+def upload_knowledge_document(
     owner: str = Form(...),
     title: str = Form(...),
     domain_tags: str = Form("", description="콤마 구분 태그 목록"),
@@ -135,13 +145,16 @@ async def upload_knowledge_document(
     auth_header_name: str = Form("", description="인증 헤더명(예: Authorization)"),
     auth_header_value: str = Form("", description="인증 헤더 값(평문 저장되나 응답/로그에는 항상 마스킹)"),
 ) -> KnowledgeDocumentUploadResponse:
+    # (2026-08-06) 임베딩/색인 처리가 수십 초 걸릴 수 있는데 이 라우터가 유일하게 async def였던
+    # 탓에 실행 중 SIP·WebSocket과 공유하는 이벤트 루프 전체가 블로킹됐다("Failed to fetch"의
+    # 원인). 나머지 PUT/DELETE 엔드포인트처럼 동기 def로 바꿔 FastAPI 스레드풀에서 실행되게 한다.
     ks = _knowledge_service()
     tags = [t.strip() for t in domain_tags.split(",") if t.strip()]
 
     if source_type == "pdf":
         if file is None:
             raise HTTPException(status_code=400, detail="pdf source_type은 file 업로드가 필수입니다")
-        content: Any = await file.read()
+        content: Any = file.file.read()
     else:
         if text_body is None:
             raise HTTPException(status_code=400, detail=f"{source_type} source_type은 text_body가 필수입니다")
@@ -228,6 +241,36 @@ def delete_knowledge_document(document_id: str, owner: str = Query(...)) -> Know
     return KnowledgeDocumentDeleteResponse(
         ok=bool(result.get("ok")),
         deleted_chunks=int(result.get("deleted_chunks") or 0),
+        error=result.get("error"),
+    )
+
+
+@router.delete(
+    "/documents", response_model=KnowledgeBaseResetResponse,
+    summary="도우미 지식베이스 전체 초기화(Story 1.52)",
+)
+def reset_knowledge_base(owner: str = Query(...)) -> KnowledgeBaseResetResponse:
+    """owner의 도우미 지식베이스 전체를 삭제한다.
+
+    `DELETE /documents/{document_id}`와 달리 업로드 이력(`knowledge_documents` 레코드)이
+    없는 기존 데이터(Story 1.3/2.8 매뉴얼 자동색인 등)도 함께 지운다 — 사용자가
+    "업로드한 적 없는 기존 데이터는 삭제할 수 없다"고 보고한 공백을 메우는 전용 API다.
+    (2026-08-07) 단순 비활성화가 아니라 `knowledge_document_endpoints`(REST-API 엔드포인트
+    메타)/`tool_execution_log`(승인·실행·Undo 이력)까지 하드 삭제해 원격 시스템 실행 설정
+    잔재가 남지 않도록 보완함(테넌트별 원격 REST-API 설정이 완전히 초기화되어야 한다는
+    요구사항 반영). 위험한 일괄 삭제이므로 프론트는 반드시 확인 다이얼로그 후 호출해야 한다.
+    """
+    ks = _knowledge_service()
+    from src.ai_voicebot.self_service.knowledge_documents import reset_knowledge_base as _reset
+
+    result = _reset(owner=owner, vector_db=ks.vector_db)
+    return KnowledgeBaseResetResponse(
+        ok=bool(result.get("ok")),
+        deleted_chunks=int(result.get("deleted_chunks") or 0),
+        deleted_documents=int(result.get("deleted_documents") or 0),
+        deleted_endpoints=int(result.get("deleted_endpoints") or 0),
+        deleted_execution_logs=int(result.get("deleted_execution_logs") or 0),
+        deleted_catalog_versions=int(result.get("deleted_catalog_versions") or 0),
         error=result.get("error"),
     )
 

@@ -1,12 +1,14 @@
 "use client";
 
+import { DOMAIN_LABEL, HopPathTrail } from "@/components/knowledge-base/HopPathTrail";
+import { KnowledgeClusterTable } from "@/components/knowledge-base/KnowledgeClusterTable";
 import { apiJson } from "@/lib/api";
 import { groupMatchedDocumentsByDomain } from "@/lib/groupMatchedDocumentsByDomain";
 import { getTenantOwner } from "@/lib/tenant";
 import { detectUploadFileKind, type UploadFileKind } from "@/lib/uploadFileKind";
 import { useActiveSmsDockStore } from "@/store/useActiveSmsDockStore";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
 // 타입 정의
@@ -246,6 +248,16 @@ interface KnowledgeDocumentDeleteResponse {
     error?: string;
 }
 
+interface KnowledgeBaseResetResponse {
+    ok: boolean;
+    deleted_chunks: number;
+    deleted_documents: number;
+    deleted_endpoints: number;
+    deleted_execution_logs: number;
+    deleted_catalog_versions?: number;
+    error?: string;
+}
+
 interface CatalogConfigVersionItem {
     version_no: number;
     is_active: boolean;
@@ -354,61 +366,8 @@ function IntentTypeGraph({ intentTypes }: { intentTypes: IntentTypeOut[] }) {
 // ---------------------------------------------------------------------------
 // 상수
 // ---------------------------------------------------------------------------
-const DOMAIN_LABEL: Record<string, string> = {
-    "ai-escalation": "AI 에스컬레이션",
-    "call-control": "착신 제어",
-    "chat-relay": "채팅 자동응답",
-    persona: "페르소나",
-    integrations: "외부 연동",
-    contacts: "연락처",
-    general: "일반 설정",
-    onboarding: "초기 설정",
-    "operator-status": "운영자 상태",
-    booking: "예약 관리",
-    "call-history": "통화 이력",
-    "self-service": "셀프서비스",
-    intro: "서비스 소개",
-};
+// Story 1.48(FR36-D): DOMAIN_LABEL/HopPathTrail은 공용 모듈로 이전(UnifiedKnowledgeDetailPanel과 공유).
 
-// Story 1.46(FR35-F): hop 경로 원시 문자열("--edge_type(hopN)-->")을 사람이 읽는 문구로 번역.
-interface HopEdgeLike {
-    hop: number;
-    edge_type: string;
-    source_type: string;
-    source_id: string;
-    target_type: string;
-    target_id: string;
-}
-
-const HOP_EDGE_LABEL: Record<string, string> = {
-    rendered_by: "이 화면에서 보여줘요",
-    writable: "여기서 값을 바꿀 수 있어요",
-    has_screen: "이 화면과 연결돼요",
-    relates_to: "서로 관련 있어요",
-};
-
-function humanizeHopNode(nodeType: string, id: string): string {
-    if (nodeType === "catalog_domain") return DOMAIN_LABEL[id] || id;
-    if (nodeType === "screen" || nodeType === "frontend_screen") return `화면(${id})`;
-    if (nodeType === "intent_type") return `유형 ${id}`;
-    if (nodeType === "document") return `문서(${id})`;
-    return id;
-}
-
-function HopPathTrail({ edges }: { edges: HopEdgeLike[] }) {
-    return (
-        <ul className="space-y-1">
-            {edges.map((e, i) => (
-                <li key={i} className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
-                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-500">{i + 1}단계</span>
-                    <span className="font-medium text-gray-700">{humanizeHopNode(e.source_type, e.source_id)}</span>
-                    <span className="text-gray-400">{HOP_EDGE_LABEL[e.edge_type] || "연결돼요"} →</span>
-                    <span className="font-medium text-indigo-700">{humanizeHopNode(e.target_type, e.target_id)}</span>
-                </li>
-            ))}
-        </ul>
-    );
-}
 
 // Story 1.43(FR35-C): "플랫폼 공통(모든 테넌트 고정)" vs "테넌트 데이터(업로드로 만들어짐)" 구분 배지.
 // 신규 백엔드 필드 없이, 어느 탭/섹션 데이터인지(호출 맥락)로 판별한다(AC3).
@@ -447,7 +406,9 @@ function summarizeTurnPlain(
 // Story 1.39(FR34-E): 응답 시뮬레이터("simulate")를 삭제하고 실제 채팅 패널(GlobalSmsDock)로 대체.
 // 사용자 요청(2026-08-06) 반영: 채팅 패널이 항상 최소화 상태로 떠 있으므로(GlobalSmsDock
 // 자체 초기화) 별도 "실제 채팅" 탭은 더 이상 필요 없어 제거함.
-type Tab = "qa" | "catalog" | "screen" | "policy" | "kb" | "upload";
+// Story 1.48(FR36-A): qa/catalog/screen 3개 탭을 통합 리스트("list")로 병합 — 개별 탭은
+// 과도기 동안 유지하되(회귀 최소화), 신규 진입점은 "list"를 기본값으로 한다.
+type Tab = "list" | "qa" | "catalog" | "screen" | "policy" | "kb" | "upload";
 // 지식 업로드 탭 내부 소스 유형 — ①테넌트 지식 문서(Story 1.26) ②시스템 공통 설정/구성(Epic 2)
 type UploadSection = "tenant" | "system";
 
@@ -456,7 +417,7 @@ type UploadSection = "tenant" | "system";
 // ---------------------------------------------------------------------------
 export default function AiAssistantDocsPage() {
     const [owner, setOwner] = useState("");
-    const [tab, setTab] = useState<Tab>("qa");
+    const [tab, setTab] = useState<Tab>("list");
 
     // Q&A 상태
     const [items, setItems] = useState<HelpDocItem[]>([]);
@@ -513,11 +474,17 @@ export default function AiAssistantDocsPage() {
     const [kbDocuments, setKbDocuments] = useState<KnowledgeDocumentItem[]>([]);
     const [loadingKbDocuments, setLoadingKbDocuments] = useState(false);
     const [kbDocumentsError, setKbDocumentsError] = useState<string | null>(null);
+    const [resettingKb, setResettingKb] = useState(false);
+    const [resetKbError, setResetKbError] = useState<string | null>(null);
 
     // Story 1.37(FR34-C): 문서별 hop 경로 펼침 상태
     const [expandedDocHopKey, setExpandedDocHopKey] = useState<string | null>(null);
     const [docHopPath, setDocHopPath] = useState<DocumentHopPathResponse | null>(null);
     const [loadingDocHop, setLoadingDocHop] = useState(false);
+    // Story 1.50(FR36-C): 업로드 성공 직후 자동 포커스할 문서 ID(아직 hop 로드 전 대기 상태)
+    const [pendingFocusDocumentId, setPendingFocusDocumentId] = useState<string | null>(null);
+    // Story 1.50: "방금 등록됨" 강조 표시(몇 초 후 자동 해제)
+    const [justUploadedDocumentId, setJustUploadedDocumentId] = useState<string | null>(null);
     const [uploadTitle, setUploadTitle] = useState("");
     const [uploadDomainTags, setUploadDomainTags] = useState("");
     const [uploadSourceType, setUploadSourceType] = useState<"markdown" | "pdf" | "openapi">("markdown");
@@ -552,12 +519,12 @@ export default function AiAssistantDocsPage() {
     }, []);
 
     // Q&A 로드
-    const loadQa = useCallback(async () => {
+    const loadQa = useCallback(async (autoIndex: boolean = true) => {
         if (!owner) return;
         setLoadingQa(true);
         setQaError(null);
         const res = await apiJson<HelpDocsResponse>(
-            `/api/settings/ai-assistant/docs?owner=${encodeURIComponent(owner)}`
+            `/api/settings/ai-assistant/docs?owner=${encodeURIComponent(owner)}&auto_index=${autoIndex}`
         );
         if (res.ok) {
             setItems(res.data.items || []);
@@ -844,12 +811,30 @@ export default function AiAssistantDocsPage() {
                 setUploadTextBody("");
                 setUploadFile(null);
                 void loadKbDocuments();
+                // (2026-08-07 버그 수정) 업로드 직후 아래에서 "지식베이스 현황" 탭으로 자동
+                // 이동하는데, 그 탭이 보여주는 총 색인 청크 수 등은 kbInventory 상태에서 오며
+                // 여기서 갱신을 빠뜨려 방금 올린 문서가 반영되기 전의 오래된(0건) 값이 그대로
+                // 보였다 — "업로드해도 안 보인다"는 사용자 보고의 실제 원인.
+                void loadKbInventory();
+                // (2026-08-07, 8번째 재발 수정) "도우미 지식베이스"(list) 탭의 "문서 N건"
+                // 카운트는 items(qa) 상태에서 오는데, items는 owner당 최초 1회만 로드되도록
+                // ref로 가드되어 있어(qaLoadedOwnerRef) 업로드 후 탭을 왔다 갔다 해도 절대
+                // 다시 조회되지 않았다 — 업로드/삭제 액션은 그 가드를 우회해 항상 명시적으로
+                // 최신 상태를 반영해야 한다.
+                void loadQa(false);
+                // Story 1.50(FR36-C): 업로드 성공 시 "지식베이스 현황" 탭으로 이동해 방금
+                // 등록된 문서를 자동 포커스(hop 경로 자동 펼침 + 강조 표시)한다.
+                if (res.data.document_id) {
+                    setTab("kb");
+                    setPendingFocusDocumentId(res.data.document_id);
+                    setJustUploadedDocumentId(res.data.document_id);
+                }
             }
         } else {
             setUploadResult({ ok: false, indexed_chunks: 0, errors: [], error: res.message });
         }
         setUploading(false);
-    }, [owner, uploadTitle, uploadDomainTags, uploadSourceType, uploadTextBody, uploadFile, loadKbDocuments]);
+    }, [owner, uploadTitle, uploadDomainTags, uploadSourceType, uploadTextBody, uploadFile, loadKbDocuments, loadKbInventory, loadQa]);
 
     // Story 1.41(FR35-A): 파일 유형 판별 결과에 따라 "테넌트 지식 문서" 또는 "시스템 공통 설정"
     // 폼에 자동으로 채워 넣는다. 기존 API/핸들러(handleFileSelected/handleUploadDocument)는
@@ -934,6 +919,19 @@ export default function AiAssistantDocsPage() {
         [owner, expandedDocHopKey]
     );
 
+    // Story 1.50(FR36-C): kbDocuments 재조회가 끝난 뒤(문서가 목록에 실제로 나타난 뒤) hop
+    // 경로를 자동으로 펼친다 — kbDocuments 로딩 완료 전에 실행되면 대상 문서가 없어 무의미하므로
+    // pendingFocusDocumentId를 대기 상태로 두고 owner/문서 존재 여부를 함께 확인한다.
+    useEffect(() => {
+        if (!pendingFocusDocumentId) return;
+        if (!kbDocuments.some((d) => d.document_id === pendingFocusDocumentId)) return;
+        void handleToggleDocHop(pendingFocusDocumentId);
+        setPendingFocusDocumentId(null);
+        const timer = setTimeout(() => setJustUploadedDocumentId(null), 5000);
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pendingFocusDocumentId, kbDocuments]);
+
     const handleDeleteDocument = useCallback(
         async (documentId: string) => {
             if (!owner) return;
@@ -943,10 +941,54 @@ export default function AiAssistantDocsPage() {
             );
             if (res.ok && res.data.ok) {
                 void loadKbDocuments();
+                // (2026-08-07 버그 수정) 업로드와 동일한 이유로 개별 삭제 후에도 "지식베이스
+                // 현황" 요약(kbInventory)을 함께 갱신해야 한다 — 안 그러면 문서 목록에서는
+                // 사라졌는데 현황 탭 총 청크 수는 그대로 남아있는 것처럼 보인다.
+                void loadKbInventory();
+                // (2026-08-07, 8번째 재발 수정) "도우미 지식베이스"(list) 탭의 문서 카운트도
+                // 함께 갱신 — 업로드 핸들러와 동일한 이유(qaLoadedOwnerRef 가드 우회 필요).
+                void loadQa(false);
             }
         },
-        [owner, loadKbDocuments]
+        [owner, loadKbDocuments, loadKbInventory, loadQa]
     );
+
+    // (2026-08-07) 업로드 이력(knowledge_documents 레코드)이 없는 기존 데이터(매뉴얼 자동색인 등,
+    // Story 1.3/2.8)는 개별 삭제 버튼으로 지울 수 없다는 사용자 지적 → owner의 도우미 지식
+    // 베이스 전체(매뉴얼 자동색인 + 업로드 문서)를 한 번에 지우는 위험 동작 전용 핸들러.
+    const handleResetKnowledgeBase = useCallback(async () => {
+        if (!owner) return;
+        if (
+            !window.confirm(
+                `${owner} 테넌트의 도우미 지식 베이스 전체(업로드 문서 + 매뉴얼 자동색인분)를 삭제합니다.\n(설정 카탈로그/화면 안내는 시스템 공통 정의라 삭제되지 않습니다.)\n되돌릴 수 없습니다. 계속하시겠습니까?`
+            )
+        ) {
+            return;
+        }
+        setResettingKb(true);
+        setResetKbError(null);
+        const res = await apiJson<KnowledgeBaseResetResponse>(
+            `/api/knowledge-base/documents?owner=${encodeURIComponent(owner)}`,
+            { method: "DELETE" }
+        );
+        if (res.ok && res.data.ok) {
+            setKbDocuments([]);
+            kbDocumentsLoadedOwnerRef.current = null;
+            kbInventoryLoadedOwnerRef.current = null;
+            setKbInventory(null);
+            void loadKbInventory();
+            void loadKbDocuments();
+            // "지식베이스(통합)" 탭(list)이 보여주는 매뉴얼 Q&A(items)도 함께 지워야 한다 —
+            // 여기서 auto_index=false로 재조회해야 GET /docs의 "항목이 0개면 기본 매뉴얼을
+            // 자동 재색인" 로직이 즉시 다시 채워 넣어 "삭제해도 그대로다"처럼 보이지 않는다.
+            setItems([]);
+            qaLoadedOwnerRef.current = owner;
+            void loadQa(false);
+        } else {
+            setResetKbError(res.ok ? res.data.error || "삭제에 실패했습니다" : res.message);
+        }
+        setResettingKb(false);
+    }, [owner, loadKbInventory, loadKbDocuments, loadQa]);
 
     // Story 1.39(FR34-E): IntelliDecision 정책 탭 → 실제 채팅 바로가기(예시 발화를 채팅
     // 입력창에 채워주기만 함 — 실제 전송은 사용자가 직접 눌러야 함, 자동 발송하지 않는다).
@@ -980,20 +1022,103 @@ export default function AiAssistantDocsPage() {
     // Story 1.39(FR34-E) → 2026-08-06 제거: "실제 채팅" 탭이 사라지면서 이 강제 활성화 효과도
     // 불필요(GlobalSmsDock이 자체적으로 항상 최소화 상태로 떠 있음).
 
+    // Story 1.51(FR36 구조개선): 과거엔 이 아래 하나의 거대한 useEffect가 items/catalog/screens/
+    // intentTypes/manualCases/decisionSessions/kbInventory/kbDocuments/loadingKbDocuments를 전부
+    // 의존성으로 묶고 "배열 길이 === 0"을 "아직 로드 안 함"으로 판단했다. 이 방식은 두 가지로
+    // 깨진다: ①실제로 항목이 0개인 테넌트(신규 업로드 없음 등)는 길이가 영원히 0이라 매 렌더마다
+    // 재조회되고, ②서로 무관한 탭의 로더가 하나라도 끝나면(예: catalog 로드 완료) 거대한 의존성
+    // 배열 전체가 바뀌어 이 effect가 통째로 재실행되며 다른 탭 조건까지 다시 평가된다. 그 결과
+    // "지식 업로드" 탭에서 `/api/knowledge-base/documents`가 계속 재호출되는 현상이 발생했다.
+    // 해결: 자원별로 effect를 분리하고, "배열 길이"가 아니라 "이미 시도했는가"를 ref로 직접
+    // 추적한다(결과가 빈 배열이어도 다시 시도하지 않음). 테넌트별 자원은 owner 값 자체를 ref에
+    // 저장해 owner가 바뀔 때만 재조회한다.
+    const qaLoadedOwnerRef = useRef<string | null>(null);
+    const catalogLoadedRef = useRef(false);
+    const screensLoadedRef = useRef(false);
+    const policyLoadedRef = useRef(false);
+    const manualCasesLoadedOwnerRef = useRef<string | null>(null);
+    const decisionSessionsLoadedOwnerRef = useRef<string | null>(null);
+    const kbInventoryLoadedOwnerRef = useRef<string | null>(null);
+    const kbDocumentsLoadedOwnerRef = useRef<string | null>(null);
+
     useEffect(() => {
-        if (tab === "qa" && owner && items.length === 0) void loadQa();
-        if (tab === "catalog" && catalog.length === 0) void loadCatalog();
-        if (tab === "screen" && screens.length === 0) void loadScreens();
-        if (tab === "policy" && intentTypes.length === 0) void loadPolicy();
-        if (tab === "policy" && owner && manualCases.length === 0) void loadManualCases();
-        if (tab === "policy" && owner && decisionSessions.length === 0) void loadDecisionSessions();
-        if (tab === "kb" && owner && !kbInventory) void loadKbInventory();
-        // Story 1.37(FR34-C): kb 탭에서도 업로드 문서 목록을 로드(상세 카드용)
-        if (tab === "kb" && owner && kbDocuments.length === 0 && !loadingKbDocuments) void loadKbDocuments();
-        if (tab === "upload" && uploadSection === "tenant" && owner) void loadKbDocuments();
+        if (!owner) return;
+        if ((tab === "qa" || tab === "list") && qaLoadedOwnerRef.current !== owner) {
+            qaLoadedOwnerRef.current = owner;
+            // (2026-08-07) GET 조회가 "0건이면 자동으로 기본 매뉴얼을 재색인"하는 부작용을
+            // 갖고 있어(auto_index 기본값), 단순히 화면을 다시 방문하기만 해도 "도우미 지식
+            // 베이스 전체 삭제"로 비워둔 상태가 조용히 다시 채워지는 문제가 있었다. 조회는
+            // 항상 부작용 없이(auto_index=false) 수행하고, 재색인은 사용자가 명시적으로
+            // 눌러야만(아래 "매뉴얼 불러오기" 버튼) 실행되도록 분리한다.
+            void loadQa(false);
+        }
+    }, [tab, owner, loadQa]);
+
+    useEffect(() => {
+        if ((tab === "catalog" || tab === "list") && !catalogLoadedRef.current) {
+            catalogLoadedRef.current = true;
+            void loadCatalog();
+        }
+    }, [tab, loadCatalog]);
+
+    useEffect(() => {
+        if ((tab === "screen" || tab === "list") && !screensLoadedRef.current) {
+            screensLoadedRef.current = true;
+            void loadScreens();
+        }
+    }, [tab, loadScreens]);
+
+    useEffect(() => {
+        if (tab === "policy" && !policyLoadedRef.current) {
+            policyLoadedRef.current = true;
+            void loadPolicy();
+        }
+    }, [tab, loadPolicy]);
+
+    useEffect(() => {
+        if (!owner) return;
+        if (tab === "policy" && manualCasesLoadedOwnerRef.current !== owner) {
+            manualCasesLoadedOwnerRef.current = owner;
+            void loadManualCases();
+        }
+    }, [tab, owner, loadManualCases]);
+
+    useEffect(() => {
+        if (!owner) return;
+        if (tab === "policy" && decisionSessionsLoadedOwnerRef.current !== owner) {
+            decisionSessionsLoadedOwnerRef.current = owner;
+            void loadDecisionSessions();
+        }
+    }, [tab, owner, loadDecisionSessions]);
+
+    useEffect(() => {
+        if (!owner) return;
+        if ((tab === "list" || tab === "kb") && kbInventoryLoadedOwnerRef.current !== owner) {
+            kbInventoryLoadedOwnerRef.current = owner;
+            void loadKbInventory();
+        }
+    }, [tab, owner, loadKbInventory]);
+
+    // Story 1.37(FR34-C)/1.41(FR35-A): kb 탭(상세 카드)과 upload 탭의 "tenant" 세그먼트, 그리고
+    // list(지식베이스 통합) 탭 모두 같은 문서 목록이 필요하므로 하나의 effect로 통합 —
+    // owner당 최초 1회만 조회한다(2026-08-07: list 탭에 업로드 문서가 전혀 안 보인다는 사용자
+    // 보고로 "list" 조건 추가).
+    useEffect(() => {
+        if (!owner) return;
+        const needsDocuments =
+            tab === "kb" || tab === "list" || (tab === "upload" && uploadSection === "tenant");
+        if (needsDocuments && kbDocumentsLoadedOwnerRef.current !== owner) {
+            kbDocumentsLoadedOwnerRef.current = owner;
+            void loadKbDocuments();
+        }
+    }, [tab, owner, uploadSection, loadKbDocuments]);
+
+    useEffect(() => {
         if (tab === "upload" && uploadSection === "system") void loadVersions();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tab, owner, items.length, catalog.length, screens.length, intentTypes.length, manualCases.length, decisionSessions.length, kbInventory, kbDocuments.length, loadingKbDocuments, loadQa, loadCatalog, loadScreens, loadPolicy, loadManualCases, loadDecisionSessions, loadKbInventory, loadKbDocuments]);
+    }, [tab, uploadSection]);
+
+
 
     // 설정 다운로드 — Epic 2 Story 2.4
     // 백엔드는 JSON 본문만 반환하므로, 브라우저에서 Blob으로 감싸 파일 다운로드를 트리거한다.
@@ -1038,11 +1163,18 @@ export default function AiAssistantDocsPage() {
                 <p className="mt-1 text-sm text-gray-500">
                     서비스 이용 매뉴얼 Q&amp;A와 AI 도우미가 변경 가능한 설정 목록을 확인합니다.
                 </p>
+                <p className="mt-1 text-xs text-amber-700">
+                    ⚠️ 이 화면의 지식베이스는 <strong>AI 도우미 전용</strong>입니다. 통화·문자 응대용
+                    &quot;고객 지식 베이스&quot;(<Link href="/knowledge" className="underline">/knowledge</Link>)와는
+                    완전히 다른 데이터이니 혼동하지 마세요.
+                </p>
             </div>
 
-            {/* 탭 */}
+            {/* 탭 — Story 1.49 재설계(2026-08-06): qa/catalog/screen/kb는 지식 그룹 테이블("list")로
+                흡수되어 중복 노출을 막기 위해 탭 버튼에서 제거(코드는 회귀 위험 최소화 목적으로
+                남겨둠, policy·upload는 지식 "항목"이 아니라 운영 이력/등록 흐름이라 계속 노출). */}
             <div className="flex gap-1 border-b border-gray-200 mb-6">
-                {(["qa", "catalog", "screen", "policy", "kb", "upload"] as Tab[]).map((t) => (
+                {(["list", "policy", "upload"] as Tab[]).map((t) => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -1053,20 +1185,70 @@ export default function AiAssistantDocsPage() {
                                 : "border-transparent text-gray-500 hover:text-gray-700")
                         }
                     >
-                        {t === "qa"
-                            ? "이용 매뉴얼 Q&A"
-                            : t === "catalog"
-                                ? "AI 변경 가능 설정"
-                                : t === "screen"
-                                    ? "화면 안내"
-                                    : t === "policy"
-                                        ? "AI 의사결정 로직"
-                                        : t === "kb"
-                                            ? "지식베이스 현황"
-                                            : "지식 업로드"}
+                        {t === "list"
+                            ? "도우미 지식베이스"
+                            : t === "policy"
+                                ? "AI 의사결정 로직"
+                                : "지식 업로드"}
                     </button>
                 ))}
             </div>
+
+            {/* ── 도우미 지식베이스 탭(구 명칭 "지식베이스(통합)" — 2026-08-07 사용자 지적으로 명칭 변경,
+                Story 1.48/1.49 재설계, FR36-A/B) ── */}
+            {tab === "list" && (
+                <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5" title="테넌트별 매뉴얼 Q&A + 업로드 문서 — '도우미 지식 베이스 전체 삭제' 대상">
+                            문서 {items.length}건
+                        </span>
+                        <span
+                            className="rounded-full bg-gray-100 px-2 py-0.5"
+                            title="AI 도우미가 변경 가능한 설정 도메인 목록(페르소나/착신제어 등) — 테넌트가 업로드한 것이 아니라 시스템 공통 정의이므로 '지식베이스 전체 삭제'로 지워지지 않습니다."
+                        >
+                            설정 {catalog.length}건
+                        </span>
+                        <span
+                            className="rounded-full bg-gray-100 px-2 py-0.5"
+                            title="AI 도우미가 안내하는 화면 목록 — 위와 동일하게 시스템 공통 정의이라 '지식베이스 전체 삭제'로 지워지지 않습니다."
+                        >
+                            화면 안내 {screens.length}건
+                        </span>
+                        {kbInventory && (
+                            <span className="rounded-full bg-gray-100 px-2 py-0.5">
+                                최근 색인: {kbInventory.last_indexed_at || "—"}
+                            </span>
+                        )}
+                    </div>
+                    {items.length === 0 && !loadingQa && (
+                        <div className="flex items-center gap-2 text-xs">
+                            <button
+                                type="button"
+                                onClick={() => void loadQa(true)}
+                                className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 font-medium text-indigo-700 hover:bg-indigo-100"
+                            >
+                                기본 매뉴얼 불러오기(재색인)
+                            </button>
+                            <span className="text-gray-400">
+                                문서가 0건인 채로 자동으로 다시 채워지지 않습니다 — 필요할 때만 이 버튼으로 재색인하세요.
+                            </span>
+                        </div>
+                    )}
+                    <p className="text-xs text-gray-400">
+                        hop(지식 그래프)으로 실제 연결된 매뉴얼 Q&amp;A·설정·화면 안내를 그룹으로 묶어
+                        보여줍니다. 클릭 없이 그룹 요약을 먼저 확인하고, 필요할 때만 펼쳐서 상세를 봅니다.
+                        운영 이력(의도 유형·수동 케이스·최근 판단 이력)은 &quot;AI 의사결정 로직&quot;
+                        탭에서 별도로 확인할 수 있습니다.
+                    </p>
+                    <KnowledgeClusterTable
+                        qaItems={items}
+                        catalogDomains={catalog}
+                        screens={screens}
+                        owner={owner}
+                        onViewSessions={handleViewSessionsFor}
+                    />
+                </div>
+            )}
 
             {/* ── Q&A 탭 ── */}
             {tab === "qa" && (
@@ -1705,6 +1887,25 @@ export default function AiAssistantDocsPage() {
                         마지막으로 언제 색인됐는지 보여줍니다. 이 화면은 조회 전용이며 AI 응대
                         로직에는 영향을 주지 않습니다.
                     </p>
+                    <div className="mb-4 flex items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={() => void handleResetKnowledgeBase()}
+                            disabled={!owner || resettingKb}
+                            className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                        >
+                            {resettingKb ? "삭제 중…" : "도우미 지식 베이스 전체 삭제"}
+                        </button>
+                        <span className="text-xs text-gray-400">
+                            업로드 이력이 없는 기존 데이터(매뉴얼 자동색인분 포함)까지 전부 삭제합니다.
+                            설정 카탈로그/화면 안내는 테넌트 데이터가 아닌 시스템 공통 정의라 삭제 대상이 아닙니다.
+                        </span>
+                    </div>
+                    {resetKbError && (
+                        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+                            {resetKbError}
+                        </div>
+                    )}
                     {loadingKbInventory && <p className="text-sm text-gray-400">로딩 중…</p>}
                     {kbInventoryError && (
                         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
@@ -1833,10 +2034,20 @@ export default function AiAssistantDocsPage() {
                             <div className="space-y-2">
                                 {kbDocuments.map((doc) => {
                                     const expanded = expandedDocHopKey === doc.document_id;
+                                    const justUploaded = justUploadedDocumentId === doc.document_id;
                                     return (
-                                        <div key={doc.document_id} className="rounded-xl border border-gray-100 bg-white shadow-sm">
+                                        <div
+                                            key={doc.document_id}
+                                            className={`rounded-xl border bg-white shadow-sm ${justUploaded ? "border-indigo-400 ring-2 ring-indigo-100" : "border-gray-100"
+                                                }`}
+                                        >
                                             <div className="flex items-center justify-between gap-3 px-4 py-3">
                                                 <div className="flex flex-wrap items-center gap-2">
+                                                    {justUploaded && (
+                                                        <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white">
+                                                            방금 등록됨
+                                                        </span>
+                                                    )}
                                                     <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
                                                         {doc.source_type}
                                                     </span>
@@ -2056,6 +2267,26 @@ export default function AiAssistantDocsPage() {
                                     </div>
                                 )}
                             </div>
+
+                            <div className="flex items-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleResetKnowledgeBase()}
+                                    disabled={!owner || resettingKb}
+                                    className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                >
+                                    {resettingKb ? "삭제 중…" : "도우미 지식 베이스 전체 삭제"}
+                                </button>
+                                <span className="text-xs text-gray-400">
+                                    업로드 이력이 없는 기존 데이터(매뉴얼 자동색인분 포함)까지 전부 삭제합니다.
+                                    설정 카탈로그/화면 안내는 테넌트 데이터가 아닌 시스템 공통 정의라 삭제 대상이 아닙니다.
+                                </span>
+                            </div>
+                            {resetKbError && (
+                                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+                                    {resetKbError}
+                                </div>
+                            )}
 
                             <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
                                 {loadingKbDocuments && (

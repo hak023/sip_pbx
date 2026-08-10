@@ -1,21 +1,21 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, MessageSquare, Send, Settings2, X } from "lucide-react";
 import { apiJson } from "@/lib/api";
 import { logToAppLog } from "@/lib/clientAppLog";
 import { stopIncomingCallTitleAlert } from "@/lib/incomingCallAttention";
+import { fetchPeerContactDisplayName } from "@/lib/resolvePeerContactName";
 import {
   mapChatRowToDockLine,
   mergeServerLinesWithEphemeral,
   resolveChatThreadIdForApi,
   type ChatMessageApiRow,
 } from "@/lib/smsDockHistory";
-import { fetchPeerContactDisplayName } from "@/lib/resolvePeerContactName";
 import { normalizeSmsPeer, parseSmsThreadId } from "@/lib/smsThread";
 import { getTenantOwner } from "@/lib/tenant";
 import { useActiveSmsDockStore, type SmsDockLine } from "@/store/useActiveSmsDockStore";
+import { ChevronDown, ChevronUp, MessageSquare, Send, Settings2, X } from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 const SMS_DOCK_LOG = "sms-dock";
 
@@ -440,11 +440,10 @@ export function GlobalSmsDock() {
                     className={`flex ${isPeer ? "justify-start" : "justify-end"}`}
                   >
                     <div
-                      className={`max-w-[95%] rounded-lg px-2.5 py-2 border-l-4 shadow-sm ${
-                        isPeer
+                      className={`max-w-[95%] rounded-lg px-2.5 py-2 border-l-4 shadow-sm ${isPeer
                           ? "border-sky-400 bg-sky-50/90 text-slate-900"
                           : "border-teal-500 bg-teal-600 text-white"
-                      }`}
+                        }`}
                     >
                       <div className="flex flex-wrap items-baseline justify-between gap-1.5 text-[10px] opacity-90">
                         <span className="font-semibold uppercase tracking-wide">{speakerLabel}</span>

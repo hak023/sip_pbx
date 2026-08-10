@@ -16,10 +16,10 @@ class TestFormatCapabilitySection:
     def test_includes_queryable_and_writable_domains_with_labels(self, monkeypatch):
         monkeypatch.setattr(
             "src.ai_voicebot.langgraph.nodes.self_service_agent.settings_catalog.list_domains",
-            lambda: ["persona", "chat-relay", "contacts"],
+            lambda *_: ["persona", "chat-relay", "contacts"],
         )
 
-        def fake_writable(domain):
+        def fake_writable(domain, owner=""):
             return frozenset({"enabled"}) if domain == "chat-relay" else None
 
         monkeypatch.setattr(
@@ -39,11 +39,11 @@ class TestFormatCapabilitySection:
     def test_includes_tool_based_capabilities(self, monkeypatch):
         monkeypatch.setattr(
             "src.ai_voicebot.langgraph.nodes.self_service_agent.settings_catalog.list_domains",
-            lambda: ["persona"],
+            lambda *_: ["persona"],
         )
         monkeypatch.setattr(
             "src.ai_voicebot.langgraph.nodes.self_service_agent.settings_catalog.domain_writable_fields",
-            lambda domain: None,
+            lambda domain, owner="": None,
         )
         result = _format_capability_section()
         assert "이용 통계 조회" in result
@@ -53,13 +53,13 @@ class TestFormatCapabilitySection:
     def test_falls_back_to_static_when_no_domains(self, monkeypatch):
         monkeypatch.setattr(
             "src.ai_voicebot.langgraph.nodes.self_service_agent.settings_catalog.list_domains",
-            lambda: [],
+            lambda *_: [],
         )
         result = _format_capability_section()
         assert result == _STATIC_CAPABILITY_FALLBACK
 
     def test_falls_back_to_static_on_exception(self, monkeypatch):
-        def boom():
+        def boom(*_):
             raise RuntimeError("catalog unavailable")
 
         monkeypatch.setattr(
@@ -72,11 +72,11 @@ class TestFormatCapabilitySection:
         """_DOMAIN_LABELS에 없는 도메인명은 그대로 노출(존재하지 않는 라벨을 지어내지 않음)."""
         monkeypatch.setattr(
             "src.ai_voicebot.langgraph.nodes.self_service_agent.settings_catalog.list_domains",
-            lambda: ["some-new-domain"],
+            lambda *_: ["some-new-domain"],
         )
         monkeypatch.setattr(
             "src.ai_voicebot.langgraph.nodes.self_service_agent.settings_catalog.domain_writable_fields",
-            lambda domain: None,
+            lambda domain, owner="": None,
         )
         result = _format_capability_section()
         assert "some-new-domain" in result

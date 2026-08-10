@@ -26,25 +26,28 @@ __all__ = [
     "get_cached_config", "invalidate_cache", "validate_config", "diff_configs",
 ]
 
-# config_kind -> {"version_no": int, "config": dict}
-_cache: Dict[str, Dict[str, Any]] = {}
+# (config_kind, owner) -> {"version_no": int, "config": dict}
+_cache: Dict[tuple, Dict[str, Any]] = {}
 
 
-def get_cached_config(config_kind: str) -> Optional[Dict[str, Any]]:
-    """활성 버전의 `config_json`을 반환한다.
+def get_cached_config(config_kind: str, owner: str = "") -> Optional[Dict[str, Any]]:
+    """활성 버전의 `config_json`을 반환한다(owner 지정 시 해당 테넌트 커스텀 우선, 없으면
+    전역 기본값으로 폴백 — `self_service_catalog_config_db.get_active_config()` 동일).
 
     - DB에 활성 버전이 없으면 None(호출측이 하드코딩 폴백을 사용해야 함을 의미).
     - DB 조회 자체가 실패하면(예외) 직전 캐시 값을 그대로 반환(없으면 None) — 예외를
       호출측으로 전파하지 않는다.
     """
-    cached = _cache.get(config_kind)
+    normalized_owner = (owner or "").strip()
+    cache_key = (config_kind, normalized_owner)
+    cached = _cache.get(cache_key)
     try:
         from src.common.self_service_catalog_config_db import get_active_config
 
-        active = get_active_config(config_kind)
+        active = get_active_config(config_kind, normalized_owner)
     except Exception as e:
         logger.warning(
-            "catalog_config_loader_db_query_failed", config_kind=config_kind, error=str(e),
+            "catalog_config_loader_db_query_failed", config_kind=config_kind, owner=normalized_owner, error=str(e),
         )
         return cached["config"] if cached else None
 
@@ -55,19 +58,25 @@ def get_cached_config(config_kind: str) -> Optional[Dict[str, Any]]:
         logger.info(
             "catalog_config_loader_cache_refreshed",
             config_kind=config_kind,
+            owner=normalized_owner,
             old_version=cached["version_no"] if cached else None,
             new_version=active["version_no"],
         )
-        _cache[config_kind] = {"version_no": active["version_no"], "config": active["config_json"]}
-    return _cache[config_kind]["config"]
+        _cache[cache_key] = {"version_no": active["version_no"], "config": active["config_json"]}
+    return _cache[cache_key]["config"]
 
 
-def invalidate_cache(config_kind: Optional[str] = None) -> None:
-    """캐시 무효화. `config_kind` 생략 시 전체(카탈로그+Screen Graph) 무효화."""
+def invalidate_cache(config_kind: Optional[str] = None, owner: Optional[str] = None) -> None:
+    """캐시 무효화. `config_kind`/`owner` 모두 생략 시 전체 무효화,
+    `config_kind`만 주면 해당 kind의 모든 owner 커스텀 무효화."""
     if config_kind is None:
         _cache.clear()
+        return
+    if owner is None:
+        for key in [k for k in _cache if k[0] == config_kind]:
+            _cache.pop(key, None)
     else:
-        _cache.pop(config_kind, None)
+        _cache.pop((config_kind, (owner or "").strip()), None)
 
 
 def validate_config(

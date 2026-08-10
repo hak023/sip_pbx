@@ -62,6 +62,31 @@ class PdfDocumentAdapter:
         return items
 
 
+class MarkdownContentAdapter:
+    """업로드된 마크다운 텍스트 자체를 파싱하는 어댑터(Story 1.26, FR32-A).
+
+    `manual_indexer.MarkdownManualAdapter`는 디스크의 내장 매뉴얼 파일(``self-service-manual-
+    content.md``)만 읽으므로, 테넌트가 API로 업로드한 markdown source_type 문서에 재사용하면
+    업로드 내용이 무시되고 항상 내장 매뉴얼이 색인되는 버그가 생긴다(2026-08-06 실사례).
+    이 어댑터는 Pdf/OpenApiSpecAdapter와 동일하게 생성자로 주입된 콘텐츠를 그대로 파싱한다.
+    """
+
+    def __init__(self, markdown_text: str, *, title: str = "") -> None:
+        self._markdown_text = markdown_text
+        self._title = title or "마크다운 문서"
+
+    def load_pairs(self, path: Optional[Path] = None) -> List[Tuple[str, str]]:
+        return [(it["question"], it["answer"]) for it in self.load_pairs_with_meta(path)]
+
+    def load_pairs_with_meta(self, path: Optional[Path] = None) -> List[Dict[str, str]]:
+        from src.ai_voicebot.self_service.manual_indexer import parse_manual_qa_with_meta
+
+        items = parse_manual_qa_with_meta(self._markdown_text)
+        if not items:
+            logger.warning("markdown_content_adapter_no_qa_found", title=self._title)
+        return items
+
+
 class OpenApiSpecAdapter:
     """OpenAPI 스펙(JSON/YAML)의 각 엔드포인트를 Q&A 유사 페어로 변환하는 어댑터."""
 

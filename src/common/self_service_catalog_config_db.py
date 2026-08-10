@@ -38,8 +38,14 @@ def _row_to_dict(row) -> Dict[str, Any]:
     return d
 
 
-def get_active_config(config_kind: str) -> Optional[Dict[str, Any]]:
-    """config_kind의 현재 활성 버전 레코드를 반환한다. 없으면 None(호출측이 하드코딩 폴백 등을 판단)."""
+def get_active_config(config_kind: str, owner: str = "") -> Optional[Dict[str, Any]]:
+    """config_kind의 현재 활성 버전 레코드를 반환한다.
+
+    owner가 주어지면 해당 테넌트 전용 커스텀 버전을 우선 조회하고, 없으면 owner=''(전역
+    기본값)로 폴백한다(2026-08-07, NFR11 — 테넌트가 커스터마이즈하지 않았으면 기존과 동일하게
+    공통 기본 설정을 그대로 쓰는 하위 호환 유지). owner를 생략하면 기존과 동일하게 전역
+    기본값만 조회한다. 둘 다 없으면 None(호출측이 하드코딩 폴백 등을 판단).
+    """
     global _DB_AVAILABLE
     if config_kind not in _VALID_KINDS or not _DB_AVAILABLE:
         return None
@@ -50,10 +56,21 @@ def get_active_config(config_kind: str) -> Optional[Dict[str, Any]]:
         logger.debug("self_service_catalog_config_db_import_failed")
         return None
 
+    normalized_owner = (owner or "").strip()
     try:
         with get_db() as conn:
+            if normalized_owner:
+                row = conn.execute(
+                    "SELECT * FROM self_service_catalog_config"
+                    " WHERE config_kind = ? AND owner = ? AND is_active = 1"
+                    " ORDER BY version_no DESC LIMIT 1",
+                    (config_kind, normalized_owner),
+                ).fetchone()
+                if row is not None:
+                    return _row_to_dict(row)
             row = conn.execute(
-                "SELECT * FROM self_service_catalog_config WHERE config_kind = ? AND is_active = 1"
+                "SELECT * FROM self_service_catalog_config"
+                " WHERE config_kind = ? AND owner = '' AND is_active = 1"
                 " ORDER BY version_no DESC LIMIT 1",
                 (config_kind,),
             ).fetchone()
@@ -64,9 +81,13 @@ def get_active_config(config_kind: str) -> Optional[Dict[str, Any]]:
 
 
 def save_new_version(
-    config_kind: str, config: Dict[str, Any], *, uploaded_by: str = "", note: str = "",
+    config_kind: str, config: Dict[str, Any], *, owner: str = "", uploaded_by: str = "", note: str = "",
 ) -> Optional[int]:
-    """신규 버전을 비활성 상태로 저장한다. 반환값은 새 version_no(실패 시 None)."""
+    """신규 버전을 비활성 상태로 저장한다(owner별로 독립적인 version_no 시퀀스).
+
+    owner를 생략하면 기존과 동일하게 전역 기본값(owner='') 버전으로 저장된다.
+    반환값은 새 version_no(실패 시 None).
+    """
     global _DB_AVAILABLE
     if config_kind not in _VALID_KINDS:
         logger.warning("self_service_catalog_config_invalid_kind kind=%s", config_kind)
@@ -80,21 +101,22 @@ def save_new_version(
         return None
 
     config_json = json.dumps(config, ensure_ascii=False)
+    normalized_owner = (owner or "").strip()
     try:
         with get_db() as conn:
             row = conn.execute(
                 "SELECT COALESCE(MAX(version_no), 0) AS max_v FROM self_service_catalog_config"
-                " WHERE config_kind = ?",
-                (config_kind,),
+                " WHERE config_kind = ? AND owner = ?",
+                (config_kind, normalized_owner),
             ).fetchone()
             next_version = int(row["max_v"]) + 1
             conn.execute(
                 """
                 INSERT INTO self_service_catalog_config
-                    (config_kind, version_no, config_json, is_active, uploaded_by, note)
-                VALUES (?, ?, ?, 0, ?, ?)
+                    (config_kind, owner, version_no, config_json, is_active, uploaded_by, note)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
                 """,
-                (config_kind, next_version, config_json, uploaded_by or "", note or ""),
+                (config_kind, normalized_owner, next_version, config_json, uploaded_by or "", note or ""),
             )
         return next_version
     except Exception as exc:
@@ -102,8 +124,9 @@ def save_new_version(
         return None
 
 
-def activate_version(config_kind: str, version_no: int, *, activated_by: str = "") -> bool:
-    """지정 버전을 활성화하고 같은 kind의 다른 버전은 모두 비활성화한다(롤백도 동일 함수 재사용).
+def activate_version(config_kind: str, version_no: int, *, owner: str = "", activated_by: str = "") -> bool:
+    """지정 버전을 활성화하고 같은 (kind, owner) 조합의 다른 버전은 모두 비활성화한다
+    (롤백도 동일 함수 재사용). owner를 생략하면 전역 기본값(owner='') 버전을 활성화한다.
 
     `activated_at`/`activated_by`를 함께 기록한다 — 별도 감사 로그 테이블 없이 이 두 컬럼이
     "현재 활성 버전을 누가/언제 적용(또는 롤백)했는지"에 대한 감사 추적 역할을 한다
@@ -120,21 +143,22 @@ def activate_version(config_kind: str, version_no: int, *, activated_by: str = "
 
     try:
         with get_db() as conn:
+            normalized_owner = (owner or "").strip()
             existing = conn.execute(
-                "SELECT id FROM self_service_catalog_config WHERE config_kind = ? AND version_no = ?",
-                (config_kind, version_no),
+                "SELECT id FROM self_service_catalog_config WHERE config_kind = ? AND owner = ? AND version_no = ?",
+                (config_kind, normalized_owner, version_no),
             ).fetchone()
             if existing is None:
                 return False
             conn.execute(
-                "UPDATE self_service_catalog_config SET is_active = 0 WHERE config_kind = ?",
-                (config_kind,),
+                "UPDATE self_service_catalog_config SET is_active = 0 WHERE config_kind = ? AND owner = ?",
+                (config_kind, normalized_owner),
             )
             conn.execute(
                 "UPDATE self_service_catalog_config"
                 " SET is_active = 1, activated_at = datetime('now','localtime'), activated_by = ?"
-                " WHERE config_kind = ? AND version_no = ?",
-                (activated_by or "", config_kind, version_no),
+                " WHERE config_kind = ? AND owner = ? AND version_no = ?",
+                (activated_by or "", config_kind, normalized_owner, version_no),
             )
         return True
     except Exception as exc:
@@ -145,8 +169,8 @@ def activate_version(config_kind: str, version_no: int, *, activated_by: str = "
         return False
 
 
-def list_versions(config_kind: str, limit: int = 20) -> List[Dict[str, Any]]:
-    """config_kind의 버전 이력을 최신순으로 반환한다(config_json은 요약을 위해 제외하지 않고 포함)."""
+def list_versions(config_kind: str, owner: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+    """(config_kind, owner)의 버전 이력을 최신순으로 반환한다(owner 생략 시 전역 기본값 버전만)."""
     global _DB_AVAILABLE
     if config_kind not in _VALID_KINDS or not _DB_AVAILABLE:
         return []
@@ -159,11 +183,61 @@ def list_versions(config_kind: str, limit: int = 20) -> List[Dict[str, Any]]:
     try:
         with get_db() as conn:
             rows = conn.execute(
-                "SELECT * FROM self_service_catalog_config WHERE config_kind = ?"
+                "SELECT * FROM self_service_catalog_config WHERE config_kind = ? AND owner = ?"
                 " ORDER BY version_no DESC LIMIT ?",
-                (config_kind, limit),
+                (config_kind, (owner or "").strip(), limit),
             ).fetchall()
         return [_row_to_dict(r) for r in rows]
     except Exception as exc:
         logger.warning("self_service_catalog_config_list_versions_failed kind=%s err=%s", config_kind, exc)
         return []
+
+
+def purge_owner_versions(owner: str) -> int:
+    """지정 owner가 소유한 카탈로그/screen_graph 커스텀 버전을 전부 삭제한다("전체 삭제" 연동).
+
+    owner=''(전역 기본값)은 다른 모든 테넌트에 영향을 주므로 이 함수로는 절대 지울 수 없다
+    (호출측이 owner=''을 넘겨도 무조건 0건 처리하고 조용히 무시).
+    """
+    global _DB_AVAILABLE
+    normalized_owner = (owner or "").strip()
+    if not normalized_owner or not _DB_AVAILABLE:
+        return 0
+    try:
+        from src.booking.database import get_db
+    except ImportError:
+        _DB_AVAILABLE = False
+        return 0
+
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                "DELETE FROM self_service_catalog_config WHERE owner = ?",
+                (normalized_owner,),
+            )
+            return cur.rowcount or 0
+    except Exception as exc:
+        logger.warning("self_service_catalog_config_purge_owner_failed owner=%s err=%s", normalized_owner, exc)
+        return 0
+
+
+def clear_owner_catalog(owner: str) -> int:
+    """owner의 카탈로그/screen_graph를 "완전히 빈 상태"로 명시적으로 초기화한다.
+
+    (2026-08-07 버그 수정) `purge_owner_versions()`만으로는 owner 전용 행이 사라질 뿐,
+    `get_active_config(kind, owner)`가 그 즉시 owner=''(전역 기본값)로 폴백해버려 프론트에
+    "전체 삭제"를 눌러도 카탈로그/화면 안내가 그대로 남아있는 것처럼 보이는 문제가 있었다.
+    이 함수는 삭제 직후 owner 전용의 **빈 활성 버전**({"domains": {}} / {"screens": {}})을
+    새로 만들어 활성화한다 — 이후 이 테넌트는 전역 기본값으로 폴백하지 않고 "카탈로그/화면
+    안내 0건"을 실제로 보게 된다. owner=''(전역 기본값)는 손대지 않는다.
+    """
+    normalized_owner = (owner or "").strip()
+    if not normalized_owner:
+        return 0
+    purge_owner_versions(normalized_owner)
+    cleared = 0
+    for kind, empty_config in ((CATALOG_KIND, {"domains": {}}), (SCREEN_GRAPH_KIND, {"screens": {}})):
+        version_no = save_new_version(kind, empty_config, owner=normalized_owner, uploaded_by="system_reset")
+        if version_no is not None and activate_version(kind, version_no, owner=normalized_owner, activated_by="system_reset"):
+            cleared += 1
+    return cleared

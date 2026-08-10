@@ -72,7 +72,10 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/settings/ai-assistant", tags=["settings-ai-assistant"])
 
-_SELF_SERVICE_DOC_TYPE = "self_service_manual"
+# (2026-08-07) Story 1.26 업로드 문서(knowledge_document)도 같이 반환해야 "지식베이스(통합)"
+# 화면에서 업로드한 내용이 보인다(사용자 보고: "업로드한 게 여기서 안 보인다").
+_SELF_SERVICE_LIST_DOC_TYPES = ("self_service_manual", "knowledge_document")
+
 
 
 # ---------------------------------------------------------------------------
@@ -333,14 +336,21 @@ def _parse_item(raw: Dict[str, Any]) -> Optional[HelpDocItem]:
 @router.get("/docs", response_model=HelpDocsResponse, summary="도움말 Q&A 목록")
 async def list_help_docs(
     owner: str = Query(..., description="테넌트 owner"),
+    auto_index: bool = Query(
+        True,
+        description=(
+            "색인 항목이 없을 때 기본 매뉴얼을 자동 재색인할지 여부. 지식베이스 전체 삭제 "
+            "직후에 false로 호출하면 자동 재색인 없이 실제 빈 상태를 그대로 확인할 수 있다."
+        ),
+    ),
 ) -> HelpDocsResponse:
     """
-    owner에 색인된 self_service_manual Q&A 항목을 반환한다.
-    색인 항목이 없으면 매뉴얼 파일에서 자동 색인 후 반환한다.
+    owner에 색인된 self_service_manual/knowledge_document Q&A 항목을 반환한다.
+    auto_index=true(기본값)이고 항목이 전혀 없으면 매뉴얼 파일에서 자동 색인 후 반환한다.
     """
     ks = _knowledge_service()
 
-    # 기존 항목 조회 — doc_type=self_service_manual, owner 필터
+    # 기존 항목 조회 — doc_type이 도우미 지식 베이스 종류 중 하나인 항목만, owner 필터
     try:
         raw_all = await ks.get_all_knowledge(limit=2000)
     except Exception as e:
@@ -349,14 +359,14 @@ async def list_help_docs(
     owner_f = (owner or "").strip()
     items_raw = [
         r for r in raw_all
-        if str((r.get("metadata") or {}).get("doc_type") or "").strip() == _SELF_SERVICE_DOC_TYPE
+        if str((r.get("metadata") or {}).get("doc_type") or "").strip() in _SELF_SERVICE_LIST_DOC_TYPES
         and str((r.get("metadata") or {}).get("owner") or "").strip() == owner_f
     ]
 
     already_indexed = len(items_raw) > 0
 
-    # 색인 없으면 자동 색인
-    if not already_indexed:
+    # 색인 없으면 자동 색인(auto_index=false면 건너띄 — 지식베이스 전체 삭제 직후 재확인용)
+    if not already_indexed and auto_index:
         try:
             from src.ai_voicebot.self_service.manual_indexer import index_self_service_manual
             idx_result = index_self_service_manual(
@@ -380,7 +390,7 @@ async def list_help_docs(
             raise HTTPException(status_code=503, detail=f"ChromaDB 재조회 실패: {e}") from e
         items_raw = [
             r for r in raw_all2
-            if str((r.get("metadata") or {}).get("doc_type") or "").strip() == _SELF_SERVICE_DOC_TYPE
+            if str((r.get("metadata") or {}).get("doc_type") or "").strip() in _SELF_SERVICE_LIST_DOC_TYPES
             and str((r.get("metadata") or {}).get("owner") or "").strip() == owner_f
         ]
 
@@ -435,7 +445,9 @@ def trigger_index(
 
 
 @router.get("/catalog", response_model=CatalogResponse, summary="설정 카탈로그 (AI 변경 가능 도메인)")
-def get_catalog() -> CatalogResponse:
+def get_catalog(
+    owner: str = Query("", description="테넌트 owner — 지정 시 해당 테넌트 커스텀 카탈로그 우선 조회(없으면 전역 기본값)"),
+) -> CatalogResponse:
     """
     settings_catalog에 등록된 도메인별 메타데이터를 반환한다.
 
@@ -461,9 +473,9 @@ def get_catalog() -> CatalogResponse:
     }
 
     entries: List[CatalogDomainEntry] = []
-    for domain in settings_catalog.list_domains():
-        schema = settings_catalog.get_domain_schema(domain)
-        wf = settings_catalog.domain_writable_fields(domain)
+    for domain in settings_catalog.list_domains(owner):
+        schema = settings_catalog.get_domain_schema(domain, owner)
+        wf = settings_catalog.domain_writable_fields(domain, owner)
         entries.append(
             CatalogDomainEntry(
                 domain=domain,
@@ -717,6 +729,54 @@ def get_document_hop_path(
     return DocumentHopPathResponse(
         document_id=document_id, domain_tags=domain_tags, hop_path=edges,
     )
+
+
+# Story 1.49 보강(FR36-B, 2026-08-06) — 임의 도메인(매뉴얼 Q&A/설정 카탈로그/화면 안내 등)의 hop 경로 조회.
+# 업로드 문서(document_id)가 없는 항목도 지식 그래프 연결을 보여줄 수 있도록, 위
+# get_document_hop_path()와 동일한 traverse_graph() 호출을 도메인만으로 수행하는 최소 버전.
+class DomainHopPathResponse(BaseModel):
+    domain: str
+    hop_path: List[DocumentHopEdgeOut]
+
+
+@router.get(
+    "/domain-hop-path", response_model=DomainHopPathResponse,
+    summary="도메인 기준 지식 그래프 hop 경로(Story 1.49 보강, FR36-B)",
+)
+def get_domain_hop_path(
+    domain: str = Query(..., description="설정/화면/매뉴얼의 related_domain"),
+    owner: str = Query(..., description="테넌트 owner"),
+) -> DomainHopPathResponse:
+    """`domain`을 시작점으로 traverse_graph()를 호출해 연결된 화면/설정/IntelliDecision 유형을
+    반환한다(Story 1.37 get_document_hop_path()와 동일 원리, document_id가 없는 항목용).
+    LLM 호출 없음, 순수 그래프 조회 전용.
+    """
+    from src.ai_voicebot.self_service.knowledge_graph import traverse_graph
+
+    edges: List[DocumentHopEdgeOut] = []
+    seen: set = set()
+    _MAX = 30
+    try:
+        raw = traverse_graph("catalog_domain", domain, max_hops=3, owner=owner)
+    except Exception as exc:
+        import logging; logging.getLogger(__name__).warning(
+            "domain_hop_path_failed domain=%s err=%s", domain, exc
+        )
+        raw = []
+    for e in raw:
+        key = (e["hop"], e["edge_type"], str(e["source_id"]), str(e["target_id"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append(DocumentHopEdgeOut(
+            hop=e["hop"], edge_type=e["edge_type"],
+            source_type=e["source_type"], source_id=str(e["source_id"]),
+            target_type=e["target_type"], target_id=str(e["target_id"]),
+        ))
+        if len(edges) >= _MAX:
+            break
+
+    return DomainHopPathResponse(domain=domain, hop_path=edges)
 
 
 @router.get(

@@ -307,20 +307,24 @@ CREATE TABLE IF NOT EXISTS self_service_config_changes (
 CREATE INDEX IF NOT EXISTS idx_self_service_config_changes_owner ON self_service_config_changes(owner, changed_at DESC);
 
 -- 셀프서비스 설정 카탈로그/Screen Graph 동적 구성 (Epic 2 Story 2.1)
--- config_kind: 'catalog' | 'screen_graph'. 같은 kind 내에서 version_no가 증가하며,
--- is_active=1인 레코드가 정확히 1건이어야 한다(활성 버전 = 롤백 대상).
+-- config_kind: 'catalog' | 'screen_graph'. owner=''는 전역 기본값(미커스터마이즈 테넌트가
+-- 쓰는 폴백)이고, owner가 채워진 행은 해당 테넌트 전용 커스텀 버전이다(2026-08-07,
+-- NFR11 — 신규 설치 기준 DDL. 기존 DB는 아래 _MIGRATIONS의 ALTER TABLE로 owner 컬럼을 추가).
+-- (owner, config_kind) 조합마다 version_no가 독립적으로 증가하며, 각 조합 내 is_active=1은
+-- 정확히 1건이어야 한다(활성 버전 = 롤백 대상).
 CREATE TABLE IF NOT EXISTS self_service_catalog_config (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     config_kind  TEXT    NOT NULL,
+    owner        TEXT    NOT NULL DEFAULT '',
     version_no   INTEGER NOT NULL,
     config_json  TEXT    NOT NULL DEFAULT '{}',
     is_active    INTEGER NOT NULL DEFAULT 0,
     uploaded_by  TEXT    NOT NULL DEFAULT '',
     note         TEXT    NOT NULL DEFAULT '',
     created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(config_kind, version_no)
+    UNIQUE(config_kind, owner, version_no)
 );
-CREATE INDEX IF NOT EXISTS idx_self_service_catalog_config_active ON self_service_catalog_config(config_kind, is_active);
+CREATE INDEX IF NOT EXISTS idx_self_service_catalog_config_active ON self_service_catalog_config(config_kind, owner, is_active);
 
 -- IntelliDecision 판단 근거 투명성 로그 (Story 1.21, FR30 — 순수 관측 전용, 판단 로직에 관여하지 않음)
 -- 응답 전송 후 비동기 백그라운드로 채워지므로 changed_at 대비 약간(0.7~1초) 늦게 기록될 수 있다.
@@ -430,7 +434,66 @@ _MIGRATIONS = [
     "ALTER TABLE knowledge_documents ADD COLUMN base_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE knowledge_documents ADD COLUMN auth_header_name TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE knowledge_documents ADD COLUMN auth_header_value TEXT NOT NULL DEFAULT ''",
+    # NFR11(2026-08-07): 설정 카탈로그/Screen Graph 테넌트 스코프 추가 — 기존 행은 모두
+    # owner=''(전역 기본값)로 남는다.
+    "ALTER TABLE self_service_catalog_config ADD COLUMN owner TEXT NOT NULL DEFAULT ''",
 ]
+
+
+def _rebuild_self_service_catalog_config_table(conn: sqlite3.Connection) -> None:
+    """기존 DB의 `UNIQUE(config_kind, version_no)` 제약(owner 컬럼 도입 이전 스키마)을
+    `UNIQUE(config_kind, owner, version_no)`로 교체하기 위해 테이블을 재생성한다.
+
+    (2026-08-07 버그 수정) `ALTER TABLE ADD COLUMN`으로는 이미 컴파일된 테이블 정의에 박힌
+    UNIQUE 제약 자체를 바꿀 수 없다 — "새 UNIQUE 인덱스만 추가하면 충분하다"고 판단했던 이전
+    수정이 실제로는 옛 제약(owner 무시, config_kind+version_no만 봄)이 여전히 살아있어
+    테넌트 owner에 전역과 같은 version_no(1, 2, ...)로 저장하려 하면
+    `UNIQUE constraint failed: self_service_catalog_config.config_kind,
+    self_service_catalog_config.version_no`로 항상 실패했다(카탈로그/화면 안내 "전체 삭제"가
+    실제로는 아무 효과가 없어 보이던 근본 원인). sqlite_master의 테이블 정의 문자열에 옛 제약이
+    남아있을 때만 1회 재생성한다(멱등적 — 이미 새 스키마면 아무 것도 하지 않음).
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='self_service_catalog_config'"
+    ).fetchone()
+    existing_sql = (row[0] if row else "") or ""
+    if "UNIQUE(config_kind, owner, version_no)" in existing_sql:
+        return  # 이미 새 스키마
+    if not existing_sql:
+        return  # 테이블이 아직 없음(_DDL이 곧 새 스키마로 생성함)
+
+    conn.execute("ALTER TABLE self_service_catalog_config RENAME TO self_service_catalog_config_old")
+    conn.execute(
+        """
+        CREATE TABLE self_service_catalog_config (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            config_kind  TEXT    NOT NULL,
+            owner        TEXT    NOT NULL DEFAULT '',
+            version_no   INTEGER NOT NULL,
+            config_json  TEXT    NOT NULL DEFAULT '{}',
+            is_active    INTEGER NOT NULL DEFAULT 0,
+            uploaded_by  TEXT    NOT NULL DEFAULT '',
+            note         TEXT    NOT NULL DEFAULT '',
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            activated_at TEXT    DEFAULT NULL,
+            activated_by TEXT    NOT NULL DEFAULT '',
+            UNIQUE(config_kind, owner, version_no)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO self_service_catalog_config
+            (id, config_kind, owner, version_no, config_json, is_active, uploaded_by, note,
+             created_at, activated_at, activated_by)
+        SELECT id, config_kind, COALESCE(owner, ''), version_no, config_json, is_active, uploaded_by, note,
+               created_at, activated_at, activated_by
+        FROM self_service_catalog_config_old
+        """
+    )
+    conn.execute("DROP TABLE self_service_catalog_config_old")
+    logger.info("self_service_catalog_config_table_rebuilt_for_owner_scope")
+
 
 
 def init_db() -> None:
@@ -443,6 +506,10 @@ def init_db() -> None:
                 conn.execute(sql)
             except Exception:
                 pass
+        try:
+            _rebuild_self_service_catalog_config_table(conn)
+        except Exception as exc:
+            logger.warning("self_service_catalog_config_table_rebuild_failed error=%s", exc)
     logger.info("booking_db_initialized", path=_get_db_path())
 
 

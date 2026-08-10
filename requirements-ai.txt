@@ -17,6 +17,8 @@ google-cloud-texttospeech==2.36.0    # TTS — 동일 protobuf 상한
 # google-generativeai(0.8.6, deprecated)는 2026-07-27 Epic 6(Story 6.1~6.3) 완료로 저장소
 # 코드가 더 이상 참조하지 않아 제거함(docs/stories/6.4.*, docs/reports/2026-07/2026-07-27_*).
 google-genai==1.75.0                  # Gemini(신규) — LLMClient(Story 6.1), booking_gemini_fc.py(Story 6.2), knowledge/*·call_history.py·ringback_service.py(Story 6.3)가 사용
+fastmcp>=2.0                          # MCP 게이트웨이 서버 (Epic 8, Story 8.1) — stdio/SSE 모드로 동적 REST-API Tool 노출
+starlette>=0.27.0,<0.36.0             # fastmcp(1.6.0 설치)와 fastapi(0.104.1) 간 starlette 버전 충돌 방지
 google-api-core==2.30.3              # protobuf>=4.25.8,<8 (구 2.15는 protobuf<5 고정)
 google-auth>=2.48.1,<3               # pipecat→google-genai가 >=2.48.1 요구; !=2.24/2.25는 클라우드 라이브러리가 제외
 grpcio==1.67.1                     # chromadb→otel OTLP grpcio>=1.63.2

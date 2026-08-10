@@ -51,6 +51,24 @@ def temp_db(tmp_path, monkeypatch):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tool_execution_log (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner             TEXT    NOT NULL,
+            document_id       TEXT    NOT NULL,
+            method            TEXT    NOT NULL,
+            endpoint_path     TEXT    NOT NULL,
+            request_json      TEXT,
+            pre_state_json    TEXT,
+            response_status   INTEGER,
+            response_json     TEXT,
+            undo_attempted    INTEGER NOT NULL DEFAULT 0,
+            undo_ok           INTEGER,
+            created_at        TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -223,4 +241,62 @@ class TestOpenApiSpecAdapterExtractBaseUrl:
         spec = {"openapi": "3.0.0", "paths": {}}
         adapter = OpenApiSpecAdapter(json.dumps(spec))
         assert adapter.extract_base_url() == ""
+
+
+class TestPurgeAllDocuments:
+    """(2026-08-07 버그 수정) '전체 삭제'가 knowledge_documents만 비활성화하고
+    knowledge_document_endpoints/tool_execution_log는 그대로 남기던 문제 검증."""
+
+    def test_hard_deletes_documents_endpoints_and_execution_log(self, temp_db):
+        doc1 = docs_db.create_document(owner="9001", title="a", domain_tags=[], source_type="openapi", chunk_doc_ids=["k1"])
+        doc2 = docs_db.create_document(owner="9001", title="b", domain_tags=[], source_type="markdown", chunk_doc_ids=["k2"])
+        docs_db.create_document(owner="9002", title="other-owner", domain_tags=[], source_type="markdown", chunk_doc_ids=["k3"])
+        docs_db.save_document_endpoints(doc1["document_id"], [
+            {"_method": "GET", "_endpoint_path": "/orders", "_parameters": [], "_request_body": None},
+        ])
+
+        from src.booking.database import get_db
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO tool_execution_log (owner, document_id, method, endpoint_path) VALUES (?, ?, ?, ?)",
+                ("9001", doc1["document_id"], "POST", "/orders"),
+            )
+            conn.execute(
+                "INSERT INTO tool_execution_log (owner, document_id, method, endpoint_path) VALUES (?, ?, ?, ?)",
+                ("9002", "unrelated-doc", "POST", "/x"),
+            )
+
+        result = docs_db.purge_all_documents("9001")
+
+        assert result == {"deleted_documents": 2, "deleted_endpoints": 1, "deleted_execution_logs": 1}
+        assert docs_db.list_documents(owner="9001") == []
+        assert docs_db.get_document(doc1["document_id"], owner="9001") is None
+        assert docs_db.get_document(doc2["document_id"], owner="9001") is None
+        assert docs_db.list_document_endpoints(doc1["document_id"]) == []
+
+        with get_db() as conn:
+            remaining = conn.execute("SELECT owner FROM tool_execution_log").fetchall()
+        assert [dict(r)["owner"] for r in remaining] == ["9002"]
+
+        # 다른 owner는 전혀 영향받지 않아야 한다
+        assert len(docs_db.list_documents(owner="9002")) == 1
+
+    def test_purge_no_documents_returns_zero_counts(self, temp_db):
+        result = docs_db.purge_all_documents("9999")
+        assert result == {"deleted_documents": 0, "deleted_endpoints": 0, "deleted_execution_logs": 0}
+
+    def test_purge_also_removes_already_deactivated_documents(self, temp_db):
+        """'전체 삭제'는 완전 초기화이므로, 과거에 개별 삭제(비활성화)된 문서까지 흔적 없이 지운다."""
+        doc = docs_db.create_document(owner="9001", title="a", domain_tags=[], source_type="markdown", chunk_doc_ids=["k1"])
+        docs_db.deactivate_document(doc["document_id"], owner="9001")
+
+        result = docs_db.purge_all_documents("9001")
+
+        assert result["deleted_documents"] == 1
+        with docs_db._get_db()() as conn:  # noqa: SLF001 - 테스트 전용 내부 접근
+            remaining = conn.execute(
+                "SELECT COUNT(*) AS c FROM knowledge_documents WHERE owner = ?", ("9001",)
+            ).fetchone()
+        assert dict(remaining)["c"] == 0
+
 

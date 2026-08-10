@@ -19,5 +19,5 @@ import pytest
 def _isolate_dynamic_catalog_loader(monkeypatch):
     from src.ai_voicebot.self_service import catalog_config_loader
 
-    monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda config_kind: None)
+    monkeypatch.setattr(catalog_config_loader, "get_cached_config", lambda config_kind, owner="": None)
     yield

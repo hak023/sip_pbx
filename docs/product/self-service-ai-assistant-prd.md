@@ -1,7 +1,7 @@
 # 셀프서비스 AI 도우미 — Brownfield Enhancement PRD
 
 **작성일**: 2026-07-14
-**버전**: 1.10 (2026-08-06 갱신 — FR35(A~H) 신설: 업로드 완전 통합/데이터 작성 가이드/공통 고정 콘텐츠 명시화/IntelliDecision×실제채팅 통합 탐색기/유형 C 하이브리드 시각화/지식베이스↔응대이력 교차탐색/레퍼런스 추적표, 계획 리포트 참고)
+**버전**: 1.11 (2026-08-06 갱신 — FR36(A~C) 신설: 지식베이스 통합 리스트+상세 패널 뷰, Story 1.48~1.50, 계획 리포트 참고)
 **상태**: 초안 — Epic/Story 확정 전
 **관련 문서**:
 - [self-service-ai-assistant-brief.md](self-service-ai-assistant-brief.md) — 본 PRD의 상위 Project Brief
@@ -84,6 +84,7 @@ SmartPBX AI는 SIP B2BUA + 실시간 음성 AI(LangGraph 오케스트레이션, 
 | FR34-F 재수정 — 단일 턴 flowchart → call_id 세션 단위 유형 전환 순서도              | 2026-08-05 | 1.7     | 사용자가 "한 건의 질의/응답만 보여주면 의미 없다 — 여러 턴을 주고받으며 유형이 옮겨가는 과정 자체가 IntelliDecision 핵심"이라고 지적 → FR34-F를 call_id 세션 단위(여러 턴의 유형 전환 흐름 전체)로 재작성, Story 1.38 AC/Tasks 전면 재작성(세션 목록/상세 2단계 API 포함), architecture v0.25 동기화                                                                                                                                                                                                                                                                                                                       | Copilot (BMAD PM 역할)  |
 | FR34-F 세션 그룹핑 키 정정 — call_id 단일 기준 → 채널별 그룹핑                      | 2026-08-05 | 1.8     | 사용자가 "call_id 그룹핑은 통화 기준엔 맞지만, 문자는 call_id가 트랜잭션마다 나뉘지 않냐"고 지적 → `sip_endpoint.py` 코드 확인 결과 정확한 지적(MESSAGE 1건마다 신규 call_id 발급) → 세션 그룹핑 키를 채널별로 분리(음성=call_id, 채팅/MESSAGE=owner+caller_number+시간 윈도우)하도록 FR34-F 재작성, `self_service_decision_log`에 caller_number 컬럼 추가 필요성 명시, architecture v0.26 동기화                                                                                                                                                                                                                          | Copilot (BMAD PM 역할)  |
 | FR34-A 개정 — base_url/인증정보 캡처 요구사항 명시(임의 외부 시스템 지원 공백 발견) | 2026-08-06 | 1.9     | 사용자가 "이 시스템에 대한 것만 하던 걸 이제 다른 시스템도 수행해야 하는데 fullpath 등 데이터를 업로드로 받아 반영되게 고려되어 있는지" 점검 요청 → 코드 확인 결과 `dynamic_api_tool.py`가 `base_url` 파라미터를 요구하지만 업로드 API/DB 어디에도 저장 경로가 없고, `OpenApiSpecAdapter`가 OpenAPI `servers` 필드를 파싱하지 않으며, 엔드포인트 실행 메타(`_endpoint_path`/`_method`/`_parameters`)가 색인 과정에서 버려지는 것을 확인(Story 1.35가 실행기 골격만 완성, 실제 목적지 연결이 전혀 없었음) → FR34-A/NFR9에 base_url/인증정보 캡처 필수 요구사항 명시, Story 1.35 재개(architecture v0.27, Story 1.35 재작성) | Copilot (BMAD PM 역할)  |
+| FR36 신설 — 지식베이스 통합 뷰(리스트+상세, Epic 4 확장)                            | 2026-08-06 | 1.11    | 사용자가 UX 리뷰([2026-08-06_frontend_ia_and_kb_ux_review.md](../reports/2026-08/2026-08-06_frontend_ia_and_kb_ux_review.md) §2)에서 지적한 `/settings/ai-assistant/docs` 6개 탭 파편화·raw 데이터 위주 문제를, `/knowledge`(고객응대 RAG)와 혼동 없이 셀프서비스 도우미 지식베이스에 한정해 재계획([2026-08-06_selfservice_kb_unified_view_plan.md](../reports/2026-08/2026-08-06_selfservice_kb_unified_view_plan.md)) → FR36-A(통합 리스트)/B(상세 패널)/C(업로드 후 자동 포커스) 신설, Story 1.48~1.50(Draft) 신규 작성, `policy` 탭은 통합 대상에서 제외                                                              | Copilot (BMAD PM 역할)  |
 ## Post-MVP 후보 (리서치, 2026-07-23 — 제안 1·2 모두 반영 완료)
 
 IntelliDecision·지식베이스 고도화 리서치
@@ -222,6 +223,7 @@ IntelliDecision·지식베이스 고도화 리서치
 - **NFR8 (지식베이스 플랫폼 격리·비용, 2026-08-04 범위 추가)**: FR32-A의 업로드 CRUD API는 기존 `owner` 테넌트 격리를 반드시 통과해야 하며, PDF/OpenAPI 파싱 실패 시 전체 업로드를 실패 처리하고 부분 색인 상태를 남기지 않아야 한다. FR32-B의 응답 시뮬레이터는 실제 LLM 호출을 수반하므로 실 대화 세션과 분리된 테스트 전용 경로로 실행되어야 하며, 지연·비용 발생 가능성을 프론트엔드 화면에 명시해야 한다.
 - **NFR9 (실제 API 실행 안전성, 2026-08-05 범위 추가, FR34-A, 2026-08-06 개정)**: 업로드된 OpenAPI 스펙으로부터 자동 생성된 Tool은 **기본적으로 읽기 전용(GET)만 활성화**되며, 쓰기 메서드(POST/PUT/PATCH/DELETE)는 테넌트 관리자가 명시적으로 승인한 엔드포인트만 화이트리스트에 등록되어야 실행 가능하다(기본 거부, Epic 2의 "제외 목록 방식"과 정반대의 "화이트리스트 방식" 채택 — 임의 외부 시스템 API는 신뢰도가 검증되지 않았으므로 제외 목록 방식보다 보수적으로 접근). 실행 직전 값을 기록해 되돌릴 수 있어야 하며(undo), 실패 시 명확한 에러를 사용자에게 안내해야 한다(묵살 금지). **base_url/인증 정보는 반드시 문서 업로드 시점에 캡처·저장되어야 하며, 인증 값은 어떤 로그에도 평문으로 남지 않아야 한다(OWASP)** — 실행 엔진이 base_url을 파라미터로 요구하면서 저장 경로가 없는 상태로 배포되어서는 안 된다. NFR1(응답 지연) 예산은 실행 기능이 추가되어도 동일하게 유지되어야 한다.
 - **NFR10 (실제 채팅 패널·판단 이력 고도화의 진실성, 2026-08-05 범위 추가, FR34-E/F)**: FR34-E의 실제 채팅 패널은 시뮬레이션이 아니라 기존 SIP MESSAGE 파이프라인(`chat-relay`)을 그대로 태워야 하며, 별도 격리 세션·가짜 응답을 만들지 않아야 한다(테넌트 관리자가 자기 자신에게 보낸 메시지는 실제 `self_service_agent` 경로를 타야 함, `caller_number==owner` 판별 규칙 계승). FR34-F의 판단 이력 순서도는 실제로 기록된 `self_service_decision_log`/`call_data_record` 데이터만 사용해야 하며, 없는 정보를 추정해 채워 넣지 않아야 한다(정보가 없으면 "정보 없음"으로 표시).
+- **NFR11 (알려진 기술 부채 — 설정 카탈로그/Screen Graph 테넌트 스코프 부재, 2026-08-07 범위 추가)**: 이 시스템은 처음엔 로컬 도메인/로컬호스트 전용으로 개발되었으나, 현재는 "테넌트가 업로드한 정보(매뉴얼·설정 카탈로그·화면 안내·OpenAPI 스펙)만으로 임의의 원격(remote) REST-API 시스템을 조작·안내할 수 있는" 도메인 비종속 플랫폼(FR34)으로 방향이 전환되었다. 이 전환 이후로는 모든 지식베이스 데이터(Q&A, 설정 카탈로그, 화면 안내, OpenAPI 엔드포인트 메타)가 **테넌트(owner) 단위로 격리**되어야 하나, `self_service_catalog_config`(Epic 2, `catalog`/`screen_graph`)는 **owner 컬럼이 없는 전역(global) 단일 활성 버전**으로 남아있어 이 원칙을 위반한다(실사례·조사 근거: [2026-08-07_catalog_screen_graph_tenant_scope_gap_and_plan.md](../reports/2026-08/2026-08-07_catalog_screen_graph_tenant_scope_gap_and_plan.md)). owner가 없는 데이터는 원칙적으로 구 방향(로컬호스트 종속 개발) 시절의 잔여물로 간주하고 정리 대상으로 삼는다. 이 항목은 Epic 4 이후 별도 스토리로 owner 스코프(폴백: 미커스터마이즈 테넌트는 전역 기본값 사용)를 추가해 해소한다.
 
 ### Compatibility Requirements
 
@@ -814,6 +816,36 @@ IV1: 태그 도입 후 기존 매뉴얼 색인·RAG 검색 결과(Story 1.3 QA �
 | 1.45  | 유형 C 하이브리드 RAG 탐색기 표시 보강          | FR35-E |
 | 1.46  | 지식베이스↔응대이력 교차 탐색 + 문구 번역 계층  | FR35-F |
 | 1.47  | (문서 전용) 레퍼런스 추적표 + 개발 배경 소개    | FR35-H |
+
+## Epic 4 확장: 지식베이스 통합 뷰(탭 6개 → 리스트+상세, FR36)
+
+> 상세 배경·현황 진단·UI 미리보기는 계획 리포트를 참고:
+> [2026-08-06_selfservice_kb_unified_view_plan.md](../reports/2026-08/2026-08-06_selfservice_kb_unified_view_plan.md)
+
+`/settings/ai-assistant/docs`(셀프서비스 AI 도우미 지식베이스, `/ai-agent` 진입)가 `qa`/
+`catalog`/`screen`/`policy`/`kb`/`upload` 6개 탭으로 파편화되어 있고, "지식베이스 현황" 탭이
+청크 수·섹션 수 같은 내부 지표 위주라 사용자가 "이 지식이 어떤 Tool/API/화면과 연결되는지"를
+확인하기 어렵다는 지적을 반영한다. **주의**: 이 FR36은 실시간 통화 응대용 `/knowledge` 레거시
+RAG와는 무관하며, 셀프서비스 AI 도우미 지식베이스(`/api/knowledge-base/documents` 등)에만
+적용된다.
+
+- **FR36-A(지식 항목 통합 리스트)**: `qa`(매뉴얼 문서)/`catalog`(설정 카탈로그)/`screen`
+  (화면 안내 노드)를 유형 배지가 붙은 단일 리스트로 병합해 보여준다. `policy`(의도 유형·수동
+  케이스·의사결정 세션)는 운영 정책/이력 성격이 강해 통합 대상에서 제외한다.
+- **FR36-B(지식 항목 상세 패널)**: 리스트에서 항목 선택 시 원문 요약, 연결된 화면/도메인
+  hop 경로(`HopPathTrail` 재사용), 연결된 Tool/REST-API(메서드·엔드포인트·쓰기 가능 여부),
+  "최근 이 항목이 쓰인 대화 보기" 링크(Story 1.46 재사용)를 한 화면에 표시한다. "지식베이스
+  현황" 탭의 청크 수/섹션 수 통계는 삭제하지 않고 상단 요약 배지로 축소한다.
+- **FR36-C(업로드 → 신규 항목 자동 포커스)**: `upload` 탭에서 지식 문서 업로드 성공 시 방금
+  등록된 항목의 상세 패널로 자동 이동해 강조 표시한다.
+
+### Epic 4 확장 Story 목록
+
+| Story | 제목                                   | FR     |
+| ----- | -------------------------------------- | ------ |
+| 1.48  | 지식 항목 통합 리스트 뷰               | FR36-A |
+| 1.49  | 지식 항목 상세 패널(hop·Tool/API·이력) | FR36-B |
+| 1.50  | 업로드 완료 → 신규 항목 자동 포커스    | FR36-C |
 
 ---
 

@@ -8,14 +8,16 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const MAIN_NAV = [
-  { href: '/knowledge', label: '지식베이스' },
+  // 실시간 통화 응대용 RAG 지식(페르소나·인사말·잡담 등) — /ai-agent(셀프서비스 업로드
+  // 문서, "도우미 지식 베이스")와는 완전히 다른 시스템이라 라벨을 구분한다(2026-08-06 UX 리뷰
+  // §5-1). 2026-08-07: /knowledge 페이지 제목을 "고객 지식 베이스"로 통일한 것과 라벨이
+  // 서로 다르면 다시 혼동을 유발하므로 동일 표현으로 맞춘다.
+  { href: '/knowledge', label: '고객 지식 베이스' },
   { href: '/call-history', label: '통화이력' },
   { href: '/contacts', label: '연락처' },
   { href: '/outbound', label: '발신 관리' },
   { href: '/booking', label: '예약 관리' },
   { href: '/chat', label: '채팅 관리' },
-  // Story 1.36(FR34-B): AI 에이전트 플랫폼 독립 최상위 메뉴
-  { href: '/ai-agent', label: 'AI 에이전트' },
 ] as const;
 
 type SettingsNavEntry =
@@ -35,9 +37,9 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { kind: 'link', href: '/settings/chat-relay', label: '채팅·SIP MESSAGE' },
   { kind: 'divider' },
   { kind: 'heading', label: '셀프서비스 AI 도우미' },
-  // Story 1.36(FR34-B): 새 진입점은 /ai-agent — 기존 링크 호환을 위해 유지
-  { kind: 'link', href: '/ai-agent', label: 'AI 에이전트 플랫폼' },
-  { kind: 'link', href: '/settings/ai-assistant', label: 'AI 도우미 변경 이력' },
+  // Story 1.36(FR34-B) 진입점. 최상위 메뉴에는 중복 등록하지 않는다(2026-08-06 UX 리뷰 §1).
+  // "AI 도우미 변경 이력"은 /ai-agent 페이지의 "시스템 설정" 섹션에서도 링크되므로 여기서는 생략.
+  { kind: 'link', href: '/ai-agent', label: 'AI 에이전트' },
 ];
 
 const SETTINGS_LINK_HREFS = SETTINGS_NAV.filter(
@@ -47,6 +49,10 @@ const SETTINGS_LINK_HREFS = SETTINGS_NAV.filter(
 function settingsAreaActive(pathname: string | null): boolean {
   if (!pathname) return false;
   if (pathname === "/settings/integrations" || pathname.startsWith("/settings/integrations/")) {
+    return true;
+  }
+  // 네비게이션에는 생략됐지만 여전히 유효한 설정 하위 페이지("AI 도우미 변경 이력", /ai-agent 경유 진입)
+  if (pathname === "/settings/ai-assistant" || pathname.startsWith("/settings/ai-assistant/")) {
     return true;
   }
   return SETTINGS_LINK_HREFS.some(

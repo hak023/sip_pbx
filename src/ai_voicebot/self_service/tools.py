@@ -104,7 +104,7 @@ async def _get_self_service_settings(owner: str, domain: str) -> str:
         if isinstance(value, dict) and str(value.get("error", "")).startswith("unregistered_domain"):
             return json.dumps({
                 "error": f"'{domain}' 항목은 확인해드릴 수 없어요.",
-                "available_domains": settings_catalog.list_domains(),
+                "available_domains": settings_catalog.list_domains(owner),
             }, ensure_ascii=False)
         return json.dumps(value, ensure_ascii=False)
     except Exception as e:

@@ -27,6 +27,7 @@ class InternalChatMessageBody(BaseModel):
     body: str
     suppress_ai_loop: bool = False
     wait_for_final_response: bool = True
+    sender_registration_required: bool = True
 
 
 def _expected_secret() -> str:
@@ -64,6 +65,7 @@ def internal_chat_message(
         body.body,
         suppress_ai_loop=bool(body.suppress_ai_loop),
         wait_for_final_response=bool(body.wait_for_final_response),
+        sender_registration_required=bool(body.sender_registration_required),
     )
 
 

@@ -1,0 +1,32 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Demo Order API",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "https://api.example.com/v1"
+        }
+    ],
+    "paths": {
+        "/orders": {
+            "get": {
+                "summary": "주문 목록을 조회합니다."
+            },
+            "post": {
+                "summary": "새 주문을 생성합니다."
+            }
+        },
+        "/orders/{id}": {
+            "delete": {
+                "summary": "주문을 취소합니다."
+            }
+        },
+        "/orders/{id}/status": {
+            "put": {
+                "summary": "주문 상태를 변경합니다."
+            }
+        }
+    }
+}

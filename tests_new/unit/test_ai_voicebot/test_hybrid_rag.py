@@ -51,7 +51,7 @@ class TestSearchHybridMultiDomain:
     async def test_queries_all_catalog_domains_in_parallel(self, monkeypatch):
         from src.ai_voicebot.self_service import settings_catalog
 
-        monkeypatch.setattr(settings_catalog, "list_domains", lambda: ["booking", "chat-relay"])
+        monkeypatch.setattr(settings_catalog, "list_domains", lambda *_: ["booking", "chat-relay"])
         vector_db = _FakeVectorDB({"booking": ["b1"], "chat-relay": ["c1", "c2"]})
         docs = await search_hybrid_multi_domain(
             "뭘 할 수 있어?", owner="9001", vector_db=vector_db, embedder=_FakeEmbedder()
@@ -63,7 +63,7 @@ class TestSearchHybridMultiDomain:
     async def test_deduplicates_by_doc_id_across_domains(self, monkeypatch):
         from src.ai_voicebot.self_service import settings_catalog
 
-        monkeypatch.setattr(settings_catalog, "list_domains", lambda: ["booking", "chat-relay"])
+        monkeypatch.setattr(settings_catalog, "list_domains", lambda *_: ["booking", "chat-relay"])
         vector_db = _FakeVectorDB({"booking": ["shared"], "chat-relay": ["shared"]})
         docs = await search_hybrid_multi_domain(
             "뭘 할 수 있어?", owner="9001", vector_db=vector_db, embedder=_FakeEmbedder()
@@ -74,7 +74,7 @@ class TestSearchHybridMultiDomain:
     async def test_single_domain_failure_does_not_break_others(self, monkeypatch):
         from src.ai_voicebot.self_service import settings_catalog
 
-        monkeypatch.setattr(settings_catalog, "list_domains", lambda: ["booking", "broken"])
+        monkeypatch.setattr(settings_catalog, "list_domains", lambda *_: ["booking", "broken"])
 
         class _PartlyBrokenVectorDB(_FakeVectorDB):
             def query(self, query_embeddings, n_results, where):
@@ -100,7 +100,7 @@ class TestSearchHybridMultiDomain:
     async def test_no_domains_returns_empty(self, monkeypatch):
         from src.ai_voicebot.self_service import settings_catalog
 
-        monkeypatch.setattr(settings_catalog, "list_domains", lambda: [])
+        monkeypatch.setattr(settings_catalog, "list_domains", lambda *_: [])
         vector_db = _FakeVectorDB({})
         docs = await search_hybrid_multi_domain(
             "뭘 할 수 있어?", owner="9001", vector_db=vector_db, embedder=_FakeEmbedder()

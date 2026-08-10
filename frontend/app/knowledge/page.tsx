@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { KNOWLEDGE_CATEGORIES, KNOWLEDGE_SOURCES, type KnowledgeItem } from '@/types';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useState } from 'react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -39,7 +39,7 @@ export default function KnowledgePage() {
   const [contactManualExt, setContactManualExt] = useState('');
   const [contactSelectedForwardId, setContactSelectedForwardId] = useState('');
   const [contactTransferLabel, setContactTransferLabel] = useState('');
-  
+
   // Persona 입력 필드 (category === 'persona' 일 때만 표시)
   const [personaName, setPersonaName] = useState('');
   const [personaDescription, setPersonaDescription] = useState('');
@@ -199,17 +199,17 @@ export default function KnowledgePage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // Persona 저장
     if (category === 'persona') {
       if (!tenant?.owner || !personaName.trim() || !personaDescription.trim()) {
         setMessage({ type: 'error', text: '조직명과 조직 설명은 필수입니다.' });
         return;
       }
-      
+
       setSubmitting(true);
       setMessage(null);
-      
+
       try {
         const res = await fetch(`${API_URL}/api/persona/${encodeURIComponent(tenant.owner)}`, {
           method: 'PUT',
@@ -221,7 +221,7 @@ export default function KnowledgePage() {
             enabled: personaEnabled,
           }),
         });
-        
+
         if (res.ok) {
           setMessage({ type: 'ok', text: '조직 페르소나가 저장되었습니다.' });
           setKeywordInput('');
@@ -237,7 +237,7 @@ export default function KnowledgePage() {
       }
       return;
     }
-    
+
     // 일반 지식 저장
     if (!tenant?.owner || !text.trim() || !category) {
       setMessage({ type: 'error', text: '착신(owner), 내용(text), 카테고리(category)를 입력하세요.' });
@@ -296,10 +296,10 @@ export default function KnowledgePage() {
         }
         fetchList();
       } else {
-        const errorMsg = typeof data.detail === 'string' 
-          ? data.detail 
-          : data.detail 
-            ? JSON.stringify(data.detail) 
+        const errorMsg = typeof data.detail === 'string'
+          ? data.detail
+          : data.detail
+            ? JSON.stringify(data.detail)
             : data.error || `HTTP ${res.status}`;
         setMessage({ type: 'error', text: errorMsg });
       }
@@ -346,7 +346,7 @@ export default function KnowledgePage() {
     <div>
       <div className="max-w-4xl mx-auto px-0 py-4">
         <div className="flex items-center justify-between mb-2">
-          <h1 className="text-2xl font-bold text-gray-900">지식 베이스</h1>
+          <h1 className="text-2xl font-bold text-gray-900">고객 지식 베이스</h1>
           <button
             type="button"
             onClick={() => router.push('/knowledge/upload')}
@@ -355,6 +355,14 @@ export default function KnowledgePage() {
             📄 지식 추가 (TXT 업로드)
           </button>
         </div>
+        <p className="text-xs text-amber-700 mb-2">
+          ⚠️ 이 화면은 통화·문자 응대용 <strong>고객 지식 베이스</strong>(페르소나/인사말/FAQ)입니다.
+          AI 도우미 전용 지식베이스(매뉴얼·업로드 문서)는{' '}
+          <Link href="/settings/ai-assistant/docs" className="underline">
+            설정 &gt; AI 도우미
+          </Link>
+          에서 별도로 관리합니다.
+        </p>
         <p className="text-gray-600 text-sm mb-6">
           <strong>카테고리</strong>는 질의·인사·연락처 등 업무 구분이고, <strong>doc_type</strong>(knowledge / capability 등)은 서버가 기본값으로 두며
           이 화면에서는 보내지 않습니다. Capability 전용 문서는 별도 API로만 적재됩니다.{' '}
@@ -384,10 +392,10 @@ export default function KnowledgePage() {
                 {category === 'persona'
                   ? 'AI가 응대하는 조직의 정체성을 정의합니다. 업무 관련 질문과 잡담을 정확히 분류하는 데 사용됩니다.'
                   : category === 'waiting_phrase'
-                  ? 'LLM 처리 중 고객에게 발화되는 대기 안내 멘트입니다. 멘트를 한 줄씩 등록하면 순서대로 순환 발화됩니다. 등록이 없으면 기본 멘트가 사용됩니다.'
-                  : category === 'contact'
-                  ? '고객이 상담원 연결·전환을 요청할 때(퀵 의도) 발화와 이 문구의 유사도로 매칭됩니다. 전환 대상은 아래에서 «착신 전환»에 등록한 항목(fwd:) 또는 내선 번호로 저장됩니다.'
-                  : '질의·FAQ·잡담·불만·전환·연락처는 RAG 후보입니다. 인사(시작)/(첫 응답)은 오프닝 TTS, help는 "뭘 할 수 있어요" 류 질문 시 멘트 구성용입니다.'
+                    ? 'LLM 처리 중 고객에게 발화되는 대기 안내 멘트입니다. 멘트를 한 줄씩 등록하면 순서대로 순환 발화됩니다. 등록이 없으면 기본 멘트가 사용됩니다.'
+                    : category === 'contact'
+                      ? '고객이 상담원 연결·전환을 요청할 때(퀵 의도) 발화와 이 문구의 유사도로 매칭됩니다. 전환 대상은 아래에서 «착신 전환»에 등록한 항목(fwd:) 또는 내선 번호로 저장됩니다.'
+                      : '질의·FAQ·잡담·불만·전환·연락처는 RAG 후보입니다. 인사(시작)/(첫 응답)은 오프닝 TTS, help는 "뭘 할 수 있어요" 류 질문 시 멘트 구성용입니다.'
                 }
               </p>
             </div>
@@ -552,8 +560,8 @@ export default function KnowledgePage() {
                     {category === 'waiting_phrase'
                       ? '대기 안내 멘트 (한 줄) *'
                       : category === 'contact'
-                      ? '매칭용 문구 (고객이 말할 내용에 가깝게) *'
-                      : '내용 (질문/문구) *'}
+                        ? '매칭용 문구 (고객이 말할 내용에 가깝게) *'
+                        : '내용 (질문/문구) *'}
                   </label>
                   <textarea
                     value={text}
@@ -564,8 +572,8 @@ export default function KnowledgePage() {
                       category === 'waiting_phrase'
                         ? '예: 잠시만 기다려 주세요. / 정보를 확인하고 있습니다.'
                         : category === 'contact'
-                        ? '예: 예약 담당 연결해 주세요 / 영업팀으로 바꿔줘 / 상담원이랑 통화하고 싶어요'
-                        : '예: 안녕하세요, OO입니다 / 영업시간이 궁금해요'
+                          ? '예: 예약 담당 연결해 주세요 / 영업팀으로 바꿔줘 / 상담원이랑 통화하고 싶어요'
+                          : '예: 안녕하세요, OO입니다 / 영업시간이 궁금해요'
                     }
                   />
                   {category === 'waiting_phrase' && (

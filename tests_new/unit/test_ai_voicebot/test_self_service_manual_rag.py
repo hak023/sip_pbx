@@ -287,7 +287,9 @@ class TestGetSelfServiceRagEngine:
         engine = self_service_rag.get_self_service_rag_engine()
 
         assert engine is not None
-        assert engine._doc_type_allowlist == (SELF_SERVICE_MANUAL_DOC_TYPE,)
+        # (2026-08-07 버그수정) Story 1.26 업로드 문서(knowledge_document)가 RAG 검색에서
+        # 누락되던 문제를 고쳐 두 doc_type 모두 허용리스트에 포함되어야 한다.
+        assert engine._doc_type_allowlist == (SELF_SERVICE_MANUAL_DOC_TYPE, "knowledge_document")
 
     def test_caches_instance_across_calls(self, monkeypatch):
         fixed_embedder = object()

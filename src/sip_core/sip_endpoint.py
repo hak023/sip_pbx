@@ -3999,6 +3999,85 @@ class SIPEndpoint:
         with self._message_txn_lock:
             self._message_txn_pending.pop(call_id, None)
 
+    def _deliver_chat_message_virtual(
+        self, from_user: str, to_user: str, body: str, *, suppress_ai_loop: bool = False
+    ) -> dict:
+        """수신자가 REGISTER된 SIP 단말이 아닐 때의 가상 전달(2026-08-07).
+
+        (2) 웹소켓으로 로그인 사용자에게 알림(대시보드 SMS 도크 즉시 표시)과
+        (3) 설정(``message_ai_reply_enabled``)에 따른 셀프서비스 AI 자체 응답을 시도한다.
+        웹소켓 알림은 항상 best-effort로 실행하고, 실제 성공 여부는 (3)이 적용 가능한지로
+        판단한다 — 적용 대상이 전혀 아니면(설정도 꺼져 있고 알림 채널도 없으면) 실패로 되돌린다.
+        """
+        from src.websocket.server import schedule_socket_emit, schedule_coroutine
+
+        owner = (to_user or "").strip()
+        is_self_chat = (from_user or "").strip().lower() == owner.lower()
+        if not is_self_chat:
+            # (2026-08-07 버그 수정) 자기 자신에게 보낸 메시지(from_user == owner)까지 이
+            # "수신 알림"을 그대로 브로드캐스트하면, 보낸 사람의 대시보드가 자기 owner 방을
+            # 구독 중이므로 방금 자기가 보낸 문장이 "상대가 보낸 것"처럼 같은 스레드에 그대로
+            # 반사되어 보인다(사용자가 이미 GlobalSmsDock에서 낙관적으로 outbound 라인을 추가한
+            # 상태라 중복·반사로 보임). 실제 제3자가 보낸 메시지에 대해서만 필요한 알림이므로
+            # from==to(자가 테스트 전송)일 때는 건너뛴다 — AI 자동응답은 별도의
+            # schedule_sip_message_ai_reply()가 만드는 아웃바운드로 처리되어 이 분기와 무관하다.
+            schedule_socket_emit(
+                "sip_message_received",
+                {
+                    "from_uri": from_user,
+                    "from_addr": "",
+                    "body": body,
+                    "content_type": "text/plain",
+                    "call_id": "",
+                    "to_user": to_user,
+                    "tenant_owner": owner,
+                    "thread_peer": from_user,
+                    "dock_as_outbound": False,
+                },
+            )
+
+        ai_reply_enabled = False
+        try:
+            from src.services.chat_relay_service import get_chat_relay_settings
+
+            relay = get_chat_relay_settings(owner)
+            ai_reply_enabled = bool(int(relay.get("message_ai_reply_enabled") or 0))
+        except Exception as exc:
+            logger.warning("chat_message_virtual_relay_lookup_failed", owner=owner, error=str(exc))
+
+        # (2026-08-07 버그 수정) `message_ai_reply_enabled`는 "실제 고객이 테넌트 번호로 보낸
+        # SIP MESSAGE에 AI가 대신 응답할지"를 결정하는 설정이다. 반면 self-chat(테넌트가 자기
+        # 자신에게 문자를 보내는 것)은 PRD FR34-E가 규정한 "셀프서비스 AI 도우미 실제 채팅 패널"
+        # 그 자체이므로, 그 설정과 무관하게 항상 응답해야 한다 — 이 둘을 같은 플래그로 게이팅한
+        # 것이 SmsDock에서 질문을 보내도 응답이 없던 진짜 원인이었다(설정이 꺼져 있으면 self-chat도
+        # "delivered_web_notification"으로만 끝나고 실제 AI 호출이 전혀 일어나지 않았음).
+        should_reply = is_self_chat or (ai_reply_enabled and not suppress_ai_loop)
+        if should_reply and not suppress_ai_loop:
+            from src.services.sip_message_ai_reply import schedule_sip_message_ai_reply
+
+            scheduled = schedule_coroutine(
+                schedule_sip_message_ai_reply(
+                    sip_endpoint=self,
+                    body_display=body,
+                    chat_owner=owner,
+                    from_peer=from_user,
+                    to_peer=owner,
+                    sip_call_id=f"virtual-{uuid.uuid4().hex}",
+                )
+            )
+            if scheduled:
+                return {
+                    "success": True,
+                    "code": "delivered_ai_self_service",
+                    "message": "수신 단말이 REGISTER되어 있지 않아, 셀프서비스 AI가 대신 응답합니다.",
+                }
+
+        return {
+            "success": True,
+            "code": "delivered_web_notification",
+            "message": "수신 단말이 REGISTER되어 있지 않아, 로그인된 대시보드로만 알림을 전달했습니다.",
+        }
+
     def send_chat_sip_message(
         self,
         from_user: str,
@@ -4008,6 +4087,7 @@ class SIPEndpoint:
         *,
         suppress_ai_loop: bool = False,
         wait_for_final_response: bool = True,
+        sender_registration_required: bool = True,
     ) -> dict:
         """REGISTER 된 발신·수신 내선 간 SIP MESSAGE (채팅 관리용).
 
@@ -4019,6 +4099,13 @@ class SIPEndpoint:
         2xx/6xx 수신·``schedule_sip_message_sent``·txn 정리는 백그라운드 스레드에서 수행한다
         (AI 자동응답 등 긴 LLM 구간과 SIP 200 지연이 겹치지 않게).
 
+        ``sender_registration_required=False``이면 발신 측(from_user)이 실제 SIP 단말로
+        REGISTER되어 있는지 검사하지 않는다(2026-08-06, 웹사이트 자체 발신·AI 자체응답·예약
+        알림 등 "발신자가 물리적 SIP 단말이 아니라 서버/웹 세션 자체"인 경로용 — 이 값은
+        From 헤더 사용자명 구성에만 쓰이고 실제 전송 목적지(dest_addr)는 항상 수신자(to_user)의
+        REGISTER 정보로 결정되므로, 발신 측 검사를 생략해도 라우팅에는 영향이 없다). 수신 측
+        (recipient_not_registered) 검사는 실제 전송 목적지를 결정하는 데 필수라 항상 유지한다.
+
         Returns:
             dict: success(bool), code(str), message(str). 비대기 모드는 code ``sip_pending``, call_id 포함.
         """
@@ -4028,21 +4115,25 @@ class SIPEndpoint:
         if not body:
             return {"success": False, "code": "empty_body", "message": "메시지 본문이 비었습니다."}
 
-        fk, from_info = self.lookup_registered_user(from_user)
-        if not fk or not from_info:
-            return {
-                "success": False,
-                "code": "sender_not_registered",
-                "message": f"발신 내선이 SIP에 등록되어 있지 않습니다: {from_user!r}",
-            }
+        if sender_registration_required:
+            fk, from_info = self.lookup_registered_user(from_user)
+            if not fk or not from_info:
+                return {
+                    "success": False,
+                    "code": "sender_not_registered",
+                    "message": f"발신 내선이 SIP에 등록되어 있지 않습니다: {from_user!r}",
+                }
+        else:
+            fk = (from_user or "").strip()
 
         tk, to_info = self.lookup_registered_user(to_user)
         if not tk or not to_info:
-            return {
-                "success": False,
-                "code": "recipient_not_registered",
-                "message": f"수신 내선이 SIP에 등록되어 있지 않습니다: {to_user!r}",
-            }
+            # 2026-08-07: 수신 내선이 실제 SIP 단말로 REGISTER되어 있지 않아도 아래 두 경로 중
+            # 하나라도 가능하면 실패 처리하지 않는다(사용자 요구사항 — 도착 지점 3가지 중 1개면
+            # 성공): (1) REGISTER된 단말 [위에서 이미 확인 실패] (2) 서버에 로그인된 사용자에게
+            # 웹소켓 알림(대시보드 SMS 도크) (3) 설정(message_ai_reply_enabled)에 따라 셀프서비스
+            # AI가 직접 응답. 실제 SIP UDP 전송은 발생하지 않으므로 sip_timeout류 오류가 없다.
+            return self._deliver_chat_message_virtual(fk, to_user, body, suppress_ai_loop=suppress_ai_loop)
 
         hdr_host = self._get_b2bua_ip()
         call_id = f"{uuid.uuid4().hex}@{hdr_host}"

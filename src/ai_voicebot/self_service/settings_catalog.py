@@ -287,8 +287,8 @@ def export_static_snapshot() -> Dict[str, Any]:
 # 유지된다. 정상 상태에서는 `_get_effective_catalog()`가 DB(Story 2.1)에 저장된 활성 버전을
 # 우선 사용한다 — 이 함수만이 실제 조회 대상 카탈로그를 결정하며, `list_domains()` 등 5개
 # 공개 함수는 전부 이 함수를 거쳐간다(CR5: 외부 시그니처는 변경하지 않음).
-_effective_catalog_cache: Optional[Dict[str, "DomainEntry"]] = None
-_effective_catalog_cache_source_id: Optional[int] = None
+_effective_catalog_cache: Dict[str, Dict[str, "DomainEntry"]] = {}
+_effective_catalog_cache_source_id: Dict[str, int] = {}
 
 
 def _build_dynamic_catalog(raw_config: Dict[str, Any]) -> Dict[str, "DomainEntry"]:
@@ -341,29 +341,34 @@ def _build_dynamic_catalog(raw_config: Dict[str, Any]) -> Dict[str, "DomainEntry
     return built
 
 
-def _get_effective_catalog() -> Dict[str, "DomainEntry"]:
+def _get_effective_catalog(owner: str = "") -> Dict[str, "DomainEntry"]:
     """실제로 사용할 카탈로그를 반환한다 — DB 활성 버전 우선, 없거나 불가 시 하드코딩 폴백.
+
+    owner를 지정하면 해당 테넌트 전용 커스텀 버전을 우선 사용하고, 없으면 전역 기본값(owner='')로
+    폴백한다(NFR11, 2026-08-07). owner를 생략하면 기존과 동일하게 전역 기본값만 조회한다.
 
     `catalog_config_loader`가 반환하는 raw config dict는 활성 버전이 바뀌지 않는 한 동일 객체를
     재사용하므로(로더 자체 캐시), `id()` 비교만으로 재빌드 필요 여부를 판단할 수 있다 — DB 조회
-    빈도뿐 아니라 `DomainEntry` 재구성 빈도도 함께 캐싱한다(NFR6).
+    빈도뿐 아니라 `DomainEntry` 재구성 빈도도 함께 캐싱한다(NFR6). owner별로 캐시를 분리한다.
     """
-    global _effective_catalog_cache, _effective_catalog_cache_source_id
+    normalized_owner = (owner or "").strip()
+    cache_key = normalized_owner
 
-    raw_config = catalog_config_loader.get_cached_config(catalog_config_loader.CATALOG_KIND)
+    raw_config = catalog_config_loader.get_cached_config(catalog_config_loader.CATALOG_KIND, normalized_owner)
     if raw_config is None:
         return _CATALOG  # DB에 활성 버전 없음(마이그레이션 전 등) → 하드코딩 폴백
 
-    if _effective_catalog_cache is not None and _effective_catalog_cache_source_id == id(raw_config):
-        return _effective_catalog_cache
+    cached_id = _effective_catalog_cache_source_id.get(cache_key)
+    if cache_key in _effective_catalog_cache and cached_id == id(raw_config):
+        return _effective_catalog_cache[cache_key]
 
     built = _build_dynamic_catalog(raw_config)
     if not built:
         logger.warning("settings_catalog_dynamic_build_empty_fallback_to_static")
         return _CATALOG
 
-    _effective_catalog_cache = built
-    _effective_catalog_cache_source_id = id(raw_config)
+    _effective_catalog_cache[cache_key] = built
+    _effective_catalog_cache_source_id[cache_key] = id(raw_config)
     return built
 
 
@@ -422,14 +427,14 @@ _register(
 )
 
 
-def list_domains() -> List[str]:
-    """등록된 설정 도메인명 목록(등록 순서 유지)."""
-    return list(_get_effective_catalog().keys())
+def list_domains(owner: str = "") -> List[str]:
+    """등록된 설정 도메인명 목록(등록 순서 유지). owner 지정 시 해당 테넌트 커스텀 버전 사용."""
+    return list(_get_effective_catalog(owner).keys())
 
 
-def get_domain_schema(domain: str) -> Dict[str, Any]:
+def get_domain_schema(domain: str, owner: str = "") -> Dict[str, Any]:
     """도메인의 필수/옵션 필드 스키마 + destructive 여부. 미등록 도메인이면 빈 dict."""
-    entry = _get_effective_catalog().get(domain)
+    entry = _get_effective_catalog(owner).get(domain)
     if entry is None:
         logger.warning("settings_catalog_schema_unregistered_domain", domain=domain)
         return {}
@@ -447,7 +452,7 @@ async def get_domain_value(domain: str, owner: str) -> Dict[str, Any]:
     - 미등록 도메인: `{"error": "unregistered_domain: <domain>"}`
     - `get_fn` 예외: `{"error": str(e)}`로 흡수(부작용 없음, 예외를 그대로 전파하지 않음)
     """
-    entry = _get_effective_catalog().get(domain)
+    entry = _get_effective_catalog(owner).get(domain)
     if entry is None:
         logger.warning("settings_catalog_value_unregistered_domain", domain=domain, owner=owner)
         return {"error": f"unregistered_domain: {domain}"}
@@ -463,17 +468,17 @@ async def get_domain_value(domain: str, owner: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-def domain_writable_fields(domain: str) -> Optional[frozenset]:
+def domain_writable_fields(domain: str, owner: str = "") -> Optional[frozenset]:
     """도메인의 쓰기 허용 필드 집합. 도메인이 없거나 update_fn 미등록이면 None."""
-    entry = _get_effective_catalog().get(domain)
+    entry = _get_effective_catalog(owner).get(domain)
     if entry is None or entry.update_fn is None:
         return None
     return entry.writable_fields
 
 
-def get_field_allowed_values(domain: str, field: str) -> Optional[frozenset]:
+def get_field_allowed_values(domain: str, field: str, owner: str = "") -> Optional[frozenset]:
     """필드의 허용값 집합(enum형 필드만 등록됨). 미등록 필드는 None(검증 대상 아님)."""
-    entry = _get_effective_catalog().get(domain)
+    entry = _get_effective_catalog(owner).get(domain)
     if entry is None or entry.field_allowed_values is None:
         return None
     return entry.field_allowed_values.get(field)
@@ -492,7 +497,7 @@ async def call_update_fn(domain: str, owner: str, field: str, value: Any) -> Dic
       `{"ok": False, "error": "invalid_value: <field>는 <허용값 목록> 중 하나여야 합니다"}`
     - `update_fn` 예외: `{"ok": False, "error": str(e)}`
     """
-    entry = _get_effective_catalog().get(domain)
+    entry = _get_effective_catalog(owner).get(domain)
     if entry is None:
         logger.warning("settings_catalog_update_unregistered_domain", domain=domain, owner=owner)
         return {"ok": False, "error": f"unregistered_domain: {domain}"}
@@ -500,7 +505,7 @@ async def call_update_fn(domain: str, owner: str, field: str, value: Any) -> Dic
         return {"ok": False, "error": f"domain_not_writable: {domain}"}
     if entry.writable_fields is not None and field not in entry.writable_fields:
         return {"ok": False, "error": f"field_not_writable: {field}"}
-    allowed_values = get_field_allowed_values(domain, field)
+    allowed_values = get_field_allowed_values(domain, field, owner)
     if allowed_values is not None and value not in allowed_values:
         logger.warning(
             "settings_catalog_invalid_value_rejected",
