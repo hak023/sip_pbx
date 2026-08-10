@@ -353,16 +353,13 @@ if ($NeedInstall) {
     $env:PYTHONUTF8 = "1"
     & $VenvActivate
     $pipFailed = $false
-    if (Test-Path $ReqFile) {
-        python -m pip install -r $ReqFile
-        if ($LASTEXITCODE -ne 0) { $pipFailed = $true }
-    }
-    if (-not $pipFailed -and (Test-Path $ReqWsFile)) {
-        python -m pip install -r $ReqWsFile
-        if ($LASTEXITCODE -ne 0) { $pipFailed = $true }
-    }
-    if (-not $pipFailed -and (Test-Path $ReqAiFile)) {
-        python -m pip install -r $ReqAiFile
+    # 세 파일을 한 번에 설치해 pipecat-ai extras 충돌 방지 (순차 설치 시 버전 해석기 버그)
+    $reqArgs = @()
+    if (Test-Path $ReqFile)   { $reqArgs += "-r"; $reqArgs += $ReqFile }
+    if (Test-Path $ReqWsFile) { $reqArgs += "-r"; $reqArgs += $ReqWsFile }
+    if (Test-Path $ReqAiFile) { $reqArgs += "-r"; $reqArgs += $ReqAiFile }
+    if ($reqArgs.Count -gt 0) {
+        python -m pip install @reqArgs
         if ($LASTEXITCODE -ne 0) { $pipFailed = $true }
     }
     Pop-Location
