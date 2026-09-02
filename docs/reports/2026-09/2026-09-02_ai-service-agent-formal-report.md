@@ -38,7 +38,22 @@
 
 ## 잔여 운영 과제
 
-- 파일럿 시작 전 업무별 API 인증, 승인 대상, Undo 가능 여부와 이관 기준을 서비스 오너가 확정해야 한다.
-- 실제 자동화 효과는 원격 시스템 상태까지 대조하는 파일럿 KPI로 측정해야 하며, 후보군 수치만으로 성과를 주장하지 않는다.
+
+## v5.2 핵심 기능 소개 재구성
+
+- 소개서 4번 장을 세 핵심 기능인 IntelliDecision, N-hop RAG, Dynamic Tool Wrapper의 대칭 구조로 전면 개편했다.
+- 세 기능이 함께 동작하는 통화매니저 착신전환 시나리오를 장의 첫머리에 배치해, 탐색 질문이 실행 요청으로 전환되는 흐름을 먼저 이해하도록 구성했다.
+- 각 기능에 기능 정의, 현재 시스템 활용 방식, Mermaid 흐름도, 상세 시장 사례 2개를 추가했다.
+	- IntelliDecision: Anthropic Routing, Google Dialogflow CX
+	- N-hop RAG: Glean, Microsoft GraphRAG
+	- Dynamic Tool Wrapper: OpenAI GPT Actions, Composio
+- N-hop RAG는 지식베이스 데이터 구성, 문서·도메인·화면·정책 관계, 검색부터 응답까지의 예시를 명시했다. 현재 연결된 관계와 확장 예약 관계를 구분해 과장을 방지했다.
+- Dynamic Tool Wrapper는 OpenAPI 명세 기반 Tool 후보 생성과 base URL·인증·승인 정책의 필요 조건을 설명했다. "명세만으로 모든 API가 무조건 실행된다"는 식의 과장 없이, 표준 REST API에서 개별 중계 코드와 Agent Builder 작업을 줄이는 방식으로 범위를 한정했다.
+
+| 검증 항목        | 결과                                 |
+| ---------------- | ------------------------------------ |
+| Markdown 진단    | 소개서, INDEX, 관련 리포트 오류 없음 |
+| 공백 오류 검사   | `git diff --check` 통과              |
+| 코드·런타임 영향 | 없음. 문서 전용 변경                 |
 
 *최종 업데이트: 2026-09-02*

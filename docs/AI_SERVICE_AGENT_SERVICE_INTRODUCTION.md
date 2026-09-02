@@ -2,7 +2,7 @@
 
 **문서 유형**: C-Level/임원 및 본부장 보고용 서비스 소개서
 **작성일**: 2026-09-02
-**버전**: 5.1
+**버전**: 5.2
 **상태**: 도입·확장 제안
 **대상 독자**: C-Level, 본부장, 사업·운영·기술 의사결정권자
 **관련 문서**: [셀프서비스 AI 아키텍처](architecture/self-service-ai-assistant-architecture.md) | [서비스 PRD](product/self-service-ai-assistant-prd.md) | [시장·연구 조사](design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md) | [지식베이스·IntelliDecision 연구](design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md)
@@ -174,95 +174,242 @@ flowchart TD
 
 ---
 
-## 4. 핵심 역량 - IntelliDecision에서 안전한 실행까지
+## 4. 핵심 기능 소개 - 판단, 근거 탐색, 안전한 실행
 
-### 4.1 IntelliDecision: Dynamic Intent Orchestration
+AI Service Agent의 핵심 기능은 세 가지다. **IntelliDecision**이 무엇을 해야 하는지 판단하고, **N-hop RAG**가 답변과 행동의 근거를 연결하며, **Dynamic Tool Wrapper**가 승인된 외부 API를 실제 업무 실행으로 바꾼다. 세 기능은 순차 기능이 아니라 하나의 고객 요청을 함께 처리하는 역할 분담 구조다.
 
-**IntelliDecision**은 발화에 라벨 하나를 붙이는 분류기가 아니다. 사용자의 목적, 대화 맥락, 필요한 정보, 실행 위험도, 다음 행동을 함께 판단하는 **Dynamic Intent Orchestration / Autonomous Task Planning** 계층이다. AI는 대화 중 사용자가 정정하거나, 범위를 넓히거나, 방금 실행한 작업을 취소하려는 경우에도 같은 세션 맥락에서 다음 행동을 재계획한다.
+| 핵심 기능                | 입력                                   | 기능이 하는 일                               | 고객에게 보이는 결과             | 운영 통제                                  |
+| ------------------------ | -------------------------------------- | -------------------------------------------- | -------------------------------- | ------------------------------------------ |
+| **IntelliDecision**      | 자연어 요청과 대화 맥락                | 요청 목적·위험도·다음 행동을 판단            | 안내, 추가 질문, 실행 제안, 이관 | 유형별 정책, 맥락 유지, 명시적 확인        |
+| **N-hop RAG**            | 매뉴얼, FAQ, OpenAPI, 화면·도메인 관계 | 관련 문서에서 화면·정책까지 근거를 확장      | 근거 있는 사용법과 다음 단계     | 테넌트 owner 범위, 출처·관계 추적          |
+| **Dynamic Tool Wrapper** | OpenAPI 명세, 인증, 승인 정책          | API 계약을 동적 Tool로 변환해 조회·변경 실행 | 확인 후 처리 완료와 결과 안내    | allowlist, 사전 상태, 감사, 원격 상태 검증 |
 
-| 유형           | 사용자의 의도                        | 시스템의 다음 행동                        |
-| -------------- | ------------------------------------ | ----------------------------------------- |
-| A. 탐색        | 기능·방법을 알고 싶음                | 매뉴얼과 화면 경로를 근거로 안내          |
-| B. 실행        | 상태 조회 또는 실제 변경을 원함      | 필수 정보·권한·승인 확인 후 Tool 실행     |
-| C. 포괄 도움   | 가능한 업무가 무엇인지 알고 싶음     | 테넌트별 지원 기능을 다중 도메인으로 탐색 |
-| D. 정정        | 앞선 입력이나 목표를 바로잡음        | 이전 맥락을 수정하고 필요한 값만 재수집   |
-| E. 실행 취소   | 직전 변경을 되돌리고 싶음            | 실행 이력과 사전 상태를 조회해 Undo 수행  |
-| F. 모호성 해소 | 요청이 불충분하거나 해석이 여러 개임 | 최소한의 보완 질문으로 범위를 확정        |
-| G. 일괄 처리   | 여러 대상에 같은 작업을 요청         | 대상 수·영향 범위·정책을 먼저 확인        |
-| H. 범위 외     | 지원하지 않는 업무를 요청            | 가능한 범위 설명과 적절한 이관            |
-| I. 반복        | 방금 설명을 다시 요청                | 이전 결과를 맥락에 맞게 재표현            |
+### 4.1 세 기능 결합 Flow - 통화매니저 관리자 요청
+
+다음은 고객사 관리자가 "착신전환은 어디서 설정해?"라고 질문한 뒤 "그럼 설정해줘"라고 요청하는 하나의 흐름이다. 첫 질문에서는 N-hop RAG가 정확한 화면 경로와 조건을 찾고, 두 번째 요청에서는 IntelliDecision이 안내에서 실행으로 목적이 바뀐 것을 판단한다. Dynamic Tool Wrapper는 승인된 API가 있을 때만 실제 변경을 준비한다.
+
+```mermaid
+flowchart LR
+    U["관리자: 착신전환은 어디서 설정해?"] --> I["① IntelliDecision\n탐색 요청으로 판단"]
+    I --> R["② N-hop RAG\n매뉴얼 -> 설정 도메인 -> 화면\n-> 허용 정책 관계 탐색"]
+    R --> G["AI: 설정 메뉴 -> 통화 제어에서\n현재 규칙을 확인할 수 있습니다.\n설정을 도와드릴까요?"]
+    G --> U2["관리자: 네, 새 번호로 설정해줘"]
+    U2 --> I2["① IntelliDecision\n실행 요청으로 재판단"]
+    I2 --> T["③ Dynamic Tool Wrapper\nOpenAPI Tool 후보 및 승인 정책 확인"]
+    T --> C["대상 번호·영향 범위 재확인\n관리자 최종 승인"]
+    C --> E["승인된 REST API 실행\n원격 상태 검증·감사·Undo"]
+    E --> O["AI: 착신전환을 설정했습니다.\n취소 가능한 범위를 안내합니다."]
+
+    classDef core fill:#DDEBFF,stroke:#2563A8,stroke-width:2px,color:#111827;
+    class I,I2,R,T core;
+```
+
+이 흐름의 핵심은 AI가 첫 질문에 곧바로 API를 호출하지 않는다는 점이다. **설명 요청은 근거를 찾아 안내하고, 실행 요청은 다시 판단한 뒤 사용자 승인과 정책 검사를 거친다.** API가 없거나 권한·업무 규칙이 맞지 않으면 실행 대신 정확한 안내 또는 상담원 이관으로 끝난다.
+
+### 4.2 IntelliDecision - 대화의 목적과 다음 행동을 결정
+
+IntelliDecision은 발화에 라벨 하나를 붙이는 분류기가 아니다. 사용자의 목적, 이전 대화, 필요한 정보, 실행 위험도, 다음 행동을 함께 판단하는 **Dynamic Intent Orchestration / Autonomous Task Planning** 계층이다. 사용자가 설명을 듣다가 실행을 요청하거나, 실행 직전에 값을 정정하거나, 완료 후 취소를 요청해도 같은 세션 맥락에서 다음 경로를 다시 선택한다.
+
+| 유형                     | 사용자의 의도                        | IntelliDecision의 처리                          |
+| ------------------------ | ------------------------------------ | ----------------------------------------------- |
+| A. 탐색                  | 기능·방법을 알고 싶음                | N-hop RAG로 매뉴얼과 화면 경로를 근거로 안내    |
+| B. 실행                  | 상태 조회 또는 실제 변경을 원함      | 필수 정보·권한·승인 확인 후 Tool 실행 준비      |
+| C. 포괄 도움             | 가능한 업무가 무엇인지 알고 싶음     | 여러 도메인을 함께 탐색해 지원 범위를 설명      |
+| D/F. 정정·모호성         | 앞선 입력이 틀리거나 요청이 불충분함 | 이전 맥락을 수정하고 필요한 값만 다시 질문      |
+| E. 실행 취소             | 직전 변경을 되돌리고 싶음            | 실행 이력·사전 상태를 확인해 가능한 Undo 수행   |
+| G/H/I. 일괄·범위 외·반복 | 다수 대상 처리, 지원 밖 요청, 재설명 | 영향 범위 확인, 이관, 이전 결과의 맥락별 재표현 |
 
 ```mermaid
 stateDiagram-v2
-    [*] --> IntentAssessment
-    IntentAssessment --> KnowledgeGuidance: 탐색·설명
-    IntentAssessment --> GatherContext: 조회·실행
-    IntentAssessment --> RepairContext: 정정·모호성
+    [*] --> PurposeAssessment: 자연어 요청
+    PurposeAssessment --> KnowledgeGuidance: 탐색·설명
+    PurposeAssessment --> GatherContext: 조회·실행
+    PurposeAssessment --> RepairContext: 정정·모호성
     GatherContext --> ConfirmChange: 변경 요청
     ConfirmChange --> ExecuteApprovedTool: 명시적 승인
     ConfirmChange --> GatherContext: 정보 보완
-    ExecuteApprovedTool --> ExplainResult
+    ExecuteApprovedTool --> ExplainResult: 결과·근거 설명
     ExplainResult --> UndoReview: 취소 요청
     UndoReview --> ExecuteApprovedTool: 복원 승인
     KnowledgeGuidance --> [*]
     ExplainResult --> [*]
-    RepairContext --> IntentAssessment
+    RepairContext --> PurposeAssessment
 ```
 
-### 4.2 시장·연구와의 정합성
-
-| 검증된 패턴               | 외부 근거                                                             | 본 시스템의 적용                                             |
-| ------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------ |
-| 추론-행동 반복            | ReAct 및 에이전트 워크플로                                            | 의도 판단, 지식 검색, 확인, Tool 실행, 결과 설명을 연결      |
-| 라우팅                    | Anthropic의 Routing workflow, Dialogflow CX 흐름, Amazon Lex fallback | 유형 A-I와 보완 질문·이관 정책으로 구체화                    |
-| Tool / Function Calling   | OpenAI GPT Actions, Anthropic Tool Use, Gemini Function Calling       | OpenAPI 기반 Dynamic Tool 후보와 실행 정책 결합              |
-| REST API 계획·실행        | RestGPT, Gorilla/GoEx                                                 | API 선택, 파라미터 구성, 사후 검증, 피해 범위 제한 관점 반영 |
-| Mixed-initiative dialogue | Jurafsky & Martin, Rasa Forms                                         | AI가 필요한 정보를 묻되 사용자의 정정·목표 변경을 수용       |
-| 질문 유형별 검색          | Microsoft GraphRAG의 Local/Global Search                              | 의도 유형과 도메인·hop 전략을 연결                           |
-
-각 근거의 원문 인용, 적용 한계와 링크는 [지식베이스·IntelliDecision 연구](design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md) 및 [시장·연구 조사](design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md)에 보존한다.
-
-### 4.3 지식베이스와 N-hop 관계 탐색
-
-테넌트의 매뉴얼, FAQ, 운영 절차, OpenAPI 명세는 업로드 후 문서 단위로 관리되고 검색 가능한 지식으로 구성된다. 단순 유사도 검색에 그치지 않고, 매뉴얼 항목에서 설정 도메인, 화면 안내, 적용 가능한 IntelliDecision 유형까지 관계를 따라가 필요한 다음 행동을 보강한다.
+**시장 사례 1 - Anthropic Routing.** Anthropic은 고객 문의를 일반 질문, 환불 요청, 기술 지원처럼 분류한 뒤 각각의 전문 프롬프트·후속 프로세스·도구로 보내는 Routing 워크플로를 제시한다. 한 유형의 문의에 맞춘 처리 규칙이 다른 문의의 성능을 해치지 않도록 관심사를 분리하는 것이 목적이다. 우리 시스템은 이 구조를 A-I 유형 정책으로 구체화한다. 즉, 사용법 질문은 지식 탐색으로, 설정 변경 요청은 승인된 Tool 준비로, 불명확한 요청은 보완 질문으로 보낸다.
 
 ```mermaid
 flowchart LR
-    Q[사용자 질문] --> R[RAG 검색]
-    R --> D[매뉴얼·업로드 문서]
-    D --> C[설정/업무 도메인]
-    C --> S[화면 안내]
-    C --> P[적용 가능한 의사결정 정책]
-    P --> A[답변·조회·승인 요청·이관]
+    Q[고객 문의] --> R{문의 목적 분류}
+    R --> A[일반 질문\n지식 안내]
+    R --> B[업무 요청\n전용 처리·도구]
+    R --> C[기술 문제\n진단·이관]
+    A --> X[Anthropic Routing의\n전문화된 후속 경로]
+    B --> X
+    C --> X
 ```
 
-이 구조는 Full GraphRAG처럼 대규모 자동 엔터티 추출과 클러스터링을 전제하지 않는다. 현재 업무 관계가 비교적 명시적인 운영 도메인에서는, 설명 가능한 관계 그래프와 테넌트별 벡터 검색을 결합해 복잡도와 운영 비용을 통제한다.
+**시장 사례 2 - Google Dialogflow CX.** Dialogflow CX는 대화 주제를 Flow로, 현재 단계와 수집해야 할 정보를 Page로, 사용자 발화 또는 세션 조건에 따른 이동을 Route로 관리한다. 예를 들어 주문·고객 정보·최종 확인을 별도 Page로 두고, 사용자가 필요한 정보를 주면 다음 Page로 이동시키며, 조건이 바뀌면 다른 Route로 전환한다. 우리 시스템은 고정된 화면 설계 도구 대신 대화 실행 시 IntelliDecision으로 이 역할을 수행한다. 따라서 "어디서 설정해?"에서 "설정해줘"로 바뀌는 요청을 새 대화로 끊지 않고, 탐색에서 실행으로 자연스럽게 전환한다.
 
-### 4.4 Universal API Adapter / Dynamic Tool Wrapper
+```mermaid
+flowchart LR
+    F[Dialogflow CX Flow] --> P1[Page: 의도 확인]
+    P1 -->|Intent Route| P2[Page: 정보 수집]
+    P2 -->|Condition Route| P3[Page: 확인·실행]
+    P2 -->|변경·오류| P1
+```
 
-AI Service Agent는 OpenAPI 명세의 endpoint, method, parameter, request body를 읽어 동적 Tool 후보를 만든다. GET은 조회 도구로, 쓰기 메서드는 서비스 오너가 승인한 경우에만 대화 모델에 노출한다. 따라서 모델이 미승인 변경 수단을 선택하는 경로 자체를 줄인다.
+현재 시스템에서는 `intellidecision_policy.py`가 A-I 유형, 대표 발화, RAG 필요 여부, Tool 필요 여부를 정책 레지스트리로 관리한다. 이 정책은 단순 분류 결과가 아니라 다음 단계의 RAG 범위·질문·실행 경로를 결정하는 기준이다.
 
-| OpenAPI 등록 정보                   | AI 실행에 쓰이는 방식              |
-| ----------------------------------- | ---------------------------------- |
-| `servers` 또는 관리자 지정 base URL | 실제 API 호출 목적지 구성          |
-| 인증 헤더 이름·값                   | 테넌트별 안전한 인증 컨텍스트 구성 |
-| path/query/body 스키마              | Tool 설명과 파라미터 검증에 반영   |
-| HTTP method                         | 조회와 변경 요청의 위험도 구분     |
-| 승인 메서드 목록                    | 미승인 쓰기 Tool 미노출            |
-| 변경 전 조회 경로                   | 실행 전 스냅샷과 Undo 가능성 판단  |
+### 4.3 N-hop RAG - 문서 답변을 업무 행동의 근거로 확장
 
-### 4.5 MCP와의 관계
+일반 RAG는 질문과 의미가 가까운 문서 조각을 찾는다. N-hop RAG는 여기서 한 단계 더 나아가, 찾은 문서가 어떤 업무 도메인과 연결되고, 사용자가 어느 화면을 봐야 하며, 해당 업무가 안내만 가능한지 실행도 가능한지까지 **관계 경로를 따라 확인**한다. 따라서 고객은 "매뉴얼의 한 문단"이 아니라 자신의 다음 행동에 필요한 안내를 받는다.
 
-MCP(Model Context Protocol)는 서비스 제공자가 표준 Tool 인터페이스를 노출해 여러 AI 클라이언트가 사용하게 하는 **서버 중심** 모델이다. Universal API Adapter는 AI 플랫폼이 기존 REST API와 OpenAPI를 해석해 자연어 실행 채널로 만드는 **클라이언트 중심** 모델이다.
+#### 지식베이스 구성과 관계 데이터
 
-| 관점      | MCP Gateway                                       | Universal API Adapter                 |
-| --------- | ------------------------------------------------- | ------------------------------------- |
-| 출발점    | 외부 AI 클라이언트에 Tool을 제공                  | 기존 REST API를 AI 실행 도구로 전환   |
-| 대상      | MCP를 지원하는 Claude Desktop, VS Code Copilot 등 | MCP가 없는 레거시·사내 REST API       |
-| 구현 방식 | FastMCP로 동적 Tool을 외부에 노출                 | OpenAPI 명세를 읽어 Dynamic Tool 생성 |
-| 공통 정책 | 테넌트 범위, 승인, 감사, Undo를 재사용            | 동일                                  |
+테넌트별 지식베이스에는 아래 데이터가 함께 들어간다. 매뉴얼·FAQ·OpenAPI는 업로드 문서로 분리 관리되고, 설정 카탈로그와 화면 안내는 공통 구조 정보로 유지한다. 모든 검색과 관계 조회는 테넌트 `owner` 범위 안에서 수행한다.
 
-두 방식은 경쟁 관계가 아니다. 전화·문자 채널에서 먼저 검증한 실행 정책을 MCP Gateway로 외부 AI 생태계에도 재사용할 수 있다.
+| 데이터                 | 예시                                        | N-hop에서 하는 역할                   | 현재 상태 |
+| ---------------------- | ------------------------------------------- | ------------------------------------- | --------- |
+| 매뉴얼·FAQ             | "착신전환 설정 방법", 정책·주의사항         | 질문과 가장 가까운 최초 근거          | 실제 사용 |
+| OpenAPI 문서           | 착신 규칙 조회·변경 endpoint, 필수 파라미터 | 실행 가능한 업무와 입력 조건의 근거   | 실제 사용 |
+| 업무·설정 도메인       | `call-control`, `chat-relay`                | 문서와 화면·정책을 연결하는 중심 노드 | 실제 사용 |
+| 화면 안내              | 설정 메뉴와 탭, 사용자가 보는 경로          | 자연어 답변을 실제 조작 위치로 변환   | 실제 사용 |
+| IntelliDecision 정책   | 탐색·실행·정정·Undo 가능 여부               | 질문 유형에 맞는 다음 행동을 제한     | 실제 사용 |
+| API endpoint·절차 단계 | endpoint 간 의존성, 복합 절차               | 더 세밀한 실행 관계 표현              | 확장 예약 |
+
+```mermaid
+flowchart LR
+    Q["착신전환은 어디서 설정해?"] --> V[벡터 검색]
+    V --> M[매뉴얼 Q&A\n착신전환 설정 방법]
+    M --> D[업무 도메인\ncall-control]
+    D --> S[화면 안내\n설정 메뉴 -> 통화 제어]
+    D --> P[정책\n탐색 가능·실행 시 승인 필요]
+    M --> O[OpenAPI 문서\n규칙 조회·변경]
+    S --> A[근거 있는 안내]
+    P --> A
+    O --> A
+
+    classDef active fill:#E4F5E9,stroke:#2D8A4B,stroke-width:2px,color:#111827;
+    class M,D,S,P,O active;
+```
+
+#### 검색부터 응답까지의 예시
+
+관리자가 "착신전환은 어디서 설정해?"라고 물으면, 먼저 매뉴얼과 업로드 문서에서 관련 내용을 찾는다. 그 결과가 `call-control` 도메인과 연결되면 화면 안내를 따라 "설정 메뉴 → 통화 제어"를 알려 준다. 같은 도메인에 변경 API와 승인 정책이 등록돼 있다면, AI는 이를 실행 가능한 업무로 인식하되 아직 실행하지 않고 "원하시면 현재 규칙을 확인하거나 새 번호로 설정해 드릴까요?"라고 다음 선택지를 제시한다. 사용자가 실행을 명시적으로 요청한 뒤에만 Dynamic Tool Wrapper 단계로 넘어간다.
+
+```mermaid
+sequenceDiagram
+    participant U as 고객사 관리자
+    participant R as N-hop RAG
+    participant K as 테넌트 지식베이스
+    participant I as IntelliDecision
+
+    U->>R: 착신전환은 어디서 설정해?
+    R->>K: 1-hop: 매뉴얼·FAQ 검색
+    K-->>R: 착신전환 설정 방법
+    R->>K: 2-hop: call-control 도메인 연결
+    R->>K: 3-hop: 화면 경로·정책·OpenAPI 근거 확인
+    R-->>I: 안내 근거 + 실행 가능 조건
+    I-->>U: 설정 메뉴 -> 통화 제어에서 확인합니다. 설정도 도와드릴까요?
+```
+
+**시장 사례 1 - Glean.** Glean은 엔터프라이즈 검색에서 지식 그래프와 벡터 검색을 함께 사용한다. 벡터 검색이 문서 내용의 의미적 유사성을 찾으면, 지식 그래프는 문서가 어떤 서비스·팀·운영 절차와 연결되는지 보여 준다. 예를 들어 장애 문서를 제시할 때 "이 장애는 이 서비스와 연결되고, 그 서비스의 담당 팀과 운영 매뉴얼은 이것"이라는 식으로 결과가 나온 근거와 다음 행동을 함께 제시한다. 우리 N-hop RAG도 동일하게 문서 검색 결과를 업무 도메인·화면·정책으로 연결해 설명 가능성을 높인다.
+
+```mermaid
+flowchart LR
+    GQ[직원 질문] --> GD[벡터 검색\n관련 문서]
+    GD --> GG[지식 그래프\n서비스·소유자·Runbook]
+    GG --> GA[근거와 다음 행동을\n함께 제시]
+```
+
+**시장 사례 2 - Microsoft GraphRAG.** GraphRAG는 단순 검색이 흩어진 정보의 연결을 놓치는 문제를 해결하기 위해, 특정 대상 질문에는 주변 노드로 퍼져 나가는 Local Search를, 전체 현황 질문에는 요약을 활용하는 Global Search를 구분한다. 예를 들어 특정 서비스 장애 원인은 해당 서비스와 이웃 관계의 문서·개념을 따라가며 확인하고, "조직 전체에서 반복되는 문제는 무엇인가" 같은 질문은 전체 요약을 사용한다. 우리 시스템은 대규모 자동 엔터티 추출·커뮤니티 클러스터링까지 도입하지 않고, 운영 도메인에 이미 정의된 관계를 경량화해 쓴다. 특정 기능 질문은 도메인 주변을 탐색하고, "무엇을 할 수 있어?" 같은 포괄 도움 요청은 여러 도메인을 병렬 조회한다.
+
+```mermaid
+flowchart TB
+    Q{질문 성격} --> L[특정 기능 질문]
+    Q --> G[전체 기능 질문]
+    L --> LH[Local: 인접 문서·도메인·화면 탐색]
+    G --> GH[Global: 여러 도메인 병렬 탐색]
+    LH --> R[GraphRAG 검색 전략]
+    GH --> R
+```
+
+현재 `knowledge_graph.traverse_graph()`는 문서·도메인·화면·IntelliDecision 유형 간 관계를 순회하고, 유형 C의 포괄 도움 요청에는 다중 도메인 검색을 병렬 실행한다. Full GraphRAG의 자동 엔터티 추출은 현재 운영 규모에 비해 과도해 채택하지 않았으며, endpoint·procedure 단계 관계는 후속 확장 대상으로 남겨 두었다.
+
+### 4.4 Dynamic Tool Wrapper - OpenAPI를 안전한 AI 실행 도구로 변환
+
+Dynamic Tool Wrapper는 기존 REST API를 위해 서비스별 백엔드 중계 코드를 새로 작성하는 대신, **OpenAPI 명세를 읽어 AI가 이해할 수 있는 Tool 후보로 변환**하는 zero-code REST API Adapter다. 운영자는 서비스의 기존 API를 바꾸지 않고 명세, 접속 주소, 인증 방식, 승인 정책을 등록한다. 시스템은 endpoint·HTTP method·path/query/body 파라미터·요청 본문을 분석해 필요한 Tool 설명과 실행 컨텍스트를 만든다.
+
+이는 “명세만 붙여 넣으면 아무 API나 즉시 실행한다”는 의미가 아니다. 지식 안내는 매뉴얼만으로 가능하지만, 실제 API 실행에는 base URL, 인증, 정확한 OpenAPI 계약, 허용 메서드, 업무 규칙, 원격 상태 검증과 Undo 가능 여부가 필요하다. 이 조건을 갖춘 표준 REST API에서는 개별 업무마다 새로운 Agent Builder 시나리오와 중계 코드를 작성하는 부담을 크게 줄인다.
+
+```mermaid
+flowchart LR
+    S[기존 고객사 REST API\n서버 코드는 변경하지 않음] --> O[OpenAPI Spec 등록]
+    O --> P[endpoint·method·parameter\nrequest body 분석]
+    P --> X[Dynamic Tool 후보 생성]
+    A[base URL·인증·허용 메서드\n업무 정책 등록] --> X
+    X --> L[LLM에 허용 Tool만 노출]
+    L --> C[사용자 요청·최종 확인]
+    C --> E[API 실행]
+    E --> V[원격 상태 검증\n감사 로그·가능한 Undo]
+
+    classDef core fill:#FFF4D6,stroke:#D68A00,stroke-width:2px,color:#111827;
+    class O,P,X,L core;
+```
+
+| OpenAPI·운영 입력                   | Tool 변환과 실행에 쓰이는 방식                |
+| ----------------------------------- | --------------------------------------------- |
+| `servers` 또는 관리자 지정 base URL | 실제 API 호출 목적지 구성                     |
+| 인증 헤더 이름·값                   | 테넌트별 인증 컨텍스트 구성                   |
+| path/query/body 스키마              | Tool 설명, 필수 값 수집, 파라미터 검증에 반영 |
+| HTTP method                         | 조회와 변경 요청의 위험도를 구분              |
+| 승인 메서드 목록                    | 미승인 쓰기 Tool은 모델에 노출하지 않음       |
+| 변경 전 조회 경로                   | 사전 상태 스냅샷, 결과 대조, Undo 가능성 판단 |
+
+**시장 사례 1 - OpenAI GPT Actions.** OpenAI는 GPT Actions에서 개발자가 API 스키마와 인증을 등록하면 ChatGPT가 자연어를 API 호출에 필요한 JSON 스키마로 연결하는 방식을 제공한다. 공식 예시에서는 weather.gov의 위치 조회 API와 예보 API 두 개를 등록한 뒤, 사용자의 "이번 주말 워싱턴 DC 여행에 뭘 챙겨야 해?"라는 질문에 ChatGPT가 위치를 찾고 예보를 조회해 짐 목록을 답한다. 핵심은 weather.gov 서버를 수정하거나 질문별 중계 코드를 만들지 않고, OpenAPI 계약을 자연어와 API 사이의 연결 규칙으로 사용한다는 점이다.
+
+```mermaid
+sequenceDiagram
+    participant U as ChatGPT 사용자
+    participant G as Custom GPT + Actions
+    participant W as weather.gov REST API
+
+    U->>G: 워싱턴 DC 여행에 뭘 챙겨야 해?
+    G->>W: /points/{lat},{lon}
+    W-->>G: 예보 office·grid 좌표
+    G->>W: /gridpoints/{office}/{x},{y}/forecast
+    W-->>G: 주말 예보
+    G-->>U: 날씨 기반 준비물 안내
+```
+
+우리 시스템은 이 패턴을 전화·문자 기반 관리 업무에 적용한다. 차이는 GPT Actions가 Custom GPT에 명세를 정적으로 등록하는 중심이라면, 우리는 테넌트가 업로드한 OpenAPI에서 동적 Tool 후보를 만들고 테넌트별 승인 정책을 함께 적용한다는 점이다.
+
+**시장 사례 2 - Composio.** Composio는 Gmail, Slack, GitHub, Notion, Stripe, Sentry, Linear 등 1,000개 이상의 서비스 통합을 미리 Tool로 정규화하고, 위임 인증과 실행 환경을 제공한다. 대표 흐름은 "Sentry 오류를 확인하고 Linear 이슈를 만들어줘"라는 한 문장을 Sentry 조회 Tool과 Linear 생성 Tool의 연속 실행으로 바꾸는 방식이다. 사용자가 각 서비스의 API 세부 형식을 알 필요 없이 의도만 말하면, 플랫폼이 적합한 Tool과 인증을 연결한다.
+
+```mermaid
+flowchart LR
+    U["Sentry 오류를 확인하고\nLinear 이슈를 만들어줘"] --> A[AI Agent]
+    A --> S[Sentry Tool\n오류 조회]
+    S --> L[Linear Tool\n이슈 생성]
+    L --> R[결과 요약]
+```
+
+Composio가 사전에 통합한 SaaS 카탈로그를 제공하는 모델이라면, Dynamic Tool Wrapper는 처음 보는 고객사·사내 시스템도 OpenAPI 명세와 운영 정책을 등록해 AI 실행 채널에 연결하는 모델이다. 두 사례 모두 자연어 의도와 API 계약을 Tool 계층으로 분리하지만, 우리는 테넌트 격리와 승인된 메서드만 노출하는 정책을 기본값으로 둔다.
+
+현재 `build_dynamic_tools_for_owner(owner)`는 테넌트별 OpenAPI 문서에서 동적 Tool을 만들고, GET은 조회용으로 노출하며 쓰기 method는 `approved_methods`에 있을 때만 노출한다. `dynamic_api_tool.py`는 실행 전 승인 검사와 가능한 사전 상태 저장, HTTP 실행, 실행 로그 기록, 원격 상태 대조 및 Undo 경로를 담당한다.
+
+### 4.5 MCP는 세 기능의 외부 확장 채널
+
+MCP(Model Context Protocol)는 네 번째 핵심 기능이 아니라 Dynamic Tool Wrapper가 만든 실행 능력을 외부 AI 클라이언트에도 재사용하는 확장 채널이다. MCP Gateway는 같은 동적 Tool과 테넌트·승인·감사·Undo 정책을 Claude Desktop, VS Code Copilot 같은 MCP 클라이언트에 노출한다.
+
+| 관점      | MCP Gateway                                | Dynamic Tool Wrapper                   |
+| --------- | ------------------------------------------ | -------------------------------------- |
+| 출발점    | 외부 AI 클라이언트에 Tool 제공             | 기존 REST API를 AI 실행 Tool로 변환    |
+| 구현 방식 | FastMCP Adapter가 기존 Dynamic Tool을 감쌈 | OpenAPI 명세와 운영 정책으로 Tool 생성 |
+| 공통 기반 | owner 범위, 승인, 감사, Undo 재사용        | owner 범위, 승인, 감사, Undo 재사용    |
+
+---
 
 ---
 
