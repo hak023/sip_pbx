@@ -1,8 +1,8 @@
 # AI Service Agent 핵심 기능 소개 재구성 검토
 
 **작성일**: 2026-09-02
-**버전**: 1.1
-**상태**: 본문 개편 완료
+**버전**: 1.3
+**상태**: PoC 문서 전면 개편 반영 완료
 **관련 문서**: [정식 서비스 소개서](../../AI_SERVICE_AGENT_SERVICE_INTRODUCTION.md) | [기술 아키텍처](../../architecture/self-service-ai-assistant-architecture.md) | [지식베이스·IntelliDecision 연구](../../design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md) | [MCP·Universal API Agent 시장 조사](../../design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md)
 
 ---
@@ -95,4 +95,16 @@ flowchart LR
 
 N-hop RAG의 현재 연결 범위(`document`)와 확장 예약 범위(`api_endpoint`, `procedure_step`)를 명시해 구현 범위와 향후 모델을 구분했다. Dynamic Tool Wrapper도 OpenAPI 외에 인증·허용 메서드·업무 정책·원격 상태 검증이 필요함을 명확히 했다.
 
-*최종 업데이트: 2026-09-02*
+## v1.2 후속 검토 - 고객사·서비스 대표번호와 지식베이스 카드
+
+정식 소개서는 경영·사업 독자가 이해하기 어려운 ‘테넌트’ 표현을 사용하지 않고, 고객사와 서비스 대표번호를 지식·권한·API·실행 이력의 분리 기준으로 설명하도록 조정했다. 이는 내부 구현 식별자를 감추는 표현 수정이 아니라, 정보가 어느 고객에게 귀속되는지를 사용자가 바로 이해할 수 있게 하는 제품 언어 정리다.
+
+기존의 여러 업무 예시는 CS 분석의 사업 근거를 제외하고 상세 설명에서 제거했다. 착신전환 문의를 단일 관통 시나리오로 선정해 IntelliDecision의 목적 판단, N-hop RAG의 근거 탐색, Dynamic Tool Wrapper의 승인된 실행 준비가 하나의 지식베이스를 어떻게 다르게 활용하는지 제시했다.
+
+## v1.3 후속 검토 - PoC 흐름으로 전면 재구성
+
+정식 소개서의 성격을 2차 PoC 보고로 명확히 하고, 전면 요약과 도입·로드맵 중심 구조를 제거했다. 문서는 CS 반복 문의와 UI/UX 변화에 따른 고객 불편, 기존 Agent Builder 방식의 구축 부담, 1차 통화 AI 기반, UI 텍스트 기반 단일 시나리오, 세 핵심 기술, 시장 사례, AICC 비교, CS 확대 가능성, MCP 확장, Lessons Learned 순서로 진행한다.
+
+핵심 기능의 상세 설명은 유지하되, 각각을 독립된 사례로 늘어놓지 않고 “10초 무응답 후 휴대전화 착신전환”이라는 하나의 고객 질문을 해결하는 과정에 연결했다. 이 구조가 PoC의 검증 대상과 고객 가치를 가장 명확하게 전달한다고 판단했다.
+
+*최종 업데이트: 2026-09-03*
