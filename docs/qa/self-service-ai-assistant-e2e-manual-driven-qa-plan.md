@@ -1,8 +1,18 @@
 # AI 도우미(Self-Service) 정식 QA 테스트 계획 — 1001 테넌트 × 가상 의류판매 시뮬레이터
 
+> 🔴 **이 문서는 대체되었습니다(Superseded, 2026-08-27).**
+> 후속 문서: [self-service-ai-assistant-tenant-simulation-qa-plan.md](self-service-ai-assistant-tenant-simulation-qa-plan.md) (v2.0)
+>
+> 대체 사유: ①1001 테넌트만 다루고 1002(카페 오더) 등 다른 테넌트 시뮬레이션이 없음
+> ②케이스가 표 한 줄로 요약되어 있어 "어떤 질문에 어떻게 답했고 실제로 무엇이 실행됐는지"를
+> 기록할 자리가 없음 ③시드 데이터 정답값·상태 초기화 수단·테넌트 격리/미승인 차단 검증 부재.
+>
+> 이 문서는 **이력 보존용**으로만 남긴다. 신규 QA는 v2.0 문서를 사용할 것
+> (1001 케이스는 v2.0 §5로 이관·확장됨).
+
 - 작성일: 2026-08-07
 - 버전: v1.0
-- 상태: Draft(실행 대기 — 사람이 직접 테스트 수행 예정)
+- 상태: **Superseded**(v2.0으로 대체, 실행되지 않음)
 - 관련 문서: [self-service-ai-assistant-master-qa.md](self-service-ai-assistant-master-qa.md),
   [self-service-ai-assistant-architecture.md](../architecture/self-service-ai-assistant-architecture.md),
   [self-service-ai-assistant-prd.md](../product/self-service-ai-assistant-prd.md),
