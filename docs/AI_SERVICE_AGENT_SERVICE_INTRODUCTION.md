@@ -1,8 +1,8 @@
 # 지능망 AI Service Agent PoC
 
 **문서 유형**: C-Level/임원 및 본부장 보고용 PoC 소개서
-**작성일**: 2026-09-03
-**버전**: 6.4
+**작성일**: 2026-09-04
+**버전**: 6.5
 **상태**: PoC 범위 정의 및 검증 보고
 **대상 독자**: C-Level, 본부장, 사업·운영·기술 의사결정권자
 **관련 문서**: [셀프서비스 AI 아키텍처](architecture/self-service-ai-assistant-architecture.md) | [서비스 PRD](product/self-service-ai-assistant-prd.md) | [시장·연구 조사](design/MCP_VS_CLIENT_CENTRIC_UNIVERSAL_AGENT_MARKET_RESEARCH.md) | [지식베이스·IntelliDecision 연구](design/SELF_SERVICE_RAG_INTELLIDECISION_ADVANCEMENT_RESEARCH.md)
@@ -314,34 +314,94 @@ Undo도 모든 경우에 자동으로 제공되는 기능은 아닙니다. 변�
 
 ## 8. 시장 활용 사례
 
-대표 사례는 Zendesk AI Agent를 사용 중인 언어 학습 서비스 **Babbel**입니다. 이 사례는 대량의 반복 문의, 지식 기반 응대, 고객별 백엔드 연동, 복잡한 문의의 사람 이관이라는 고객센터 운영 과제를 한 흐름 안에서 보여 줍니다. 수치는 Zendesk가 공개한 고객 사례이며, 본 PoC의 성과나 예상 성과를 뜻하지 않습니다.
+아래 사례는 세 핵심 기술과 가장 가까운 시장의 구현 방식을 보여 줍니다. 제품마다 구성 방식과 통제 범위는 다릅니다. 따라서 특정 제품의 기능을 본 PoC의 기능 또는 성과로 해석하지 않습니다.
 
 ### 8.1 Zendesk AI Agent와 Babbel - 지식·판단·실행을 고객 셀프서비스로 연결
 
-**운영 배경**: Babbel은 다국어 고객 문의가 몰리는 시기에 약 50명의 상담 인력으로 지원 수요를 처리해야 했습니다. 팀은 먼저 상담 티켓 유형을 분석해 마찰이 크고 유입량이 많은 반복 요청부터 자동화 대상으로 골랐습니다. 구독 상태 확인, 구독 관리, 선호 언어 변경이 대표 대상이었습니다.
+**Babbel은 누구이고, Zendesk AI Agent는 무엇을 하는가**: Babbel은 유료 구독 방식의 언어 학습 앱을 운영하는 회사입니다. Zendesk는 Babbel이 고객 문의를 접수하고 상담사를 운영하는 데 사용하는 고객센터 플랫폼입니다. Zendesk AI Agent는 그 플랫폼 안에서 고객의 문의를 먼저 처리하는 AI 상담사입니다.
 
-**운영 방식**: Zendesk AI Agent는 헬프센터, Google Drive, PDF 등 연결된 지식에서 답변 근거를 찾습니다. 고객 요청의 의도와 복잡도를 판단하고, 추가 정보가 필요하면 대화로 확인합니다. Babbel은 구독 관리 API를 열어 AI Agent와 자사 백엔드 시스템을 연결했습니다. 고객은 상담원을 거치지 않고 구독을 관리할 수 있고, 개인정보 요청처럼 개별 판단이 필요한 업무는 사람에게 이관합니다.
+| 주체                   | 이 사례에서 하는 일                                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Babbel 운영·개발팀** | 자사 고객센터의 자동화 대상 업무를 정하고, 구독 정보가 있는 Babbel 백엔드 API를 Zendesk AI Agent가 이용할 수 있도록 연동합니다.                            |
+| **Zendesk AI Agent**   | 고객의 자연어 문의를 이해하고, 연결된 지식으로 답하거나 필요한 정보를 추가로 확인합니다. 연동이 허용된 업무는 Babbel 백엔드에 요청한 뒤 결과를 안내합니다. |
+| **Babbel 고객**        | 앱이나 웹 고객센터에서 구독 상태, 구독 변경, 선호 언어 변경 등을 평소 말하듯 요청합니다.                                                                   |
+| **Babbel 상담사**      | 개인정보 요청처럼 개별 판단이 필요하거나 AI가 처리 범위를 벗어난 문의를 이어받습니다.                                                                      |
 
-```text
-고객의 구독 문의
-       │
-       ▼
-Zendesk AI Agent ── 연결된 지식·정책 확인 ──> 추가 질문 또는 안내
-       │
-       ├── 구독 관리 요청 ──> Babbel 백엔드 API ──> 처리 결과 안내
-       │
-       └── 개인정보 등 개별 판단 업무 ──> 상담사 이관
+**운영 방식**: Babbel은 먼저 실제 상담 티켓을 분석해 문의량이 많고 절차가 비교적 정해진 업무를 자동화 대상으로 골랐습니다. 구독 상태 확인, 구독 관리, 선호 언어 변경이 대표적입니다. 이후 Babbel 운영·개발팀은 구독 관리 API 엔드포인트를 열어 Zendesk AI와 자사 백엔드 시스템을 연동했습니다. 공개 사례가 API의 세부 구현 또는 설정 화면까지는 밝히지 않으므로, 이 문서는 "Babbel이 자사 API를 Zendesk AI와 연동했다"는 공개 사실을 기준으로 설명합니다.
+
+**구조와 처리 흐름**: 이 사례는 Babbel이 자사 업무에 맞게 Zendesk AI Agent와 백엔드를 조합한 모델입니다. 고객센터 플랫폼을 제공하는 Zendesk와 업무 API를 제공하는 Babbel이 역할을 나누고, 고객은 한 개의 대화 채널에서 결과를 받습니다. 이 중 Zendesk AI Agent가 연동된 외부 시스템을 호출해 업무를 처리하는 부분은 본 PoC의 Dynamic Tool Wrapper가 지향하는 "등록된 API를 AI의 실행 경로로 연결"하는 방식과 비교할 수 있습니다.
+
+```mermaid
+flowchart LR
+    U["Babbel 고객\n구독 변경을 요청"] --> Z["Zendesk AI Agent\n문의 이해·지식 확인"]
+    Z -->|"단순 문의"| A["답변·절차 안내"]
+    Z -->|"구독 관리 요청"| B["필수 정보 확인"]
+    B --> I["Babbel이 연동한\n구독 관리 API"]
+    I --> D["Babbel 백엔드\n구독 정보 조회·변경"]
+    D --> R["처리 결과 안내"]
+    Z -->|"개별 판단 필요"| H["Babbel 상담사 이관"]
 ```
 
-**공개 결과**: Zendesk 고객 사례는 Babbel의 AI 자동화율이 50% 이상이며, 상담사 온보딩 기간이 67% 줄었다고 밝힙니다. 메시징·채팅 채널 비중은 45%입니다. Babbel은 성수기 문의량이 크게 늘어도 팀 규모를 유지하면서 서비스 KPI를 지킬 수 있었다고 설명합니다.
+**Dynamic Tool Wrapper와의 연결점**: Zendesk가 모든 Babbel 업무를 자동으로 만들어 주는 것은 아닙니다. Babbel이 자동화할 업무와 백엔드 연동을 준비하고, AI Agent는 그 경로 안에서 고객 요청을 처리합니다. 본 PoC의 Dynamic Tool Wrapper도 같은 문제를 다룹니다. 고객사가 OpenAPI 계약, 인증 정보, 허용 범위와 승인 정책을 등록하면 AI가 임의의 API를 무제한 호출하는 대신, 허용된 작업만 고객 대화에 연결합니다.
 
-![Babbel 고객 사례 이미지](https://d1eipm3vz40hy0.cloudfront.net/images/Customer+Stories+/Babbel/Babbel_ChrisBoyd_1200.png)
+**공개 결과**: Zendesk 고객 사례에 따르면 Babbel은 AI 상담사를 통해 전체 문의의 50% 이상을 자동 처리했습니다. 신규 상담사의 온보딩 기간은 3주에서 1주로 줄었다고 소개되며, 인바운드 문의 중 메시징·채팅 채널 비중은 45% 이상입니다. 이는 Zendesk가 공개한 Babbel 사례의 결과이며, 본 PoC의 성과나 예상 성과를 뜻하지 않습니다.
 
 *출처: [Zendesk AI Agent 공식 소개](https://www.zendesk.kr/service/ai/ai-agents/) | [Zendesk Babbel 고객 사례](https://www.zendesk.kr/customer/babbel/)*
 
-**PoC에 주는 시사점**: 이 사례는 AI가 FAQ만 답하는 구조를 넘어, 지식으로 정책을 확인하고 대화로 필요한 정보를 채운 뒤 백엔드 작업까지 연결하는 운영 모델을 보여 줍니다. 본 PoC도 같은 문제를 세 층으로 나누어 다룹니다. 고객이 무엇을 원하는지와 다음 행동을 고르는 일은 IntelliDecision이 맡고, 업무 규칙과 화면 안내를 함께 찾는 일은 N-hop RAG가 맡습니다. 승인 정책을 적용한 API 실행은 Dynamic Tool Wrapper의 몫입니다. 다만 본 PoC는 착신전환 단일 업무에서 이 구조와 통제 절차가 작동하는지를 먼저 확인합니다.
+**PoC에 주는 시사점**: Babbel 사례는 AI가 FAQ만 답하는 구조를 넘어, 반복 문의를 분류하고 지식으로 답하며, 회사가 준비한 백엔드 작업을 연결하고, 예외 업무는 사람에게 넘기는 운영 모델을 보여 줍니다. 본 PoC는 착신전환 한 업무에서 이 구조를 검증하되, 실행 전 승인, 변경 전후 상태 확인, 복원 가능 여부를 더 명시적으로 통제합니다.
 
-**참고한 시장 모델**: [Google Dialogflow CX](https://docs.cloud.google.com/dialogflow/cx/docs/basics)는 Flow·Page·Route 기반의 Builder 중심 대화 설계 비교 근거로, [OpenAI GPT Actions](https://developers.openai.com/api/docs/actions/introduction)는 OpenAPI 계약을 자연어 API 실행으로 연결하는 선행 모델로 활용합니다.
+### 8.2 Google Dialogflow CX - 대화 흐름을 설계하고 Webhook으로 업무 시스템을 연결
+
+**무엇을 하는 제품인가**: Google Dialogflow CX는 기업이 음성봇이나 챗봇을 구축하는 Google Cloud의 대화형 AI 플랫폼입니다. 이 제품은 AI가 매번 자유롭게 다음 행동을 고르게 하기보다, 운영팀이 예상 업무의 대화 단계를 먼저 설계하는 **Builder 중심 방식**에 가깝습니다.
+
+**운영팀이 구성하는 요소**:
+
+| 구성 요소            | 역할                                                                | 착신전환 업무에 대입한 예              |
+| -------------------- | ------------------------------------------------------------------- | -------------------------------------- |
+| **Flow**             | 주문, 본인 확인, 변경 확인처럼 하나의 업무 주제를 묶는 큰 대화 흐름 | 착신전환 설정 흐름                     |
+| **Page**             | 현재 고객이 어느 대화 단계에 있는지를 나타내는 상태                 | 전환 번호 입력 단계, 최종 승인 단계    |
+| **Intent / Route**   | 고객 발화 또는 세션 조건에 따라 다음 Page를 고르는 규칙             | “설정해 주세요”를 실행 경로로 연결     |
+| **Parameter / Form** | 전화번호처럼 실행에 필요한 값을 여러 턴에 걸쳐 수집하는 항목        | 전환할 번호, 무응답 시간               |
+| **Webhook**          | 수집한 값을 받아 회사의 백엔드 API를 호출하는 서버 연동 지점        | 본인 회선 규칙 조회 또는 변경 API 호출 |
+
+**구조와 처리 흐름**: Dialogflow CX에서는 회사의 운영·개발팀이 Flow, Page, Intent와 Route를 콘솔에서 미리 설계하고, 실제 조회·변경이 필요한 단계에 Webhook을 연결합니다. 고객이 말하면 Dialogflow CX는 현재 Page와 Route를 평가하고, 필요한 값이 부족하면 Form으로 되묻습니다. 조건이 충족된 경우에만 Webhook 서버가 회사 백엔드 API를 호출합니다.
+
+```mermaid
+flowchart LR
+    U["고객\n착신전환을 설정해 주세요"] --> F["Dialogflow CX Flow\n착신전환 설정 업무"]
+    F --> P1["Page: 전환 번호 수집"]
+    P1 -->|"번호 입력"| P2["Page: 변경 내용 확인"]
+    P2 -->|"고객 승인"| W["Webhook\n회사 연동 서버"]
+    W --> API["회사 백엔드 API\n규칙 조회·변경"]
+    API --> R["Dialogflow CX\n결과 응답"]
+    P1 -->|"값 누락 또는 조건 불일치"| Q["추가 질문 또는 안내"]
+```
+
+**본 PoC와의 차이와 참고점**: Dialogflow CX의 강점은 업무 흐름과 예외 경로를 운영자가 화면에서 명시적으로 설계하고 관리할 수 있다는 점입니다. 반면 새 업무를 추가하거나 예외를 다루려면 Flow, Page, Route, Webhook을 계속 설계·시험해야 합니다. 본 PoC는 IntelliDecision이 고객 발화와 이전 대화를 바탕으로 다음 행동을 판단하고, N-hop RAG와 Dynamic Tool Wrapper를 연결하는 방식입니다. 따라서 Dialogflow CX는 비교 기준인 Builder 중심 AICC의 대표 사례이며, Flow·Page·Route·Webhook의 명확한 통제 방식은 본 PoC의 승인·이관 설계를 점검하는 참고 모델입니다.
+
+*출처: [Google Dialogflow CX 흐름 기반 상담사 기본사항](https://docs.cloud.google.com/dialogflow/cx/docs/basics)*
+
+### 8.3 OpenAI GPT Actions - API 계약을 자연어 요청과 API 호출 사이의 도구로 변환
+
+**무엇을 하는 기능인가**: OpenAI GPT Actions는 개발자가 Custom GPT에 외부 REST API의 스키마와 인증 방식을 등록하면, ChatGPT가 사용자의 자연어 요청을 이해해 적절한 API를 선택하고 필요한 JSON 입력값을 만들어 호출할 수 있게 하는 기능입니다. 사용자는 API의 주소나 파라미터 형식을 알 필요 없이 자연어로 요청하고, 개발자는 API 계약과 인증 방식, 사용 지침을 준비합니다.
+
+**공식 예시로 보는 처리 방식**: OpenAI 문서는 미국 기상청 `weather.gov` API 두 개를 예로 듭니다. 개발자가 위치 조회 API와 예보 조회 API의 JSON 스키마를 GPT Action에 등록해 두면, 사용자가 “이번 주말 워싱턴 DC 여행에 무엇을 챙겨야 하나요?”라고 묻습니다. GPT Action은 먼저 위도·경도를 이용해 예보 관할 정보와 격자 좌표를 조회하고, 그 결과를 다음 예보 API의 입력값으로 사용한 뒤, 받은 예보를 바탕으로 자연어 답변을 만듭니다.
+
+```mermaid
+flowchart LR
+    U["사용자\n워싱턴 DC 여행 준비물은?"] --> G["Custom GPT + GPT Actions\n요청 이해·API 선택"]
+    G --> P["1. 위치 조회 API\n/points/{latitude},{longitude}"]
+    P --> C["예보 관할 정보와\n격자 좌표 반환"]
+    C --> F["2. 예보 조회 API\n/gridpoints/{office}/{x},{y}/forecast"]
+    F --> W["날씨 예보 반환"]
+    W --> R["GPT가 자연어로\n준비물 안내"]
+```
+
+**Dynamic Tool Wrapper와의 연결점**: GPT Actions는 API 스키마를 AI가 사용할 수 있는 실행 도구로 바꾼다는 점에서 Dynamic Tool Wrapper의 대표적인 상용 선행 사례입니다. 두 방식 모두 자연어 요청과 API 계약 사이에 도구 계층을 두고, API 입력값을 구조화해 호출합니다. 차이도 분명합니다. GPT Actions는 개발자가 Custom GPT에 API 스키마와 인증을 사전에 등록하는 OpenAI 플랫폼 기능입니다. 본 PoC의 Dynamic Tool Wrapper는 고객사별로 업로드된 OpenAPI 계약을 읽고, 권한 범위, 허용 메서드, 고객 승인, 실행 전후 상태 확인을 통과한 API만 실행 경로로 노출하는 것을 목표로 합니다.
+
+**왜 이 사례가 중요한가**: API가 이미 존재해도 고객이 엔드포인트와 JSON 형식을 직접 알아야 한다면 셀프서비스가 어렵습니다. GPT Actions는 이 기술적 복잡도를 AI가 감추고, 사용자는 자연어로 목표만 말하게 하는 모델을 보여 줍니다. 본 PoC는 같은 접근을 고객센터 업무에 적용하되, 단순 조회뿐 아니라 설정 변경의 승인과 사후 검증까지 포함하는지를 확인합니다.
+
+*출처: [OpenAI GPT Actions 공식 문서](https://developers.openai.com/api/docs/actions/introduction)*
 
 ---
 
